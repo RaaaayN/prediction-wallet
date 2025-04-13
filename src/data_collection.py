@@ -67,10 +67,13 @@ def add_technical_indicators(data):
       - Bollinger Bands : Bande supérieure et inférieure sur 20 jours (SMA20 ± 2 sigma).
       - MACD et MACD_Signal : MACD (12-EMA moins 26-EMA) et ligne de signal (9 jours EMA du MACD).
     
-    :param data: Le DataFrame original avec la colonne 'Close'.
+    :param data: Le DataFrame original contenant au moins la colonne 'Close'.
     :return: Le DataFrame enrichi avec les indicateurs techniques.
     """
-
+    # Aplatir les colonnes si elles sont en MultiIndex
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+    
     # Moyenne Mobile Simple sur 20 jours
     data['SMA20'] = data['Close'].rolling(window=20).mean()
 
@@ -88,11 +91,10 @@ def add_technical_indicators(data):
 
     # Calcul des Bollinger Bands sur 20 jours (SMA20 ± 2 écart-types)
     rolling_std = data['Close'].rolling(window=20).std()
-    data['Bollinger_Upper'] = data['SMA20'] + 2 * rolling_std
-    data['Bollinger_Lower'] = data['SMA20'] - 2 * rolling_std
+    data.loc[:, 'Bollinger_Upper'] = data['SMA20'] + 2 * rolling_std
+    data.loc[:, 'Bollinger_Lower'] = data['SMA20'] - 2 * rolling_std
 
     # Calcul du MACD
-    # 12-EMA et 26-EMA
     ema12 = data['Close'].ewm(span=12, adjust=False).mean()
     ema26 = data['Close'].ewm(span=26, adjust=False).mean()
     data['MACD'] = ema12 - ema26
@@ -111,7 +113,7 @@ def main():
     )
     parser.add_argument("ticker", type=str, help="Le symbole de l'actif (ex: AAPL, BTC-USD)")
     parser.add_argument("--start", type=str, default="2018-01-01", help="Date de début (format YYYY-MM-DD)")
-    parser.add_argument("--end", type=str, default="2023-01-01", help="Date de fin (format YYYY-MM-DD)")
+    parser.add_argument("--end", type=str, default="2025-01-01", help="Date de fin (format YYYY-MM-DD)")
     
     args = parser.parse_args()
     
