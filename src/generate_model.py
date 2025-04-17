@@ -20,7 +20,6 @@ from tensorflow.keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 
-# ----------------------------
 # Paramètres utilisateur
 DATA_FOLDER = "data"  # Répertoire contenant les CSV (ex: AAPL_data.csv, ABT_data.csv, etc.)
 MODEL_FILENAME = "lstm_multivar_alltickers.h5"
@@ -28,7 +27,6 @@ TIME_STEP = 50
 BATCH_SIZE = 64
 EPOCHS = 10
 TARGET_DATE = "2026-12-31"
-# ----------------------------
 
 def load_all_csv(data_folder):
     """
@@ -133,7 +131,6 @@ def create_sequences_for_all_tickers(big_df, time_step=50):
 
 
 
-# ---------- Script Principal ----------
 def main():
     # 1) Charger et concaténer tous les CSV
     big_df = load_all_csv(DATA_FOLDER)
@@ -168,91 +165,6 @@ def main():
         model.fit(dataset_tf, epochs=EPOCHS)
         model.save(MODEL_FILENAME)
         print("Modèle sauvegardé dans", MODEL_FILENAME)
-
-    # 5) Prévision in-sample (on compare la prédiction sur le dataset d'entraînement)
-    #    On prédit sur X en l'état (toutes les séquences)
-    y_pred_norm = model.predict(X, verbose=0)  # forme (nb_sequences, 1)
-    y_pred = target_scaler.inverse_transform(y_pred_norm)    # shape (nb_sequences, 1)
-
-    #  Pour tracer la courbe in-sample, on va se concentrer sur un ticker, 
-    #  ou afficher un ticker en particulier, ou un segment du dataset.
-    #  Ici, on ne fait qu'un plot global pour illustration.
-    #  -> Optionnel : vous pouvez sélectionner un ticker particulier et retracer 
-    #     la série "Close" et la prédiction correspondante.
-
-    plt.figure(figsize=(10,5))
-    plt.title("Prévision in-sample (tous tickers confondus)")
-    plt.plot(y_pred, label='Prévision LSTM (in-sample)', color='red')
-    plt.legend()
-    plt.show()
-
-    # 6) Prévision itérative jusqu'au 31/12/2026 (hypothèse simplifiée)
-    #    Il faut faire une boucle par ticker pour générer des prévisions futures.
-    #    Chaque ticker aura sa séquence finale mise à jour itérativement.
-    
-    # On se base sur la dernière séquence du dataset pour chaque ticker.
-    # L'hypothèse : on ne modifie que la colonne "Close" (col index=0) 
-    # pour la prédiction future. Les autres colonnes (indicateurs) 
-    # restent celles de la dernière observation, ce qui est simpliste.
-    
-    last_date_global = big_df.groupby("Ticker").apply(lambda df: df.index[-1])
-    
-    # Dictionnaire pour stocker DataFrame de prévisions par ticker
-    forecast_dict = {}
-
-    for ticker, group_df in big_df.groupby("Ticker"):
-        # Récupérer la dernière séquence scaled
-        group_values = group_df.values
-        group_scaled = scaler_global.transform(group_values)
-        
-        # La dernière séquence
-        if len(group_scaled) < TIME_STEP:
-            # Pas assez de données pour faire une séquence
-            continue
-        last_seq = group_scaled[-TIME_STEP:]  # shape (time_step, num_features)
-        
-        # Dates futures (business days)
-        last_date = group_df.index[-1]
-        future_dates = pd.bdate_range(start=last_date + pd.Timedelta(days=1), end=TARGET_DATE)
-        n_future = len(future_dates)
-        if n_future == 0:
-            continue
-        print(f"\nTicker: {ticker}, last date = {last_date}, nb futurs = {n_future}")
-
-        current_seq = last_seq.copy()
-        forecast_list = []
-        for _ in tqdm(range(n_future), desc=f"Prévisions {ticker}"):
-            pred = model.predict(current_seq.reshape(1, TIME_STEP, num_features), verbose=0)
-            forecast_value = pred[0, 0]  # normalisé
-            # Mettre à jour la séquence
-            new_row = current_seq[-1].copy()
-            new_row[0] = forecast_value  # On met à jour "Close"
-            current_seq = np.append(current_seq[1:], [new_row], axis=0)
-            forecast_list.append(forecast_value)
-        
-        forecast_list = np.array(forecast_list).reshape(-1,1)
-        forecast_original = target_scaler.inverse_transform(forecast_list)
-        df_fc = pd.DataFrame(forecast_original, index=future_dates, columns=["Forecast"])
-        forecast_dict[ticker] = df_fc
-
-    # 7) Affichage d'un ticker en particulier
-    #    Par exemple, on affiche AAPL
-    TICKER_TO_PLOT = "AAPL"
-    if TICKER_TO_PLOT in forecast_dict:
-        fc_df = forecast_dict[TICKER_TO_PLOT]
-        # On trace l'historique "Close" + la prévision
-        ticker_data = big_df[big_df["Ticker"] == TICKER_TO_PLOT]
-        plt.figure(figsize=(12,6))
-        plt.plot(ticker_data.index, ticker_data["Close"], label=f"Historique {TICKER_TO_PLOT}")
-        plt.plot(fc_df.index, fc_df["Forecast"], label=f"Prévisions {TICKER_TO_PLOT}", color="red")
-        plt.title(f"Prévisions LSTM multivariées jusqu'au {TARGET_DATE} pour {TICKER_TO_PLOT}")
-        plt.xlabel("Date")
-        plt.ylabel("Prix de clôture")
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
-    else:
-        print(f"Aucune prévision disponible pour {TICKER_TO_PLOT}")
 
 if __name__ == "__main__":
     main()
