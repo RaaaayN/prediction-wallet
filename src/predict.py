@@ -44,7 +44,6 @@ def fill_and_check_columns(big_df):
     for c in required:
         if c not in big_df.columns:
             raise ValueError(f"Missing column {c}")
-    # forward/backward fill per ticker without resetting index
     big_df = big_df.groupby("Ticker", group_keys=False).apply(lambda x: x.ffill().bfill())
     return big_df
 
@@ -98,6 +97,13 @@ def predict_and_plot(ticker, steps, do_plot=False):
     pd.set_option('display.float_format', '{:.2f}'.format)
     print("\nPredictions (original scale):")
     print(df_preds)
+
+    # Save predictions to data/pred/
+    pred_dir = os.path.join(DATA_FOLDER, 'pred')
+    os.makedirs(pred_dir, exist_ok=True)
+    out_path = os.path.join(pred_dir, f"{ticker}_predictions.csv")
+    df_preds.to_csv(out_path)
+    print(f"Predictions saved to {out_path}")
 
     if do_plot:
         plt.figure(figsize=(12, 6))
