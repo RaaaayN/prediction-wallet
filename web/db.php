@@ -2,8 +2,8 @@
 // db.php: connexion à la base de données
 $host = 'localhost';
 $db   = 'wallet_db';
-$user = 'db_user';
-$pass = 'db_pass';
+$user = 'root';
+$pass = 'secret123';
 $charset = 'utf8mb4';
 
 $dsn = "mysql:host=$host;dbname=$db;charset=$charset";
