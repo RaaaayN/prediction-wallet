@@ -160,4 +160,4 @@ class TechnicalAnalyzer:
         # Mise à jour du layout
         fig.update_layout(height=900, title_text="Indicateurs Techniques")
         
-        return fig 
+        return fig
