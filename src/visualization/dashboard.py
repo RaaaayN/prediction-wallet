@@ -59,7 +59,7 @@ class Dashboard:
         prediction = self.analyzer.predict(df)
         
         # Déterminer la couleur en fonction de la direction
-        color = 'green' if prediction['direction'] == 'Hausse' else 'red'
+        color = 'green' if prediction['direction'] == 'Hausse' else 'red' if prediction['direction'] == 'Baisse' else 'gray'
         
         return html.Div([
             html.H3('Prévision pour les 3 prochains jours'),
@@ -67,12 +67,81 @@ class Dashboard:
                 html.H4(f'Direction: {prediction["direction"]}', 
                        style={'color': color}),
                 html.P(f'Probabilité: {prediction["probability"]:.2%}'),
-                html.P(f'Confiance: {prediction["confidence"]}')
+                html.P(f'Confiance: {prediction["confidence"]}'),
+                html.P(f'Date de la prédiction: {prediction["prediction_date"]}'),
+                html.P(f'Période de prévision: {prediction["forecast_period"]}')
             ], style={
                 'border': f'2px solid {color}',
                 'padding': '10px',
                 'border-radius': '5px',
-                'margin': '10px'
+                'margin': '10px',
+                'background-color': f'{color}10'
+            }),
+            
+            html.Div([
+                html.H4('Test de prédiction'),
+                html.Button('Tester la prédiction sur les 3 derniers jours', 
+                          id='test-prediction-button',
+                          n_clicks=0,
+                          style={'margin': '10px'}),
+                html.Div(id='test-results')
+            ])
+        ])
+    
+    def create_test_results(self, symbol):
+        df = self.load_data(symbol)
+        test_results = self.analyzer.test_prediction(df)
+        
+        if test_results is None:
+            return html.Div("Erreur lors du test de prédiction")
+            
+        # Couleurs pour l'affichage
+        pred_color = 'green' if test_results['prediction']['direction'] == 'Hausse' else 'red'
+        actual_color = 'green' if test_results['actual']['direction'] == 'Hausse' else 'red'
+        result_color = 'green' if test_results['correct'] else 'red'
+        
+        return html.Div([
+            html.H4('Résultats du test', style={'margin-top': '20px'}),
+            html.Div([
+                html.H5('Prévision faite le:'),
+                html.P(test_results['prediction']['date']),
+                html.P(f"Période testée: {test_results['prediction']['period']}"),
+                html.P(f"Direction prédite: {test_results['prediction']['direction']}", 
+                      style={'color': pred_color}),
+                html.P(f"Probabilité: {test_results['prediction']['probability']:.2%}"),
+                html.P(f"Confiance: {test_results['prediction']['confidence']}")
+            ], style={
+                'border': f'2px solid {pred_color}',
+                'padding': '10px',
+                'border-radius': '5px',
+                'margin': '10px',
+                'background-color': f'{pred_color}10'
+            }),
+            
+            html.Div([
+                html.H5('Résultat réel:'),
+                html.P(f"Direction réelle: {test_results['actual']['direction']}", 
+                      style={'color': actual_color}),
+                html.P(f"Rendement: {test_results['actual']['return']:.2%}"),
+                html.P(f"Période: {test_results['actual']['period']}")
+            ], style={
+                'border': f'2px solid {actual_color}',
+                'padding': '10px',
+                'border-radius': '5px',
+                'margin': '10px',
+                'background-color': f'{actual_color}10'
+            }),
+            
+            html.Div([
+                html.H5('Résultat du test:'),
+                html.P(f"Prédiction {'correcte' if test_results['correct'] else 'incorrecte'}", 
+                      style={'color': result_color, 'font-weight': 'bold'})
+            ], style={
+                'border': f'2px solid {result_color}',
+                'padding': '10px',
+                'border-radius': '5px',
+                'margin': '10px',
+                'background-color': f'{result_color}10'
             })
         ])
     
@@ -146,6 +215,16 @@ class Dashboard:
         )
         def update_portfolio(_):
             return self.create_portfolio_pie(), self.create_metrics_table()
+            
+        @self.app.callback(
+            Output('test-results', 'children'),
+            [Input('test-prediction-button', 'n_clicks'),
+             Input('symbol-dropdown', 'value')]
+        )
+        def update_test_results(n_clicks, symbol):
+            if n_clicks > 0:
+                return self.create_test_results(symbol)
+            return None
     
     def run(self, debug=True):
         self.setup_layout()

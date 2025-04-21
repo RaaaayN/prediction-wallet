@@ -120,17 +120,31 @@ class TechnicalAnalyzer:
             prediction = self.model.predict(last_features)
             probability = self.model.predict_proba(last_features)
             
+            # Obtenir la date de la dernière donnée
+            last_date = df.index[-1]
+            
+            # Calculer les dates de prévision
+            forecast_dates = pd.date_range(
+                start=last_date + pd.Timedelta(days=1),
+                periods=3,
+                freq='D'
+            )
+            
             return {
                 'direction': 'Hausse' if prediction[0] == 1 else 'Baisse',
                 'probability': probability[0][1] if prediction[0] == 1 else probability[0][0],
-                'confidence': 'Élevée' if max(probability[0]) > 0.7 else 'Moyenne' if max(probability[0]) > 0.6 else 'Faible'
+                'confidence': 'Élevée' if max(probability[0]) > 0.7 else 'Moyenne' if max(probability[0]) > 0.6 else 'Faible',
+                'prediction_date': last_date.strftime('%d/%m/%Y'),
+                'forecast_period': f"du {forecast_dates[0].strftime('%d/%m/%Y')} au {forecast_dates[-1].strftime('%d/%m/%Y')}"
             }
         except Exception as e:
             print(f"Erreur lors de la prédiction: {str(e)}")
             return {
                 'direction': 'Indéterminé',
                 'probability': 0.5,
-                'confidence': 'Faible'
+                'confidence': 'Faible',
+                'prediction_date': 'N/A',
+                'forecast_period': 'N/A'
             }
     
     def get_indicators_plot(self, df, indicators):
@@ -161,3 +175,52 @@ class TechnicalAnalyzer:
         fig.update_layout(height=900, title_text="Indicateurs Techniques")
         
         return fig
+    
+    def test_prediction(self, df, days_ago=3):
+        """Teste la prédiction sur des données passées"""
+        try:
+            # Sélectionner les données jusqu'à days_ago jours avant la fin
+            test_date = df.index[-days_ago]
+            train_data = df[:test_date]
+            
+            # Entraîner le modèle sur les données jusqu'à test_date
+            self.train_model(train_data)
+            
+            # Faire la prédiction pour les jours suivants
+            indicators = self.calculate_indicators(train_data)
+            features = self.prepare_features(train_data, indicators)
+            last_features = features.iloc[-1:]
+            
+            prediction = self.model.predict(last_features)
+            probability = self.model.predict_proba(last_features)
+            
+            # Vérifier la réalité
+            actual_returns = df['Close'].pct_change(days_ago).shift(-days_ago).iloc[-days_ago-1]
+            actual_direction = 'Hausse' if actual_returns > 0 else 'Baisse'
+            
+            # Calculer les dates
+            prediction_date = test_date
+            actual_dates = pd.date_range(
+                start=test_date + pd.Timedelta(days=1),
+                periods=days_ago,
+                freq='D'
+            )
+            
+            return {
+                'prediction': {
+                    'direction': 'Hausse' if prediction[0] == 1 else 'Baisse',
+                    'probability': probability[0][1] if prediction[0] == 1 else probability[0][0],
+                    'confidence': 'Élevée' if max(probability[0]) > 0.7 else 'Moyenne' if max(probability[0]) > 0.6 else 'Faible',
+                    'date': prediction_date.strftime('%d/%m/%Y'),
+                    'period': f"du {actual_dates[0].strftime('%d/%m/%Y')} au {actual_dates[-1].strftime('%d/%m/%Y')}"
+                },
+                'actual': {
+                    'direction': actual_direction,
+                    'return': actual_returns,
+                    'period': f"du {actual_dates[0].strftime('%d/%m/%Y')} au {actual_dates[-1].strftime('%d/%m/%Y')}"
+                },
+                'correct': ('Hausse' if prediction[0] == 1 else 'Baisse') == actual_direction
+            }
+        except Exception as e:
+            print(f"Erreur lors du test de prédiction: {str(e)}")
+            return None
