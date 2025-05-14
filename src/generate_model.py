@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Script pour entraîner un modèle LSTM multivarié sur plusieurs tickers,
 prédire le cours ainsi que tous les indicateurs.
