@@ -1,0 +1,19 @@
+name: balanced
+description: "Balanced allocation — equities 50%, bonds 30%, crypto 20%"
+
+initial_capital: 100000.0
+drift_threshold: 0.05
+kill_switch_drawdown: 0.10
+slippage_equities: 0.001
+slippage_crypto: 0.005
+
+target_allocation:
+  AAPL: 0.12
+  MSFT: 0.12
+  GOOGL: 0.09
+  AMZN: 0.09
+  NVDA: 0.08
+  TLT: 0.15
+  BND: 0.15
+  BTC-USD: 0.12
+  ETH-USD: 0.08

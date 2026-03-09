@@ -23,6 +23,8 @@ plotly>=5.18.0
 
 # Utilities
 python-dotenv>=1.0.0
+pydantic-settings>=2.0
+PyYAML>=6.0
 
 # Dev / Testing
 pytest>=8.0.0

@@ -1,0 +1,19 @@
+name: crypto_heavy
+description: "Crypto-heavy allocation — equities 40%, bonds 20%, crypto 40%"
+
+initial_capital: 100000.0
+drift_threshold: 0.07
+kill_switch_drawdown: 0.20
+slippage_equities: 0.001
+slippage_crypto: 0.005
+
+target_allocation:
+  AAPL: 0.10
+  MSFT: 0.10
+  GOOGL: 0.08
+  AMZN: 0.08
+  NVDA: 0.04
+  TLT: 0.10
+  BND: 0.10
+  BTC-USD: 0.25
+  ETH-USD: 0.15

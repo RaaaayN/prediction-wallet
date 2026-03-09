@@ -1,0 +1,19 @@
+name: growth
+description: "Growth allocation — equities 70%, bonds 20%, crypto 10%"
+
+initial_capital: 100000.0
+drift_threshold: 0.06
+kill_switch_drawdown: 0.15
+slippage_equities: 0.001
+slippage_crypto: 0.005
+
+target_allocation:
+  AAPL: 0.16
+  MSFT: 0.16
+  GOOGL: 0.12
+  AMZN: 0.12
+  NVDA: 0.14
+  TLT: 0.10
+  BND: 0.10
+  BTC-USD: 0.06
+  ETH-USD: 0.04
