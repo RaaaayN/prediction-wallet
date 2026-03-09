@@ -1,67 +1,54 @@
-"""Central configuration for the autonomous portfolio rebalancing agent."""
+"""Central configuration — compatibility shim that reads from settings.py + active profile YAML.
 
-import os
-from dotenv import load_dotenv
+All existing imports (from config import TARGET_ALLOCATION, ...) continue to work unchanged.
+Switch profiles at runtime via the PORTFOLIO_PROFILE env var or --profile CLI flag.
+"""
 
-load_dotenv()
+from settings import settings
+from portfolio_loader import get_active_profile
 
-# API Keys
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# ---------------------------------------------------------------------------
+# Scalar settings from pydantic-settings (.env / env vars)
+# ---------------------------------------------------------------------------
 
-# AI provider: "gemini" or "anthropic"
-AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini")
+ANTHROPIC_API_KEY: str = settings.anthropic_api_key
+GEMINI_API_KEY: str = settings.gemini_api_key
+AI_PROVIDER: str = settings.ai_provider
+CLAUDE_MODEL: str = settings.claude_model
+GEMINI_MODEL: str = settings.gemini_model
 
-# Portfolio target allocation (must sum to 1.0)
-TARGET_ALLOCATION = {
-    # Equities ~50%
-    "AAPL": 0.12,
-    "MSFT": 0.12,
-    "GOOGL": 0.09,
-    "AMZN": 0.09,
-    "NVDA": 0.08,
-    # Bonds ~30%
-    "TLT": 0.15,
-    "BND": 0.15,
-    # Crypto ~20%
-    "BTC-USD": 0.12,
-    "ETH-USD": 0.08,
-}
+DATA_DIR: str = settings.data_dir
+MARKET_DB: str = settings.market_db
+PORTFOLIO_FILE: str = settings.portfolio_file
+TRADES_LOG: str = settings.trades_log
+REPORTS_DIR: str = settings.reports_dir
 
-# Verify allocation sums to 1.0
-assert abs(sum(TARGET_ALLOCATION.values()) - 1.0) < 1e-9, "TARGET_ALLOCATION must sum to 1.0"
+BENCHMARK_TICKER: str = settings.benchmark_ticker
+DEFAULT_HISTORY_DAYS: int = 90
+VOLATILITY_WINDOW: int = settings.volatility_window
+RISK_FREE_RATE: float = settings.risk_free_rate
 
-# Capital
-INITIAL_CAPITAL = 100_000.0
+# ---------------------------------------------------------------------------
+# Profile-based settings (target allocation, thresholds, slippage)
+# ---------------------------------------------------------------------------
 
-# Rebalancing thresholds
-DRIFT_THRESHOLD = 0.05      # 5% drift triggers threshold rebalancing
-CALENDAR_FREQUENCY = "weekly"  # "weekly" or "monthly" for calendar strategy
+_profile = get_active_profile()
 
-# Risk management
-KILL_SWITCH_DRAWDOWN = 0.10  # 10% drawdown from peak → emergency stop
+TARGET_ALLOCATION: dict[str, float] = _profile["target_allocation"]
+INITIAL_CAPITAL: float = _profile["initial_capital"]
+DRIFT_THRESHOLD: float = _profile["drift_threshold"]
+KILL_SWITCH_DRAWDOWN: float = _profile["kill_switch_drawdown"]
+SLIPPAGE_EQUITIES: float = _profile["slippage_equities"]
+SLIPPAGE_CRYPTO: float = _profile["slippage_crypto"]
 
-# Slippage model
-SLIPPAGE_EQUITIES = 0.001   # 0.1% bid/ask spread for equities/ETFs
-SLIPPAGE_CRYPTO = 0.005     # 0.5% for crypto
+# ---------------------------------------------------------------------------
+# Derived constants
+# ---------------------------------------------------------------------------
 
-CRYPTO_TICKERS = {"BTC-USD", "ETH-USD"}
+CRYPTO_TICKERS: set[str] = {t for t in TARGET_ALLOCATION if "USD" in t and "-" in t}
 
-# Data paths
-DATA_DIR = "data"
-MARKET_DB = "data/market.db"
-PORTFOLIO_FILE = "data/portfolio.json"
-TRADES_LOG = "data/trades.log"
-REPORTS_DIR = "data/reports"
+CALENDAR_FREQUENCY: str = "weekly"  # "weekly" or "monthly" for CalendarStrategy
 
-# Market data
-BENCHMARK_TICKER = "^GSPC"
-DEFAULT_HISTORY_DAYS = 90
-VOLATILITY_WINDOW = 30
-RISK_FREE_RATE = 0.02  # 2% annual
-
-# Claude model
-CLAUDE_MODEL = "claude-sonnet-4-6"
-
-# Gemini model
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+assert abs(sum(TARGET_ALLOCATION.values()) - 1.0) < 1e-6, (
+    f"Profile '{_profile['name']}' TARGET_ALLOCATION must sum to 1.0"
+)

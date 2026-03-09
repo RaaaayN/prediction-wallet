@@ -14,6 +14,7 @@ from config import (
     INITIAL_CAPITAL,
     TARGET_ALLOCATION,
 )
+from engine.orders import apply_slippage as _apply_slippage
 
 
 @dataclass
@@ -76,6 +77,7 @@ class TradeSimulator:
         quantity: float,
         market_price: float,
         reason: str = "",
+        cycle_id: str = "",
     ) -> TradeResult:
         """
         Apply slippage, update portfolio.json, append to trades.log.
@@ -85,11 +87,9 @@ class TradeSimulator:
         timestamp = datetime.utcnow().isoformat()
 
         # Slippage
-        slippage_rate = SLIPPAGE_CRYPTO if ticker in CRYPTO_TICKERS else SLIPPAGE_EQUITIES
-        if action == "buy":
-            fill_price = market_price * (1 + slippage_rate)
-        else:
-            fill_price = market_price * (1 - slippage_rate)
+        fill_price = _apply_slippage(
+            market_price, action, ticker, CRYPTO_TICKERS, SLIPPAGE_EQUITIES, SLIPPAGE_CRYPTO
+        )
 
         gross = fill_price * quantity
 
@@ -144,14 +144,19 @@ class TradeSimulator:
             quantity=quantity, market_price=market_price, fill_price=fill_price,
             cost=cost, timestamp=timestamp, reason=reason, success=True
         )
-        self._log_trade(result)
+        self._log_trade(result, cycle_id=cycle_id)
         return result
 
-    def _log_trade(self, result: TradeResult) -> None:
+    def _log_trade(self, result: TradeResult, cycle_id: str = "") -> None:
         import os
         os.makedirs(os.path.dirname(self.trades_log), exist_ok=True)
         with open(self.trades_log, "a") as f:
             f.write(json.dumps(asdict(result)) + "\n")
+        try:
+            from db.repository import save_execution
+            save_execution(result, cycle_id=cycle_id)
+        except Exception:
+            pass  # DB persistence is non-blocking
 
     def get_trade_history(self) -> list[dict]:
         try:

@@ -2,14 +2,14 @@
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from datetime import datetime, timedelta
 
-from config import TARGET_ALLOCATION, ANTHROPIC_API_KEY, GEMINI_API_KEY, AI_PROVIDER
-
 
 def check_api_key():
+    from config import AI_PROVIDER, GEMINI_API_KEY, ANTHROPIC_API_KEY
     if AI_PROVIDER == "gemini":
         if not GEMINI_API_KEY or GEMINI_API_KEY.startswith("AIza..."):
             print("ERROR: GEMINI_API_KEY not set. Ajoutez-la dans votre fichier .env.")
@@ -108,6 +108,7 @@ def init_portfolio():
     with open(PORTFOLIO_FILE, "w") as f:
         json.dump(clean, f, indent=2)
 
+    from config import TARGET_ALLOCATION
     print(f"\nFetching live prices for {len(TARGET_ALLOCATION)} tickers...")
     prices = fetcher.get_latest_prices(list(TARGET_ALLOCATION.keys()))
 
@@ -160,6 +161,12 @@ def main():
         help="Rebalancing strategy to use (default: threshold)",
     )
     parser.add_argument(
+        "--profile",
+        choices=["balanced", "conservative", "growth", "crypto_heavy"],
+        default=None,
+        help="Portfolio allocation profile (default: balanced or PORTFOLIO_PROFILE env var)",
+    )
+    parser.add_argument(
         "--simulate-days",
         type=int,
         default=0,
@@ -177,6 +184,11 @@ def main():
         help="Deploy initial capital across target allocation and exit",
     )
     args = parser.parse_args()
+
+    # Set profile env var before any config imports so the correct profile loads
+    if args.profile:
+        os.environ["PORTFOLIO_PROFILE"] = args.profile
+        print(f"Using profile: {args.profile}")
 
     if args.init:
         init_portfolio()

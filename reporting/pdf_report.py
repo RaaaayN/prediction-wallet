@@ -77,6 +77,7 @@ class PDFReporter:
         story.extend(self._build_allocation(portfolio, prices))
         story.extend(self._build_decision_log(trades))
         story.extend(self._build_risk_metrics(market_data))
+        story.extend(self._build_performance_attribution(portfolio, trades))
         story.extend(self._build_anomaly_flags(trades, market_data))
 
         doc.build(story)
@@ -215,8 +216,59 @@ class PDFReporter:
         elements.append(Spacer(1, 0.5 * cm))
         return elements
 
+    def _build_performance_attribution(self, portfolio: dict, trades: list[dict]) -> list:
+        elements = [Paragraph("5. Performance Attribution", self.styles["SectionHeader"])]
+
+        history = portfolio.get("history", [])
+        if not history or len(history) < 2:
+            elements.append(Paragraph("Insufficient history for performance attribution.", self.styles["Body"]))
+            elements.append(Spacer(1, 0.3 * cm))
+            return elements
+
+        try:
+            from engine.performance import (
+                cumulative_return, annualized_return, transaction_costs_total,
+                turnover, sharpe_ratio, max_drawdown,
+            )
+            import pandas as pd
+
+            hist_list = [{"date": h.get("date", ""), "total_value": h["total_value"]} for h in history]
+            values = pd.Series([h["total_value"] for h in history])
+            daily_returns = values.pct_change().dropna()
+
+            cum_ret_gross = cumulative_return(hist_list)
+            costs = transaction_costs_total(trades)
+            net_final = history[-1]["total_value"] - costs
+            net_start = history[0]["total_value"]
+            cum_ret_net = (net_final - net_start) / net_start if net_start > 0 else 0.0
+            ann_ret = annualized_return(hist_list)
+            avg_val = float(values.mean())
+            to = turnover(trades, avg_val)
+            sharpe = sharpe_ratio(daily_returns)
+            mdd = max_drawdown(hist_list)
+
+            data = [
+                ["Metric", "Gross", "Net"],
+                ["Cumulative Return", f"{cum_ret_gross:+.2%}", f"{cum_ret_net:+.2%}"],
+                ["Annualized Return", f"{ann_ret:+.2%}", "—"],
+                ["Sharpe Ratio", f"{sharpe:.2f}", "—"],
+                ["Max Drawdown", f"{mdd:.2%}", "—"],
+                ["Annualized Turnover", f"{to:.2%}", "—"],
+                ["Transaction Costs", "—", f"${costs:,.2f}"],
+                ["Cost Drag", "—", f"{cum_ret_gross - cum_ret_net:.2%}"],
+            ]
+
+            table = Table(data, colWidths=[7 * cm, 4 * cm, 4 * cm])
+            table.setStyle(self._data_table_style())
+            elements.append(table)
+        except Exception as exc:
+            elements.append(Paragraph(f"Could not compute attribution: {exc}", self.styles["Body"]))
+
+        elements.append(Spacer(1, 0.5 * cm))
+        return elements
+
     def _build_anomaly_flags(self, trades: list[dict], market_data: dict) -> list:
-        elements = [Paragraph("5. Anomaly Flags", self.styles["SectionHeader"])]
+        elements = [Paragraph("6. Anomaly Flags", self.styles["SectionHeader"])]
 
         flags = []
 

@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 
 from config import TARGET_ALLOCATION, CRYPTO_TICKERS
+from engine.portfolio import compute_weights as _compute_weights
 from execution.simulator import TradeSimulator
 from execution.kill_switch import KillSwitch
 from market.fetcher import MarketDataService
@@ -79,6 +80,19 @@ TOOL_SCHEMAS = [
             "required": ["cycle_id"],
         },
     },
+    {
+        "name": "get_performance_metrics",
+        "description": (
+            "Returns comprehensive portfolio performance metrics: cumulative return (gross/net), "
+            "annualized return, volatility, Sharpe ratio, max drawdown, turnover, "
+            "transaction costs, and hit ratio."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 
@@ -98,7 +112,7 @@ def get_portfolio_state() -> dict:
     market_values = {t: qty * prices.get(t, 0) for t, qty in positions.items()}
     total = sum(market_values.values()) + cash
 
-    current_weights = {t: mv / total for t, mv in market_values.items()} if total > 0 else {}
+    current_weights = _compute_weights(positions, prices, cash)
 
     weight_diff = {
         t: current_weights.get(t, 0.0) - TARGET_ALLOCATION.get(t, 0.0)
@@ -168,6 +182,28 @@ def execute_trade(action: str, ticker: str, quantity: float, reason: str) -> dic
     }
 
 
+def get_performance_metrics() -> dict:
+    """Return comprehensive performance metrics for the current portfolio history."""
+    from engine.performance import performance_report as _perf_report
+
+    portfolio = _simulator.load_portfolio()
+    history = portfolio.get("history", [])
+    trades = _simulator.get_trade_history()
+
+    if not history:
+        return {"error": "No portfolio history available yet. Run at least one agent cycle first."}
+
+    report = _perf_report(history=history, trades=trades)
+
+    # Format percentages for readability
+    return {
+        k: (f"{v:.2%}" if isinstance(v, float) and "return" in k or "drawdown" in k or "volatility" in k or "error" in k else
+            f"${v:,.2f}" if isinstance(v, float) and "cost" in k else
+            round(v, 4) if isinstance(v, float) else v)
+        for k, v in report.items()
+    }
+
+
 def generate_report(cycle_id: str) -> str:
     """Generate PDF report and return file path."""
     portfolio = _simulator.load_portfolio()
@@ -211,6 +247,8 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> str:
             )
         elif tool_name == "generate_report":
             result = {"path": generate_report(tool_input["cycle_id"])}
+        elif tool_name == "get_performance_metrics":
+            result = get_performance_metrics()
         else:
             result = {"error": f"Unknown tool: {tool_name}"}
     except Exception as exc:

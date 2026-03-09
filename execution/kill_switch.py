@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 
 from config import KILL_SWITCH_DRAWDOWN, TRADES_LOG
+from engine.risk import compute_drawdown as _compute_drawdown, check_kill_switch as _check_kill_switch
 
 
 class KillSwitch:
@@ -24,9 +25,9 @@ class KillSwitch:
         if peak <= 0:
             return False
 
-        drawdown = (current_value - peak) / peak  # negative if losing
+        drawdown = _compute_drawdown(current_value, peak)
 
-        if drawdown < -self.threshold:
+        if _check_kill_switch(drawdown, self.threshold):
             self._log_alert(current_value, peak, drawdown)
             return True
         return False
@@ -41,9 +42,9 @@ class KillSwitch:
         if peak <= 0:
             return False
 
-        drawdown = (market_value - peak) / peak
+        drawdown = _compute_drawdown(market_value, peak)
 
-        if drawdown < -self.threshold:
+        if _check_kill_switch(drawdown, self.threshold):
             self._log_alert(market_value, peak, drawdown)
             return True
         return False

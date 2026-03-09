@@ -44,9 +44,35 @@ def load_prices():
 
 @st.cache_data(ttl=60)
 def load_trades():
+    try:
+        from db.repository import get_executions
+        df = get_executions(limit=500)
+        if not df.empty:
+            return df.to_dict("records")
+    except Exception:
+        pass
+    # fallback: JSONL trades log
     from execution.simulator import TradeSimulator
     sim = TradeSimulator()
     return sim.get_trade_history()
+
+
+@st.cache_data(ttl=60)
+def load_history_df():
+    try:
+        from db.repository import get_history
+        return get_history(days=365)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=30)
+def load_agent_runs():
+    try:
+        from db.repository import get_agent_runs
+        return get_agent_runs(limit=20)
+    except Exception:
+        return []
 
 
 def compute_summary(portfolio: dict, prices: dict) -> dict:
@@ -73,7 +99,7 @@ st.sidebar.markdown("**Autonomous Portfolio Agent**")
 
 page = st.sidebar.radio(
     "Navigation",
-    ["Overview", "Allocation", "Trade History", "Run Agent", "Reports"],
+    ["Overview", "Allocation", "Trade History", "Performance", "Risk", "Run Agent", "Reports"],
 )
 
 strategy = st.sidebar.selectbox("Strategy", ["threshold", "calendar"], index=0)
@@ -85,11 +111,14 @@ try:
     portfolio = load_portfolio()
     prices = load_prices()
     trades = load_trades()
+    history_df = load_history_df()
+    agent_runs = load_agent_runs()
     summary = compute_summary(portfolio, prices)
     data_ok = True
 except Exception as e:
     st.error(f"Failed to load data: {e}")
     portfolio, prices, trades, summary = {}, {}, [], {}
+    history_df, agent_runs = None, []
     data_ok = False
 
 kill_switch_active = portfolio.get("kill_switch_active", False)
@@ -118,19 +147,30 @@ if page == "Overview":
 
         st.markdown("---")
         st.subheader("Portfolio History")
-        history = portfolio.get("history", [])
-        if history:
-            hist_df = pd.DataFrame(history)
-            hist_df["date"] = pd.to_datetime(hist_df["date"])
+        if history_df is not None and not history_df.empty:
+            hist_df = history_df.copy()
+            hist_df["timestamp"] = pd.to_datetime(hist_df["timestamp"])
             fig = px.line(
-                hist_df, x="date", y="total_value",
+                hist_df, x="timestamp", y="total_value",
                 title="Portfolio Value Over Time",
-                labels={"total_value": "Value ($)", "date": "Date"},
+                labels={"total_value": "Value ($)", "timestamp": "Date"},
             )
             fig.update_layout(height=350)
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("No history yet. Run the agent to start tracking.")
+            history = portfolio.get("history", [])
+            if history:
+                hist_df = pd.DataFrame(history)
+                hist_df["date"] = pd.to_datetime(hist_df["date"])
+                fig = px.line(
+                    hist_df, x="date", y="total_value",
+                    title="Portfolio Value Over Time",
+                    labels={"total_value": "Value ($)", "date": "Date"},
+                )
+                fig.update_layout(height=350)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No history yet. Run the agent to start tracking.")
 
         st.markdown("---")
         st.subheader("Current Positions")
@@ -251,6 +291,219 @@ elif page == "Trade History":
             st.info("No trades recorded yet.")
     else:
         st.info("No trade history found.")
+
+
+elif page == "Performance":
+    st.title("Performance")
+
+    @st.cache_data(ttl=120)
+    def load_benchmark_history(days: int = 365):
+        try:
+            from market.fetcher import MarketDataService
+            svc = MarketDataService()
+            df = svc.get_historical("^GSPC", days=days)
+            if df is not None and not df.empty and "Close" in df.columns:
+                return df["Close"].dropna()
+        except Exception:
+            pass
+        return None
+
+    if history_df is not None and not history_df.empty:
+        hist = history_df.copy()
+        hist["timestamp"] = pd.to_datetime(hist["timestamp"])
+        hist = hist.sort_values("timestamp").reset_index(drop=True)
+
+        port_returns = hist["total_value"].pct_change().dropna()
+        start_val = hist["total_value"].iloc[0]
+
+        # Build comparison chart
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=hist["timestamp"], y=hist["total_value"],
+            name="Portfolio", line=dict(color="#2b6cb0", width=2),
+        ))
+
+        # Buy-and-hold baseline (no rebalancing from start)
+        bah_curve = start_val * (1 + port_returns.cumsum())
+        bah_index = hist["timestamp"].iloc[1:]
+        fig.add_trace(go.Scatter(
+            x=bah_index, y=bah_curve.values,
+            name="Buy & Hold (baseline)", line=dict(color="#68d391", width=1.5, dash="dot"),
+        ))
+
+        # Benchmark (S&P 500)
+        bm = load_benchmark_history(days=365)
+        if bm is not None and not bm.empty:
+            start_ts = hist["timestamp"].iloc[0]
+            bm_aligned = bm[bm.index >= start_ts.tz_localize(None) if bm.index.tz is None else start_ts]
+            if not bm_aligned.empty:
+                bm_scaled = (bm_aligned / bm_aligned.iloc[0]) * start_val
+                fig.add_trace(go.Scatter(
+                    x=bm_scaled.index, y=bm_scaled.values,
+                    name="S&P 500", line=dict(color="#fc8181", width=1.5, dash="dash"),
+                ))
+
+        fig.update_layout(
+            title="Cumulative Return — Portfolio vs Benchmarks",
+            xaxis_title="Date", yaxis_title="Value ($)",
+            height=400, legend=dict(orientation="h", y=-0.2),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Performance Metrics")
+
+        from engine.performance import (
+            cumulative_return, annualized_return, sharpe_ratio,
+            max_drawdown, turnover, transaction_costs_total, hit_ratio,
+        )
+        hist_list = [
+            {"date": str(r["timestamp"]), "total_value": r["total_value"]}
+            for _, r in hist.iterrows()
+        ]
+        trades_list = trades if isinstance(trades, list) else []
+
+        cum_ret_gross = cumulative_return(hist_list)
+        costs = transaction_costs_total(trades_list)
+        net_final = hist["total_value"].iloc[-1] - costs
+        cum_ret_net = (net_final - hist["total_value"].iloc[0]) / hist["total_value"].iloc[0]
+        ann_ret = annualized_return(hist_list)
+        vol = float(port_returns.std() * (252 ** 0.5)) if not port_returns.empty else 0.0
+        sharpe = sharpe_ratio(port_returns)
+        mdd = max_drawdown(hist_list)
+        avg_val = float(hist["total_value"].mean())
+        to = turnover(trades_list, avg_val)
+        hr = hit_ratio(trades_list)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Gross (before costs)**")
+            st.dataframe(pd.DataFrame([
+                {"Metric": "Cumulative Return", "Value": f"{cum_ret_gross:.2%}"},
+                {"Metric": "Annualized Return", "Value": f"{ann_ret:.2%}"},
+                {"Metric": "Volatility (ann.)", "Value": f"{vol:.2%}"},
+                {"Metric": "Sharpe Ratio", "Value": f"{sharpe:.2f}"},
+                {"Metric": "Max Drawdown", "Value": f"{mdd:.2%}"},
+                {"Metric": "Turnover (ann.)", "Value": f"{to:.2%}"},
+                {"Metric": "Hit Ratio", "Value": f"{hr:.1%}"},
+            ]), use_container_width=True, hide_index=True)
+        with col2:
+            st.markdown("**Net (after transaction costs)**")
+            st.dataframe(pd.DataFrame([
+                {"Metric": "Cumulative Return (net)", "Value": f"{cum_ret_net:.2%}"},
+                {"Metric": "Transaction Costs", "Value": f"${costs:,.2f}"},
+                {"Metric": "Cost drag", "Value": f"{cum_ret_gross - cum_ret_net:.2%}"},
+            ]), use_container_width=True, hide_index=True)
+    else:
+        st.info("No portfolio history in DB yet. Run at least one agent cycle to populate data.")
+
+
+elif page == "Risk":
+    st.title("Risk")
+
+    if history_df is not None and not history_df.empty:
+        hist = history_df.copy()
+        hist["timestamp"] = pd.to_datetime(hist["timestamp"])
+        hist = hist.sort_values("timestamp").reset_index(drop=True)
+        port_returns = hist["total_value"].pct_change().dropna()
+
+        # Rolling volatility
+        from engine.performance import rolling_volatility, parametric_var, conditional_var
+        from config import KILL_SWITCH_DRAWDOWN
+
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.subheader("Rolling Volatility (30d annualised)")
+            if len(port_returns) >= 5:
+                roll_vol = rolling_volatility(port_returns, window=min(30, len(port_returns) - 1)).dropna()
+                if not roll_vol.empty:
+                    vol_index = hist["timestamp"].iloc[len(hist) - len(roll_vol):]
+                    fig_vol = go.Figure(go.Scatter(
+                        x=vol_index, y=roll_vol.values * 100,
+                        fill="tozeroy", line=dict(color="#667eea"),
+                    ))
+                    fig_vol.update_layout(
+                        yaxis_title="Volatility (%)", height=300,
+                        xaxis_title="Date",
+                    )
+                    st.plotly_chart(fig_vol, use_container_width=True)
+                else:
+                    st.info("Need more data points for rolling volatility.")
+            else:
+                st.info("Need at least 5 data points for rolling volatility.")
+
+        with col_right:
+            st.subheader("Drawdown")
+            values = hist["total_value"]
+            peak = values.cummax()
+            drawdown_series = (values - peak) / peak * 100
+
+            fig_dd = go.Figure()
+            fig_dd.add_trace(go.Scatter(
+                x=hist["timestamp"], y=drawdown_series,
+                fill="tozeroy", name="Drawdown",
+                line=dict(color="#fc8181"),
+                fillcolor="rgba(252,129,129,0.3)",
+            ))
+            fig_dd.add_hline(
+                y=-KILL_SWITCH_DRAWDOWN * 100,
+                line_dash="dash", line_color="red",
+                annotation_text=f"Kill switch -{KILL_SWITCH_DRAWDOWN:.0%}",
+            )
+            fig_dd.update_layout(
+                yaxis_title="Drawdown (%)", height=300,
+                xaxis_title="Date",
+            )
+            st.plotly_chart(fig_dd, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("Risk Metrics")
+
+        total_val = summary.get("total", 0)
+        var_95 = parametric_var(port_returns, confidence=0.95, portfolio_value=total_val)
+        cvar_95 = conditional_var(port_returns, confidence=0.95, portfolio_value=total_val)
+        var_99 = parametric_var(port_returns, confidence=0.99, portfolio_value=total_val)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("VaR 95% (1-day)", f"${var_95:,.0f}", help="Maximum expected daily loss at 95% confidence")
+        col2.metric("CVaR 95% (1-day)", f"${cvar_95:,.0f}", help="Expected loss beyond VaR threshold")
+        col3.metric("VaR 99% (1-day)", f"${var_99:,.0f}", help="Maximum expected daily loss at 99% confidence")
+
+        st.markdown("---")
+        st.subheader("Correlation Matrix")
+        try:
+            from market.fetcher import MarketDataService
+            svc = MarketDataService()
+            returns_dict = {}
+            for ticker in list(TARGET_ALLOCATION.keys()):
+                df_t = svc.get_historical(ticker, days=90)
+                if df_t is not None and not df_t.empty and "Close" in df_t.columns:
+                    r = df_t["Close"].pct_change().dropna()
+                    returns_dict[ticker] = r
+            if len(returns_dict) >= 2:
+                returns_df = pd.DataFrame(returns_dict).dropna(how="all")
+                corr = returns_df.corr()
+                fig_corr = go.Figure(go.Heatmap(
+                    z=corr.values,
+                    x=corr.columns.tolist(),
+                    y=corr.index.tolist(),
+                    colorscale="RdBu_r",
+                    zmin=-1, zmax=1,
+                    text=corr.round(2).values,
+                    texttemplate="%{text}",
+                ))
+                fig_corr.update_layout(
+                    title="30-Day Return Correlations",
+                    height=450,
+                )
+                st.plotly_chart(fig_corr, use_container_width=True)
+            else:
+                st.info("Not enough ticker data for correlation matrix.")
+        except Exception as e:
+            st.warning(f"Could not compute correlation matrix: {e}")
+    else:
+        st.info("No portfolio history in DB yet. Run at least one agent cycle to populate data.")
 
 
 elif page == "Run Agent":

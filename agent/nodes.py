@@ -6,6 +6,7 @@ from datetime import datetime
 
 from config import TARGET_ALLOCATION, AI_PROVIDER
 from agent.state import AgentState
+from engine.portfolio import compute_portfolio_value as _compute_portfolio_value
 from agent.llm import get_llm_client
 from agent.prompts import SYSTEM_PROMPT, ANALYSIS_TEMPLATE, DECISION_PROMPT
 from agent.tools import TOOL_SCHEMAS, dispatch_tool
@@ -49,9 +50,7 @@ def observe_node(state: AgentState) -> AgentState:
         if df is not None and not df.empty:
             market_data["metrics"][ticker] = _metrics_calc.ticker_metrics(df)
 
-    total_value = portfolio["cash"] + sum(
-        qty * prices.get(t, 0) for t, qty in portfolio.get("positions", {}).items()
-    )
+    total_value = _compute_portfolio_value(portfolio.get("positions", {}), portfolio["cash"], prices)
     _simulator.update_peak(total_value)
     portfolio = _simulator.load_portfolio()
 
@@ -85,7 +84,7 @@ def analyze_node(state: AgentState) -> AgentState:
 
     positions = portfolio.get("positions", {})
     cash = portfolio.get("cash", 0)
-    total = cash + sum(qty * prices.get(t, 0) for t, qty in positions.items())
+    total = _compute_portfolio_value(positions, cash, prices)
     peak = portfolio.get("peak_value", total)
     drawdown = _metrics_calc.current_drawdown(total, peak)
 
@@ -173,9 +172,7 @@ def execute_node(state: AgentState) -> AgentState:
     portfolio = _simulator.load_portfolio()
     prices = state["market_data"]["prices"]
 
-    total = portfolio["cash"] + sum(
-        qty * prices.get(t, 0) for t, qty in portfolio.get("positions", {}).items()
-    )
+    total = _compute_portfolio_value(portfolio.get("positions", {}), portfolio["cash"], prices)
     _simulator.update_peak(total)
     portfolio = _simulator.load_portfolio()
 
@@ -188,7 +185,7 @@ def execute_node(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def audit_node(state: AgentState) -> AgentState:
-    """Log cycle summary and generate PDF report."""
+    """Log cycle summary, generate PDF report, and persist to DB."""
     print("[audit] Generating audit report...")
 
     report_path = None
@@ -199,7 +196,19 @@ def audit_node(state: AgentState) -> AgentState:
     except Exception as exc:
         print(f"[audit] Report generation failed: {exc}")
 
-    return {**state, "report_path": report_path}
+    final_state = {**state, "report_path": report_path}
+
+    try:
+        from db.repository import save_snapshot, save_agent_run
+        portfolio = _simulator.load_portfolio()
+        prices = state["market_data"]["prices"]
+        save_snapshot(portfolio, prices, state["cycle_id"])
+        save_agent_run(final_state)
+        print("[audit] Snapshot and agent run persisted to DB.")
+    except Exception as exc:
+        print(f"[audit] DB persistence failed: {exc}")
+
+    return final_state
 
 
 # ---------------------------------------------------------------------------

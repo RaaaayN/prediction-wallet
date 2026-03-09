@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 
 from config import VOLATILITY_WINDOW, RISK_FREE_RATE
+from engine.performance import rolling_volatility as _rolling_vol, sharpe_ratio as _sharpe
+from engine.risk import compute_drawdown as _compute_drawdown
 
 
 class PortfolioMetrics:
@@ -17,16 +19,12 @@ class PortfolioMetrics:
     @staticmethod
     def calculate_volatility(returns: pd.Series | pd.DataFrame, window: int = VOLATILITY_WINDOW) -> pd.Series | pd.DataFrame:
         """Rolling annualized volatility (std * sqrt(252))."""
-        return returns.rolling(window=window).std() * np.sqrt(252)
+        return _rolling_vol(returns, window=window)
 
     @staticmethod
     def calculate_sharpe(returns: pd.Series, rf: float = RISK_FREE_RATE) -> float:
         """Annualized Sharpe ratio for a return series."""
-        if returns.std() == 0:
-            return 0.0
-        excess = returns.mean() * 252 - rf
-        vol = returns.std() * np.sqrt(252)
-        return float(excess / vol)
+        return _sharpe(returns, rf=rf)
 
     @staticmethod
     def calculate_correlations(returns: pd.DataFrame) -> pd.DataFrame:
@@ -38,15 +36,13 @@ class PortfolioMetrics:
         """Compute drawdown series and maximum drawdown from a value series."""
         peak = values.cummax()
         drawdown = (values - peak) / peak
-        max_drawdown = float(drawdown.min())
-        return {"drawdown_series": drawdown, "max_drawdown": max_drawdown}
+        max_dd = float(drawdown.min())
+        return {"drawdown_series": drawdown, "max_drawdown": max_dd}
 
     @staticmethod
     def current_drawdown(current_value: float, peak_value: float) -> float:
         """Drawdown of current value from historical peak."""
-        if peak_value <= 0:
-            return 0.0
-        return (current_value - peak_value) / peak_value
+        return _compute_drawdown(current_value, peak_value)
 
     @staticmethod
     def ticker_metrics(df: pd.DataFrame, rf: float = RISK_FREE_RATE) -> dict:
@@ -70,7 +66,7 @@ class PortfolioMetrics:
         ytd_return = float((close.iloc[-1] / start_of_year) - 1)
 
         # Sharpe
-        sharpe = PortfolioMetrics.calculate_sharpe(returns, rf)
+        sharpe = _sharpe(returns, rf=rf)
 
         return {
             "last_price": last_price,
