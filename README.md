@@ -1,69 +1,106 @@
-# Prediction Wallet - Optimisation de Portefeuille
+# Prediction Wallet — Autonomous Portfolio Rebalancing Agent
 
-Ce projet vise à créer un système de prédiction des cours boursiers et d'optimisation de portefeuille d'investissement.
+An AI-powered portfolio manager that autonomously monitors drift, rebalances allocations, simulates trades with slippage, and generates PDF audit reports — all driven by a LangGraph agent backed by Claude.
 
-## Objectifs
+## Stack
 
-- Prédire les cours futurs des actifs financiers
-- Optimiser la composition d'un portefeuille d'investissement
-- Créer un dashboard interactif pour visualiser les résultats
+- **AI Agent:** LangGraph + Anthropic Claude (claude-sonnet-4-6)
+- **Data:** yfinance → SQLite (`data/market.db`)
+- **Strategies:** Threshold (drift-based) or Calendar (weekly/monthly)
+- **Execution:** Simulated trades with realistic slippage
+- **Reporting:** reportlab PDF audit reports
+- **Dashboard:** Streamlit
 
-## Structure du Projet
+## Directory Structure
 
 ```
-prediction-wallet/
-├── data/                  # Données brutes et prétraitées
-├── notebooks/             # Notebooks Jupyter pour l'analyse
-├── src/
-│   ├── data/             # Scripts de collecte et prétraitement
-│   ├── models/           # Modèles de prédiction
-│   ├── optimization/     # Optimisation de portefeuille
-│   └── visualization/    # Visualisation et dashboard
-├── tests/                # Tests unitaires
-├── requirements.txt      # Dépendances Python
-└── README.md            # Documentation
+prediction-wallet-1/
+├── agent/              # LangGraph agent (state, graph, nodes, tools, prompts)
+├── strategies/         # Threshold + Calendar rebalancing strategies
+├── market/             # yfinance data fetching + metrics
+├── execution/          # Trade simulator + kill switch
+├── reporting/          # PDF report generation
+├── dashboard/          # Streamlit app
+├── tests/              # pytest test suite
+├── data/
+│   ├── market.db       # SQLite: price history + indicators
+│   ├── portfolio.json  # Portfolio state
+│   ├── trades.log      # JSONL trade log
+│   └── reports/        # Generated PDF reports
+├── config.py           # Portfolio config, allocations, thresholds
+├── main.py             # CLI entry point
+├── requirements.txt
+└── .env.example
 ```
 
-## Installation
+## Setup
 
-1. Cloner le repository
-2. Créer un environnement virtuel Python
-3. Installer les dépendances :
 ```bash
+# 1. Clone and create virtual environment
+python -m venv .venv
+source .venv/bin/activate       # Linux/Mac
+.venv\Scripts\activate          # Windows
+
+# 2. Install dependencies
 pip install -r requirements.txt
+
+# 3. Configure API key
+cp .env.example .env
+# Edit .env and set ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-## Utilisation
-
-1. Collecter les données :
-```bash
-python src/data/collect_data.py
-```
-
-2. Entraîner les modèles :
-```bash
-python src/models/train_models.py
-```
-
-3. Lancer le dashboard :
-```bash
-python src/visualization/dashboard.py
-```
-
-## Fonctionnalités
-
-- Collecte de données financières via Yahoo Finance
-- Prétraitement et analyse exploratoire des données
-- Modèles de prédiction (ARIMA, LSTM, Prophet)
-- Optimisation de portefeuille (ratio de Sharpe, variance minimale)
-- Dashboard interactif avec Plotly et Dash
-
-## Tests
+## Usage
 
 ```bash
-pytest tests/
+# Run one agent cycle (threshold strategy)
+python main.py
+
+# Use calendar strategy
+python main.py --strategy calendar
+
+# Simulate 30 days of rebalancing
+python main.py --simulate-days 30
+
+# Generate PDF report from current portfolio (no agent run)
+python main.py --report
+
+# Launch Streamlit dashboard
+streamlit run dashboard/app.py
+
+# Run tests
+pytest tests/ -v
 ```
 
-## Licence
+## Target Allocation
+
+| Asset | Weight | Category |
+|-------|--------|----------|
+| AAPL | 12% | Equity |
+| MSFT | 12% | Equity |
+| GOOGL | 9% | Equity |
+| AMZN | 9% | Equity |
+| NVDA | 8% | Equity |
+| TLT | 15% | Bonds |
+| BND | 15% | Bonds |
+| BTC-USD | 12% | Crypto |
+| ETH-USD | 8% | Crypto |
+
+## Agent Architecture
+
+```
+[observe] → fetch prices, compute metrics, evaluate strategy
+[analyze] → Claude: summarize market state, identify anomalies
+[decide]  → Claude: tool-calling loop (get_portfolio_state → get_market_data → execute_trade)
+[execute] → post-trade validation, kill switch check
+[audit]   → log cycle, generate PDF report
+```
+
+## Risk Controls
+
+- **Kill Switch:** Activates if drawdown from peak exceeds 10% — all trading halts
+- **Slippage:** 0.1% for equities/ETFs, 0.5% for crypto
+- **Drift Threshold:** 5% deviation triggers rebalancing
+
+## License
 
 MIT
