@@ -99,7 +99,8 @@ st.sidebar.markdown("**Autonomous Portfolio Agent**")
 
 page = st.sidebar.radio(
     "Navigation",
-    ["Overview", "Allocation", "Trade History", "Performance", "Risk", "Run Agent", "Reports"],
+    ["Overview", "Allocation", "Trade History", "Performance", "Risk",
+     "Agent Trace", "Strategy Comparison", "Run Agent", "Reports"],
 )
 
 strategy = st.sidebar.selectbox("Strategy", ["threshold", "calendar"], index=0)
@@ -504,6 +505,303 @@ elif page == "Risk":
             st.warning(f"Could not compute correlation matrix: {e}")
     else:
         st.info("No portfolio history in DB yet. Run at least one agent cycle to populate data.")
+
+
+elif page == "Agent Trace":
+    st.title("Agent Trace")
+
+    runs = agent_runs  # loaded at top: get_agent_runs(limit=20)
+
+    if not runs:
+        st.info("No agent runs recorded yet. Run at least one agent cycle to populate data.")
+    else:
+        # Summary table
+        summary_rows = []
+        for r in runs:
+            summary_rows.append({
+                "Cycle ID": r.get("cycle_id", ""),
+                "Timestamp": r.get("timestamp", "")[:19],
+                "Strategy": r.get("strategy", ""),
+                "Signal": "Yes" if r.get("signal") else "No",
+                "Trades": r.get("trades_count", 0),
+                "Kill Switch": "ACTIVE" if r.get("kill_switch") else "OK",
+            })
+        summary_df = pd.DataFrame(summary_rows)
+        st.dataframe(
+            summary_df.style.apply(
+                lambda col: ["background-color: #fed7d7" if v == "ACTIVE" else "" for v in col]
+                if col.name == "Kill Switch" else [""] * len(col),
+                axis=0,
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.markdown("---")
+        st.subheader("Cycle Detail")
+
+        selected_cycle = st.selectbox(
+            "Select a cycle to inspect",
+            options=[r["cycle_id"] for r in runs],
+            format_func=lambda cid: next(
+                (f"{r['timestamp'][:19]} — {r['strategy']} — {r['trades_count']} trades"
+                 for r in runs if r["cycle_id"] == cid), cid
+            ),
+        )
+
+        if selected_cycle:
+            run = next((r for r in runs if r["cycle_id"] == selected_cycle), None)
+            if run:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Strategy", run.get("strategy", "—"))
+                col2.metric("Trades executed", run.get("trades_count", 0))
+                col3.metric("Kill Switch", "ACTIVE" if run.get("kill_switch") else "OK")
+
+                # Drift table from positions snapshot
+                try:
+                    from db.repository import get_positions_by_cycle, get_executions
+                    positions_snap = get_positions_by_cycle(selected_cycle)
+                    if positions_snap:
+                        st.markdown("**Drift by asset (at cycle snapshot)**")
+                        drift_rows = []
+                        for p in positions_snap:
+                            drift = p.get("drift", 0)
+                            drift_rows.append({
+                                "Ticker": p["ticker"],
+                                "Weight": f"{p.get('weight', 0):.1%}",
+                                "Target": f"{p.get('target_weight', 0):.1%}",
+                                "Drift": f"{drift:+.1%}",
+                                "Alert": "OVERWEIGHT" if drift > 0.05 else ("UNDERWEIGHT" if drift < -0.05 else "OK"),
+                            })
+                        drift_df = pd.DataFrame(drift_rows)
+                        st.dataframe(
+                            drift_df.style.apply(
+                                lambda col: [
+                                    "background-color: #fed7d7" if v == "OVERWEIGHT"
+                                    else "background-color: #c6f6d5" if v == "UNDERWEIGHT"
+                                    else "" for v in col
+                                ] if col.name == "Alert" else [""] * len(col),
+                                axis=0,
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                    # Executions for this cycle
+                    all_exec = get_executions(limit=500)
+                    if not all_exec.empty and "cycle_id" in all_exec.columns:
+                        cycle_trades = all_exec[all_exec["cycle_id"] == selected_cycle]
+                        if not cycle_trades.empty:
+                            st.markdown("**Orders executed**")
+                            show_cols = [c for c in ["ticker", "action", "quantity", "fill_price", "cost", "slippage", "reason", "success"] if c in cycle_trades.columns]
+                            st.dataframe(cycle_trades[show_cols], use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No trades recorded for this cycle.")
+                except Exception as exc:
+                    st.warning(f"Could not load cycle details: {exc}")
+
+                # LLM analysis
+                analysis = run.get("analysis", "")
+                if analysis:
+                    with st.expander("LLM Analysis", expanded=False):
+                        st.markdown(analysis)
+                else:
+                    st.caption("No LLM analysis stored for this cycle.")
+
+                # Kill switch detail
+                if run.get("kill_switch"):
+                    st.error("Kill switch was ACTIVE during this cycle — no trades were executed.")
+
+
+elif page == "Strategy Comparison":
+    st.title("Strategy Comparison")
+    st.markdown("Deterministic backtest on historical prices from market.db — no LLM calls.")
+
+    @st.cache_data(ttl=300)
+    def run_strategy_comparison(days: int = 90):
+        from market.fetcher import MarketDataService
+        from engine.orders import generate_rebalance_orders, apply_slippage
+        from engine.performance import (
+            cumulative_return, sharpe_ratio, max_drawdown, transaction_costs_total,
+        )
+        from config import TARGET_ALLOCATION, INITIAL_CAPITAL, DRIFT_THRESHOLD, CRYPTO_TICKERS, SLIPPAGE_EQUITIES, SLIPPAGE_CRYPTO
+
+        svc = MarketDataService()
+        tickers = list(TARGET_ALLOCATION.keys())
+
+        # Load all price series from DB
+        price_series: dict[str, pd.Series] = {}
+        for ticker in tickers:
+            df = svc.get_historical(ticker, days=days + 30)
+            if df is not None and not df.empty and "Close" in df.columns:
+                price_series[ticker] = df["Close"].dropna()
+
+        if not price_series:
+            return None
+
+        # Build a common date index (intersection of all tickers)
+        common_idx = None
+        for s in price_series.values():
+            idx = s.index.normalize()
+            common_idx = idx if common_idx is None else common_idx.intersection(idx)
+
+        if common_idx is None or len(common_idx) < 5:
+            return None
+
+        common_idx = sorted(common_idx)[-days:]
+
+        def prices_on(date) -> dict:
+            result = {}
+            for t, s in price_series.items():
+                idx_norm = s.index.normalize()
+                matches = s[idx_norm == date]
+                if not matches.empty:
+                    result[t] = float(matches.iloc[-1])
+            return result
+
+        def init_portfolio(day0_prices):
+            port = {"positions": {}, "cash": INITIAL_CAPITAL, "last_rebalanced": None}
+            for t, w in TARGET_ALLOCATION.items():
+                p = day0_prices.get(t, 0)
+                if p > 0:
+                    qty = (INITIAL_CAPITAL * w) / p
+                    port["positions"][t] = qty
+                    port["cash"] -= qty * p
+            return port
+
+        def apply_orders(port, orders, prices):
+            executed = []
+            for o in orders:
+                t, qty, action = o["ticker"], o["quantity"], o["action"]
+                p = prices.get(t, 0)
+                if p <= 0:
+                    continue
+                fp = apply_slippage(p, action, t, CRYPTO_TICKERS, SLIPPAGE_EQUITIES, SLIPPAGE_CRYPTO)
+                if action == "buy":
+                    cost = fp * qty
+                    if port["cash"] >= cost:
+                        port["positions"][t] = port["positions"].get(t, 0) + qty
+                        port["cash"] -= cost
+                        executed.append({"ticker": t, "action": action, "quantity": qty,
+                                         "market_price": p, "fill_price": fp, "success": True})
+                else:
+                    held = port["positions"].get(t, 0)
+                    qty = min(qty, held)
+                    if qty > 0:
+                        port["positions"][t] = held - qty
+                        port["cash"] += fp * qty
+                        executed.append({"ticker": t, "action": action, "quantity": qty,
+                                         "market_price": p, "fill_price": fp, "success": True})
+            return executed
+
+        def portfolio_value(port, prices):
+            return port["cash"] + sum(
+                qty * prices.get(t, 0) for t, qty in port["positions"].items()
+            )
+
+        results = {}
+
+        for strat_name in ["threshold", "calendar", "buy_and_hold"]:
+            day0_prices = prices_on(common_idx[0])
+            if not day0_prices:
+                continue
+            port = init_portfolio(day0_prices)
+            equity = []
+            all_trades = []
+            last_rebal_day = 0
+
+            for i, date in enumerate(common_idx):
+                prices = prices_on(date)
+                if not prices:
+                    continue
+                val = portfolio_value(port, prices)
+                equity.append({"date": str(date.date()), "total_value": val})
+
+                if strat_name == "buy_and_hold":
+                    pass  # never rebalance
+
+                elif strat_name == "threshold":
+                    # compute weights, check drift
+                    total = val
+                    if total > 0:
+                        trigger = any(
+                            abs(port["positions"].get(t, 0) * prices.get(t, 0) / total
+                                - TARGET_ALLOCATION.get(t, 0)) > DRIFT_THRESHOLD
+                            for t in TARGET_ALLOCATION
+                        )
+                        if trigger:
+                            orders = generate_rebalance_orders(port, prices, TARGET_ALLOCATION)
+                            trades = apply_orders(port, orders, prices)
+                            all_trades.extend(trades)
+
+                elif strat_name == "calendar":
+                    # weekly rebalance (every 7 days)
+                    if i - last_rebal_day >= 7:
+                        orders = generate_rebalance_orders(port, prices, TARGET_ALLOCATION)
+                        trades = apply_orders(port, orders, prices)
+                        all_trades.extend(trades)
+                        last_rebal_day = i
+
+            results[strat_name] = {
+                "equity": equity,
+                "trades": all_trades,
+                "cum_ret": cumulative_return(equity),
+                "sharpe": sharpe_ratio(pd.Series([e["total_value"] for e in equity]).pct_change().dropna()),
+                "max_dd": max_drawdown(equity),
+                "n_trades": len(all_trades),
+                "costs": transaction_costs_total(all_trades),
+            }
+
+        return results
+
+    backtest_days = st.slider("Backtest window (days)", min_value=30, max_value=252, value=90, step=10)
+
+    if st.button("Compare strategies", type="primary"):
+        with st.spinner("Running deterministic backtests on market.db..."):
+            results = run_strategy_comparison(days=backtest_days)
+            if results:
+                st.session_state["comparison_results"] = results
+            else:
+                st.warning("Not enough historical data in market.db. Run the agent at least once to fetch prices.")
+
+    if "comparison_results" in st.session_state:
+        results = st.session_state["comparison_results"]
+
+        # Equity curve chart
+        fig = go.Figure()
+        colors_map = {"threshold": "#2b6cb0", "calendar": "#d69e2e", "buy_and_hold": "#68d391"}
+        labels_map = {"threshold": "Threshold (5%)", "calendar": "Calendar (weekly)", "buy_and_hold": "Buy & Hold"}
+        for strat, data in results.items():
+            eq = pd.DataFrame(data["equity"])
+            if eq.empty:
+                continue
+            fig.add_trace(go.Scatter(
+                x=pd.to_datetime(eq["date"]), y=eq["total_value"],
+                name=labels_map.get(strat, strat),
+                line=dict(color=colors_map.get(strat, "#999"), width=2),
+            ))
+        fig.update_layout(
+            title=f"Strategy Comparison — {backtest_days}-day backtest",
+            xaxis_title="Date", yaxis_title="Portfolio Value ($)",
+            height=400, legend=dict(orientation="h", y=-0.2),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Comparison table
+        st.subheader("Summary")
+        table_rows = []
+        for strat, data in results.items():
+            table_rows.append({
+                "Strategy": labels_map.get(strat, strat),
+                "Cumulative Return": f"{data['cum_ret']:+.2%}",
+                "Sharpe Ratio": f"{data['sharpe']:.2f}",
+                "Max Drawdown": f"{data['max_dd']:.2%}",
+                "# Trades": data["n_trades"],
+                "Transaction Costs": f"${data['costs']:,.2f}",
+            })
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("Click 'Compare strategies' to run the backtest.")
 
 
 elif page == "Run Agent":
