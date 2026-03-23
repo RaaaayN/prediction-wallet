@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables
+.env
+
+# uv
+.python-version
+
+# Data & generated files
+data/market.db
+data/portfolio.json
+data/trades.log
+data/reports/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude memory (local only)
+.claude/
