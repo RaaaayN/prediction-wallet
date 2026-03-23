@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prediction Wallet — Agent UI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', system-ui, sans-serif; }
+    .terminal { background: #010409; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 12px; }
+    .tab-btn.active { border-bottom: 2px solid #58a6ff; color: #58a6ff; }
+    .tab-btn { color: #8b949e; border-bottom: 2px solid transparent; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+    .badge-ok { background:#1a4731; color:#3fb950; }
+    .badge-err { background:#3d1a1a; color:#f85149; }
+    .badge-warn { background:#3d2d0a; color:#e3b341; }
+    .badge-info { background:#1b2a3d; color:#58a6ff; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #161b22; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    table { border-collapse: collapse; width: 100%; }
+    th { color: #8b949e; font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+    td, th { padding: 8px 12px; border-bottom: 1px solid #21262d; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1c2128; }
+    .drift-pos { color: #f85149; }
+    .drift-neg { color: #3fb950; }
+    input, select { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; border-radius: 6px; padding: 4px 8px; font-size: 13px; }
+    .btn { padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid; transition: opacity .15s; }
+    .btn:hover { opacity: .85; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+    .btn-green  { background: #1a4731; border-color: #3fb950; color: #3fb950; }
+    .btn-red    { background: #3d1a1a; border-color: #f85149; color: #f85149; }
+    .btn-purple { background: #2d1f6e; border-color: #8957e5; color: #8957e5; }
+    .btn-gray   { background: #21262d; border-color: #30363d; color: #8b949e; }
+    .stage-badge { font-size: 10px; padding: 2px 7px; border-radius: 4px; font-weight: 600; text-transform: uppercase; }
+    .stage-observe  { background:#1b2a3d; color:#58a6ff; }
+    .stage-decide   { background:#2d1f6e; color:#8957e5; }
+    .stage-validate { background:#3d2d0a; color:#e3b341; }
+    .stage-execute  { background:#1a4731; color:#3fb950; }
+    .stage-audit    { background:#3d1a1a; color:#f85149; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<!-- HEADER -->
+<header class="border-b border-gray-800 px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-sm font-bold">PW</div>
+    <span class="font-semibold text-base">Prediction Wallet</span>
+    <span class="text-gray-500 text-sm">Governed Portfolio Agent</span>
+  </div>
+  <div id="cfg-badges" class="flex gap-2 text-xs"></div>
+</header>
+
+<!-- TABS -->
+<nav class="border-b border-gray-800 px-6 flex gap-6">
+  <button class="tab-btn active py-3 text-sm" onclick="showTab('control')">Control</button>
+  <button class="tab-btn py-3 text-sm" onclick="showTab('portfolio')">Portfolio</button>
+  <button class="tab-btn py-3 text-sm" onclick="showTab('history')">History</button>
+  <button class="tab-btn py-3 text-sm" onclick="showTab('traces')">Agent Trace</button>
+  <button class="tab-btn py-3 text-sm" onclick="showTab('runs')">Cycles</button>
+</nav>
+
+<main class="p-6 max-w-7xl mx-auto">
+
+<!-- ═══════════════ CONTROL TAB ═══════════════ -->
+<div id="tab-control">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+    <!-- Command panel -->
+    <div class="lg:col-span-1 card p-4 flex flex-col gap-4">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Run Agent</h2>
+
+      <div class="grid grid-cols-2 gap-2 text-xs">
+        <label class="flex flex-col gap-1 col-span-2">
+          <span class="text-gray-400">Strategy</span>
+          <select id="opt-strategy">
+            <option value="threshold">Threshold</option>
+            <option value="calendar">Calendar</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-gray-400">Mode</span>
+          <select id="opt-mode">
+            <option value="simulate">Simulate</option>
+            <option value="paper">Paper</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-gray-400">MCP</span>
+          <select id="opt-mcp">
+            <option value="none">None</option>
+            <option value="local">Local</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-1 col-span-2">
+          <span class="text-gray-400">Profile</span>
+          <select id="opt-profile">
+            <option value="">default</option>
+            <option value="balanced">balanced</option>
+            <option value="conservative">conservative</option>
+            <option value="growth">growth</option>
+            <option value="crypto_heavy">crypto_heavy</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="flex flex-col gap-2">
+        <button class="btn btn-primary" onclick="runStep('run-cycle')">▶ Run Full Cycle</button>
+        <div class="grid grid-cols-2 gap-2">
+          <button class="btn btn-gray" onclick="runStep('observe')">Observe</button>
+          <button class="btn btn-gray" onclick="runStep('decide')">Decide</button>
+          <button class="btn btn-gray" onclick="runStep('execute')">Execute</button>
+          <button class="btn btn-gray" onclick="runStep('audit')">Audit</button>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <button class="btn btn-green" onclick="runStep('report')">PDF Report</button>
+          <button class="btn btn-red" onclick="runStep('init')">Init Portfolio</button>
+        </div>
+      </div>
+
+      <div id="run-status" class="text-xs text-gray-500 hidden">
+        <span id="run-status-text"></span>
+      </div>
+    </div>
+
+    <!-- Terminal log -->
+    <div class="lg:col-span-2 card p-4 flex flex-col gap-2" style="height:480px">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Terminal Output</h2>
+        <button class="text-xs text-gray-500 hover:text-gray-300" onclick="clearLog()">Clear</button>
+      </div>
+      <div id="log" class="terminal flex-1 overflow-y-auto rounded p-3 text-green-400 leading-5"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ PORTFOLIO TAB ═══════════════ -->
+<div id="tab-portfolio" class="hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
+    <div class="card p-4">
+      <div class="text-xs text-gray-500 mb-1">Total Value</div>
+      <div id="pf-total" class="text-2xl font-bold text-blue-400">—</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-gray-500 mb-1">Cash</div>
+      <div id="pf-cash" class="text-2xl font-bold text-green-400">—</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-gray-500 mb-1">Peak Value</div>
+      <div id="pf-peak" class="text-xl font-bold text-gray-300">—</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-gray-500 mb-1">Drawdown</div>
+      <div id="pf-drawdown" class="text-xl font-bold text-red-400">—</div>
+    </div>
+  </div>
+
+  <div class="card p-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Positions</h2>
+    <div id="positions-table" class="overflow-x-auto"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ HISTORY TAB ═══════════════ -->
+<div id="tab-history" class="hidden">
+  <div class="card p-4 mb-4" style="height:320px">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Portfolio Value Over Time</h2>
+    <canvas id="chart-history"></canvas>
+  </div>
+  <div class="card p-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Recent Executions</h2>
+    <div id="executions-table" class="overflow-x-auto"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ TRACES TAB ═══════════════ -->
+<div id="tab-traces" class="hidden">
+  <div class="flex items-center gap-3 mb-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Decision Traces</h2>
+    <input id="trace-cycle-filter" type="text" placeholder="Filter by cycle_id…" class="text-xs w-48" oninput="filterTraces()" />
+    <button class="btn btn-gray text-xs" onclick="loadTraces()">Refresh</button>
+  </div>
+  <div id="traces-list" class="flex flex-col gap-2"></div>
+</div>
+
+<!-- ═══════════════ RUNS TAB ═══════════════ -->
+<div id="tab-runs" class="hidden">
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Agent Cycles</h2>
+      <button class="btn btn-gray text-xs" onclick="loadRuns()">Refresh</button>
+    </div>
+    <div id="runs-table" class="overflow-x-auto"></div>
+  </div>
+</div>
+
+</main>
+
+<script>
+// ── state ──────────────────────────────────────────────────────────────────
+const API = '';
+let historyChart = null;
+let allTraces = [];
+
+// ── tabs ───────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden'));
+  document.getElementById('tab-' + name).classList.remove('hidden');
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+  event.target.classList.add('active');
+  if (name === 'portfolio') loadPortfolio();
+  if (name === 'history') loadHistory();
+  if (name === 'traces') loadTraces();
+  if (name === 'runs') loadRuns();
+}
+
+// ── helpers ────────────────────────────────────────────────────────────────
+const fmt = (n, dec=2) => n == null ? '—' : Number(n).toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec});
+const fmtUSD = n => n == null ? '—' : '$' + fmt(n);
+const fmtPct = n => n == null ? '—' : (Number(n)*100).toFixed(1) + '%';
+
+function badge(text, cls) {
+  return `<span class="badge-${cls} text-xs px-2 py-0.5 rounded-full font-medium">${text}</span>`;
+}
+
+function logLine(html, cls='text-green-400') {
+  const log = document.getElementById('log');
+  const div = document.createElement('div');
+  div.className = cls;
+  div.innerHTML = html;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById('log').innerHTML = '';
+}
+
+// ── run command ────────────────────────────────────────────────────────────
+async function runStep(step) {
+  const btns = document.querySelectorAll('.btn');
+  btns.forEach(b => b.disabled = true);
+
+  const statusEl = document.getElementById('run-status');
+  const statusText = document.getElementById('run-status-text');
+  statusEl.classList.remove('hidden');
+  statusText.textContent = `Running ${step}…`;
+
+  logLine(`<span class="text-blue-400">❯ python main.py ${step}</span>`);
+
+  const body = {
+    strategy: document.getElementById('opt-strategy').value,
+    mode: document.getElementById('opt-mode').value,
+    mcp: document.getElementById('opt-mcp').value,
+    profile: document.getElementById('opt-profile').value || null,
+  };
+
+  try {
+    const resp = await fetch(`${API}/api/run/${step}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const msg = JSON.parse(line.slice(6));
+          if (msg.line !== undefined) {
+            const cls = msg.line.includes('ERROR') || msg.line.includes('error') ? 'text-red-400'
+                      : msg.line.includes('WARNING') ? 'text-yellow-400'
+                      : 'text-green-300';
+            logLine(escapeHtml(msg.line), cls);
+          }
+          if (msg.exit !== undefined) {
+            const ok = msg.exit === 0;
+            logLine(`<span class="${ok ? 'text-blue-400' : 'text-red-400'}">— exit ${msg.exit} —</span>`);
+            statusText.textContent = ok ? `${step} completed` : `${step} failed (exit ${msg.exit})`;
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    logLine(`<span class="text-red-400">Connection error: ${escapeHtml(String(err))}</span>`);
+    statusText.textContent = 'Connection error';
+  }
+
+  btns.forEach(b => b.disabled = false);
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── portfolio ──────────────────────────────────────────────────────────────
+async function loadPortfolio() {
+  const [pf, pos] = await Promise.all([
+    fetch(`${API}/api/portfolio`).then(r=>r.json()),
+    fetch(`${API}/api/positions`).then(r=>r.json()),
+  ]);
+
+  if (pf.error) {
+    document.getElementById('positions-table').innerHTML = `<p class="text-red-400 text-sm">${pf.error}</p>`;
+    return;
+  }
+
+  const prices = {};
+  const positions = pf.positions || {};
+  let total = pf.cash || 0;
+  for (const [t, qty] of Object.entries(positions)) {
+    if (pos.find) {
+      const row = pos.find(p => p.ticker === t);
+      if (row) { prices[t] = row.price; total += qty * row.price; }
+    }
+  }
+
+  document.getElementById('pf-total').textContent = fmtUSD(pf.total_value || total);
+  document.getElementById('pf-cash').textContent = fmtUSD(pf.cash);
+  document.getElementById('pf-peak').textContent = fmtUSD(pf.peak_value);
+  const dd = pf.peak_value ? (((pf.total_value || total) - pf.peak_value) / pf.peak_value) : 0;
+  document.getElementById('pf-drawdown').textContent = fmtPct(dd);
+
+  if (!Array.isArray(pos) || pos.length === 0) {
+    document.getElementById('positions-table').innerHTML = '<p class="text-gray-500 text-sm">No position data in DB yet. Run a cycle first.</p>';
+    return;
+  }
+
+  let html = `<table><thead><tr>
+    <th class="text-left">Ticker</th>
+    <th class="text-right">Qty</th>
+    <th class="text-right">Price</th>
+    <th class="text-right">Value</th>
+    <th class="text-right">Weight</th>
+    <th class="text-right">Target</th>
+    <th class="text-right">Drift</th>
+  </tr></thead><tbody>`;
+  for (const p of pos) {
+    const driftCls = p.drift > 0 ? 'drift-pos' : p.drift < 0 ? 'drift-neg' : '';
+    html += `<tr>
+      <td class="font-mono font-semibold">${p.ticker}</td>
+      <td class="text-right font-mono">${fmt(p.quantity, 4)}</td>
+      <td class="text-right">${fmtUSD(p.price)}</td>
+      <td class="text-right">${fmtUSD(p.value)}</td>
+      <td class="text-right">${fmtPct(p.weight)}</td>
+      <td class="text-right text-gray-400">${fmtPct(p.target_weight)}</td>
+      <td class="text-right ${driftCls}">${p.drift != null ? (p.drift*100>=0?'+':'') + (p.drift*100).toFixed(1)+'%' : '—'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('positions-table').innerHTML = html;
+}
+
+// ── history chart ──────────────────────────────────────────────────────────
+async function loadHistory() {
+  const [snaps, execs] = await Promise.all([
+    fetch(`${API}/api/snapshots?limit=120`).then(r=>r.json()),
+    fetch(`${API}/api/executions?limit=50`).then(r=>r.json()),
+  ]);
+
+  const labels = snaps.map(s => s.timestamp ? s.timestamp.slice(0,16).replace('T',' ') : '');
+  const values = snaps.map(s => s.total_value);
+
+  const ctx = document.getElementById('chart-history');
+  if (historyChart) { historyChart.destroy(); historyChart = null; }
+  if (labels.length === 0) {
+    ctx.parentElement.innerHTML += '<p class="text-gray-500 text-sm mt-2">No snapshot data yet.</p>';
+    return;
+  }
+  historyChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Portfolio Value',
+        data: values,
+        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(88,166,255,0.08)',
+        borderWidth: 2,
+        pointRadius: 3,
+        fill: true,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b949e', maxTicksLimit: 8, font: {size:11} }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#8b949e', callback: v => '$'+Number(v).toLocaleString(), font: {size:11} }, grid: { color: '#21262d' } },
+      }
+    }
+  });
+
+  // Executions table
+  if (!Array.isArray(execs) || execs.length === 0) {
+    document.getElementById('executions-table').innerHTML = '<p class="text-gray-500 text-sm">No executions yet.</p>';
+    return;
+  }
+  let html = `<table><thead><tr>
+    <th class="text-left">Time</th>
+    <th class="text-left">Cycle</th>
+    <th class="text-left">Ticker</th>
+    <th class="text-left">Action</th>
+    <th class="text-right">Qty</th>
+    <th class="text-right">Fill Price</th>
+    <th class="text-right">Cost</th>
+    <th class="text-right">Slippage</th>
+    <th class="text-left">Status</th>
+  </tr></thead><tbody>`;
+  for (const e of execs) {
+    const ok = e.success === 1;
+    html += `<tr>
+      <td class="text-xs text-gray-500">${(e.timestamp||'').slice(0,16)}</td>
+      <td class="font-mono text-xs text-gray-400">${e.cycle_id||''}</td>
+      <td class="font-mono font-semibold">${e.ticker}</td>
+      <td class="${e.action==='buy'?'text-green-400':'text-red-400'} font-semibold uppercase text-xs">${e.action}</td>
+      <td class="text-right font-mono">${fmt(e.quantity,4)}</td>
+      <td class="text-right">${fmtUSD(e.fill_price)}</td>
+      <td class="text-right">${fmtUSD(e.cost)}</td>
+      <td class="text-right text-yellow-400">${fmtUSD(e.slippage)}</td>
+      <td>${ok ? badge('OK','ok') : badge('ERR','err')}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('executions-table').innerHTML = html;
+}
+
+// ── traces ─────────────────────────────────────────────────────────────────
+async function loadTraces() {
+  const data = await fetch(`${API}/api/traces?limit=100`).then(r=>r.json());
+  allTraces = Array.isArray(data) ? data : [];
+  renderTraces(allTraces);
+}
+
+function filterTraces() {
+  const q = document.getElementById('trace-cycle-filter').value.trim().toLowerCase();
+  const filtered = q ? allTraces.filter(t => (t.cycle_id||'').toLowerCase().includes(q)) : allTraces;
+  renderTraces(filtered);
+}
+
+function renderTraces(traces) {
+  const container = document.getElementById('traces-list');
+  if (traces.length === 0) {
+    container.innerHTML = '<p class="text-gray-500 text-sm">No traces found. Run a cycle first.</p>';
+    return;
+  }
+  container.innerHTML = traces.map(t => {
+    let payload = {};
+    try { payload = JSON.parse(t.payload_json); } catch {}
+    const stageCls = `stage-${t.stage}`;
+    const payloadStr = JSON.stringify(payload, null, 2);
+    const id = 'trace-' + t.id;
+    return `
+    <div class="card p-3">
+      <div class="flex items-center gap-3 cursor-pointer" onclick="toggleTrace('${id}')">
+        <span class="stage-badge ${stageCls}">${t.stage}</span>
+        <span class="font-mono text-xs text-blue-300">${t.cycle_id}</span>
+        <span class="text-xs text-gray-500">${(t.created_at||'').slice(0,19)}</span>
+        <span class="text-xs text-gray-500">${t.provider||''} ${t.agent_backend||''}</span>
+        <span class="text-xs text-gray-500">${t.execution_mode||''}</span>
+        ${t.mcp_tools_json && t.mcp_tools_json !== '[]' ? `<span class="badge-info text-xs px-1.5 py-0.5 rounded">MCP</span>` : ''}
+        <span class="ml-auto text-gray-600 text-xs">▼</span>
+      </div>
+      <div id="${id}" class="hidden mt-3">
+        <pre class="terminal text-gray-300 text-xs p-3 rounded overflow-x-auto max-h-64">${escapeHtml(payloadStr)}</pre>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleTrace(id) {
+  const el = document.getElementById(id);
+  el.classList.toggle('hidden');
+}
+
+// ── runs ───────────────────────────────────────────────────────────────────
+async function loadRuns() {
+  const runs = await fetch(`${API}/api/runs?limit=30`).then(r=>r.json());
+  if (!Array.isArray(runs) || runs.length === 0) {
+    document.getElementById('runs-table').innerHTML = '<p class="text-gray-500 text-sm">No cycles recorded yet.</p>';
+    return;
+  }
+  let html = `<table><thead><tr>
+    <th class="text-left">Timestamp</th>
+    <th class="text-left">Cycle</th>
+    <th class="text-left">Strategy</th>
+    <th class="text-left">Signal</th>
+    <th class="text-right">Trades</th>
+    <th class="text-left">Provider</th>
+    <th class="text-right">Tool Calls</th>
+    <th class="text-right">Latency</th>
+    <th class="text-left">Kill Switch</th>
+  </tr></thead><tbody>`;
+  for (const r of runs) {
+    html += `<tr>
+      <td class="text-xs text-gray-500">${(r.timestamp||'').slice(0,19)}</td>
+      <td class="font-mono text-xs text-blue-300 cursor-pointer" onclick="filterAndGoTraces('${r.cycle_id}')">${r.cycle_id}</td>
+      <td class="text-xs">${r.strategy||'—'}</td>
+      <td>${r.signal ? badge('YES','ok') : badge('NO','warn')}</td>
+      <td class="text-right">${r.trades_count}</td>
+      <td class="text-xs text-gray-400">${r.provider||'—'}</td>
+      <td class="text-right text-xs">${r.tool_calls||0}</td>
+      <td class="text-right text-xs text-gray-400">${r.fetch_latency_ms ? fmt(r.fetch_latency_ms,0)+'ms' : '—'}</td>
+      <td>${r.kill_switch ? badge('ACTIVE','err') : badge('OK','ok')}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('runs-table').innerHTML = html;
+}
+
+function filterAndGoTraces(cycleId) {
+  document.getElementById('trace-cycle-filter').value = cycleId;
+  // navigate to traces tab
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden'));
+  document.getElementById('tab-traces').classList.remove('hidden');
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.textContent.trim() === 'Agent Trace');
+  });
+  loadTraces().then(() => filterTraces());
+}
+
+// ── config badges ──────────────────────────────────────────────────────────
+async function loadConfig() {
+  try {
+    const cfg = await fetch(`${API}/api/config`).then(r=>r.json());
+    if (cfg.error) return;
+    const container = document.getElementById('cfg-badges');
+    container.innerHTML = [
+      badge(cfg.ai_provider, 'info'),
+      badge(cfg.agent_backend, 'info'),
+      badge(cfg.execution_mode, cfg.execution_mode==='simulate'?'warn':'err'),
+      badge('MCP: '+(cfg.mcp_profile||'none'), 'info'),
+    ].join('');
+  } catch {}
+}
+
+// ── init ───────────────────────────────────────────────────────────────────
+loadConfig();
+</script>
+</body>
+</html>
