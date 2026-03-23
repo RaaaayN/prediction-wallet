@@ -22,6 +22,13 @@ MARKET_DB: str = settings.market_db
 PORTFOLIO_FILE: str = settings.portfolio_file
 TRADES_LOG: str = settings.trades_log
 REPORTS_DIR: str = settings.reports_dir
+MAX_TRADES_PER_CYCLE: int = settings.max_trades_per_cycle
+MAX_ORDER_FRACTION_OF_PORTFOLIO: float = settings.max_order_fraction_of_portfolio
+MARKET_DATA_TTL_SECONDS: int = settings.market_data_ttl_seconds
+AGENT_BACKEND: str = settings.agent_backend
+EXECUTION_MODE: str = settings.execution_mode
+MCP_PROFILE: str = settings.mcp_profile
+MCP_TIMEOUT_SECONDS: int = settings.mcp_timeout_seconds
 
 BENCHMARK_TICKER: str = settings.benchmark_ticker
 DEFAULT_HISTORY_DAYS: int = 90

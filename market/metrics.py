@@ -61,9 +61,15 @@ class PortfolioMetrics:
         # 30-day volatility (annualized)
         vol_30 = float(returns.tail(30).std() * np.sqrt(252)) if len(returns) >= 30 else float(returns.std() * np.sqrt(252))
 
-        # YTD return
-        start_of_year = close[close.index.year == close.index[-1].year].iloc[0] if not close.empty else close.iloc[0]
-        ytd_return = float((close.iloc[-1] / start_of_year) - 1)
+        # YTD return, with fallback for non-datetime synthetic indexes
+        if not close.empty:
+            try:
+                start_of_year = close[close.index.year == close.index[-1].year].iloc[0]
+            except Exception:
+                start_of_year = close.iloc[0]
+        else:
+            start_of_year = 0.0
+        ytd_return = float((close.iloc[-1] / start_of_year) - 1) if start_of_year else 0.0
 
         # Sharpe
         sharpe = _sharpe(returns, rf=rf)

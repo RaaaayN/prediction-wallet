@@ -1,5 +1,6 @@
 """SQLite schema initialisation for structured persistence."""
 
+import os
 import sqlite3
 
 
@@ -44,23 +45,71 @@ CREATE TABLE IF NOT EXISTS executions (
 );
 
 CREATE TABLE IF NOT EXISTS agent_runs (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    cycle_id     TEXT    NOT NULL,
-    timestamp    TEXT    NOT NULL,
-    strategy     TEXT,
-    signal       INTEGER NOT NULL,
-    analysis     TEXT,
-    trades_count INTEGER NOT NULL,
-    report_path  TEXT,
-    kill_switch  INTEGER NOT NULL
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id        TEXT    NOT NULL,
+    timestamp       TEXT    NOT NULL,
+    strategy        TEXT,
+    signal          INTEGER NOT NULL,
+    analysis        TEXT,
+    trades_count    INTEGER NOT NULL,
+    report_path     TEXT,
+    kill_switch     INTEGER NOT NULL,
+    provider        TEXT,
+    tool_calls      INTEGER DEFAULT 0,
+    fetch_latency_ms REAL DEFAULT 0,
+    errors_json     TEXT
 );
+
+CREATE TABLE IF NOT EXISTS market_data_status (
+    ticker       TEXT PRIMARY KEY,
+    refreshed_at TEXT NOT NULL,
+    success      INTEGER NOT NULL,
+    error        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS decision_traces (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id        TEXT NOT NULL,
+    stage           TEXT NOT NULL,
+    payload_json    TEXT NOT NULL,
+    validation_json TEXT,
+    mcp_tools_json  TEXT,
+    provider        TEXT,
+    agent_backend   TEXT,
+    execution_mode  TEXT,
+    created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_cycle_id ON portfolio_snapshots(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_timestamp ON portfolio_snapshots(timestamp);
+CREATE INDEX IF NOT EXISTS idx_positions_snapshot_id ON positions(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_positions_ticker ON positions(ticker);
+CREATE INDEX IF NOT EXISTS idx_executions_cycle_id ON executions(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_executions_timestamp ON executions(timestamp);
+CREATE INDEX IF NOT EXISTS idx_executions_ticker ON executions(ticker);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_cycle_id ON agent_runs(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_timestamp ON agent_runs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_decision_traces_cycle_id ON decision_traces(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_decision_traces_stage ON decision_traces(stage);
+CREATE INDEX IF NOT EXISTS idx_decision_traces_created_at ON decision_traces(created_at);
 """
 
 
+_AGENT_RUNS_MIGRATIONS = [
+    "ALTER TABLE agent_runs ADD COLUMN provider TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN tool_calls INTEGER DEFAULT 0",
+    "ALTER TABLE agent_runs ADD COLUMN fetch_latency_ms REAL DEFAULT 0",
+    "ALTER TABLE agent_runs ADD COLUMN errors_json TEXT",
+]
+
+
 def init_db(db_path: str) -> None:
-    """Create all tables in *db_path* if they do not already exist."""
-    import os
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(DDL)
+        for stmt in _AGENT_RUNS_MIGRATIONS:
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
         conn.commit()

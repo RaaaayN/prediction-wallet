@@ -1,207 +1,162 @@
-"""CLI entry point for the autonomous portfolio rebalancing agent."""
+"""CLI entry point for the governed portfolio agent."""
+
+from __future__ import annotations
 
 import argparse
 import json
 import os
 import sys
-import uuid
-from datetime import datetime, timedelta
+
+from agents.portfolio_agent import PortfolioAgentService
+from config import AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE, MCP_PROFILE
 
 
 def check_api_key():
-    from config import AI_PROVIDER, GEMINI_API_KEY, ANTHROPIC_API_KEY
-    if AI_PROVIDER == "gemini":
-        if not GEMINI_API_KEY or GEMINI_API_KEY.startswith("AIza..."):
-            print("ERROR: GEMINI_API_KEY not set. Ajoutez-la dans votre fichier .env.")
-            sys.exit(1)
-    else:
-        if not ANTHROPIC_API_KEY or ANTHROPIC_API_KEY.startswith("sk-ant-..."):
-            print("ERROR: ANTHROPIC_API_KEY not set. Copy .env.example to .env and add your key.")
-            sys.exit(1)
+    from config import ANTHROPIC_API_KEY, GEMINI_API_KEY
+
+    if AI_PROVIDER == "gemini" and not GEMINI_API_KEY:
+        print("ERROR: GEMINI_API_KEY not set.")
+        sys.exit(1)
+    if AI_PROVIDER == "anthropic" and not ANTHROPIC_API_KEY:
+        print("ERROR: ANTHROPIC_API_KEY not set.")
+        sys.exit(1)
 
 
-def run_agent_cycle(strategy: str = "threshold") -> dict:
-    """Run a single agent cycle and return the final state."""
-    from agent.graph import graph
-
-    initial_state = {
-        "portfolio": {},
-        "market_data": {},
-        "strategy_signal": False,
-        "analysis": "",
-        "trades_pending": [],
-        "trades_executed": [],
-        "report_path": None,
-        "kill_switch_active": False,
-        "cycle_id": str(uuid.uuid4())[:8],
-        "messages": [],
-        "strategy_name": strategy,
-        "errors": [],
-    }
-
-    print(f"\n{'='*60}")
-    print(f"  Prediction Wallet — Rebalancing Agent")
-    print(f"  Strategy: {strategy} | Cycle: {initial_state['cycle_id']}")
-    print(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
-    print(f"{'='*60}\n")
-
-    final_state = graph.invoke(initial_state)
-
-    print(f"\n{'='*60}")
-    print(f"  Cycle complete.")
-    print(f"  Trades executed: {len(final_state.get('trades_executed', []))}")
-    print(f"  Kill switch: {final_state.get('kill_switch_active')}")
-    if final_state.get("report_path"):
-        print(f"  Report: {final_state['report_path']}")
-    print(f"{'='*60}\n")
-
-    return final_state
-
-
-def run_simulation(days: int, strategy: str = "threshold"):
-    """Fast-forward N days of rebalancing by running one cycle per day."""
-    print(f"\nSimulating {days} days of rebalancing ({strategy} strategy)...")
-    results = []
-    for day in range(days):
-        print(f"\n--- Day {day + 1}/{days} ---")
-        state = run_agent_cycle(strategy)
-        results.append({
-            "day": day + 1,
-            "trades": len(state.get("trades_executed", [])),
-            "kill_switch": state.get("kill_switch_active"),
-        })
-
-    print(f"\nSimulation complete: {sum(r['trades'] for r in results)} total trades over {days} days.")
-    return results
+def print_json(payload) -> None:
+    if hasattr(payload, "model_dump"):
+        payload = payload.model_dump()
+    print(json.dumps(payload, indent=2, default=str))
 
 
 def init_portfolio():
-    """Deploy initial capital across all tickers according to TARGET_ALLOCATION."""
-    from market.fetcher import MarketDataService
+    from config import INITIAL_CAPITAL, PORTFOLIO_FILE, TARGET_ALLOCATION
     from execution.simulator import TradeSimulator
+    from market.fetcher import MarketDataService
+    from utils.time import utc_now_iso
 
     sim = TradeSimulator()
     fetcher = MarketDataService()
-
     portfolio = sim.load_portfolio()
+
     if portfolio.get("positions"):
-        print("Portfolio already has positions:")
-        for t, q in portfolio["positions"].items():
-            print(f"  {t}: {q:.4f}")
-        answer = input("\nReset and reinitialise? [y/N] ").strip().lower()
+        answer = input("Portfolio already has positions. Reset and reinitialize? [y/N] ").strip().lower()
         if answer != "y":
             print("Cancelled.")
             return
 
-    # Reset to clean slate
-    import os, json
-    from config import INITIAL_CAPITAL, PORTFOLIO_FILE
     clean = {
         "positions": {},
         "cash": INITIAL_CAPITAL,
         "peak_value": INITIAL_CAPITAL,
         "last_rebalanced": None,
         "history": [],
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": utc_now_iso(),
     }
     os.makedirs(os.path.dirname(PORTFOLIO_FILE), exist_ok=True)
-    with open(PORTFOLIO_FILE, "w") as f:
+    with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
         json.dump(clean, f, indent=2)
 
-    from config import TARGET_ALLOCATION
-    print(f"\nFetching live prices for {len(TARGET_ALLOCATION)} tickers...")
     prices = fetcher.get_latest_prices(list(TARGET_ALLOCATION.keys()))
-
-    print(f"\nDeploying ${INITIAL_CAPITAL:,.0f} across target allocation:\n")
-    print(f"  {'Ticker':<10} {'Target':>8} {'Price':>10} {'Qty':>10} {'Value':>10}")
-    print(f"  {'-'*50}")
-
-    total_deployed = 0.0
     for ticker, weight in TARGET_ALLOCATION.items():
         price = prices.get(ticker, 0)
         if price <= 0:
-            print(f"  {ticker:<10}  ⚠ no price available, skipped")
             continue
+        quantity = (INITIAL_CAPITAL * weight) / price
+        sim.execute("buy", ticker, quantity, price, reason="Initial portfolio deployment")
+    print("Portfolio initialized.")
 
-        dollar_amount = INITIAL_CAPITAL * weight
-        qty = dollar_amount / price
 
-        result = sim.execute("buy", ticker, qty, price, reason="Initial portfolio deployment")
-        if result.success:
-            total_deployed += abs(result.cost)
-            print(f"  {ticker:<10} {weight:>7.1%} ${price:>9.2f} {result.quantity:>10.4f} ${abs(result.cost):>9,.0f}")
-        else:
-            print(f"  {ticker:<10}  ✗ {result.error}")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Governed multi-asset portfolio agent")
+    parser.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy"], default=None)
+    parser.add_argument("--strategy", choices=["threshold", "calendar"], default="threshold")
+    parser.add_argument("--mode", choices=["simulate", "paper", "live"], default=EXECUTION_MODE)
+    parser.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
+    parser.add_argument("--use-mcp", default=MCP_PROFILE, help="MCP profile to use (none, local)")
+    parser.add_argument("--simulate-days", type=int, default=0, metavar="N")
 
-    portfolio = sim.load_portfolio()
-    sim.update_peak(portfolio["cash"] + total_deployed)
-
-    print(f"\n  Cash remaining: ${portfolio['cash']:,.2f}")
-    print(f"  Total deployed: ${total_deployed:,.2f}")
-    print(f"\nPortfolio initialised. Run 'python main.py' to start the agent.\n")
+    subparsers = parser.add_subparsers(dest="command")
+    for name in ["observe", "decide", "execute", "audit", "run-cycle"]:
+        sub = subparsers.add_parser(name)
+        sub.add_argument("--strategy", choices=["threshold", "calendar"], default="threshold")
+        sub.add_argument("--mode", choices=["simulate", "paper", "live"], default=EXECUTION_MODE)
+        sub.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
+        sub.add_argument("--use-mcp", default=MCP_PROFILE, help="MCP profile to use (none, local)")
+        sub.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy"], default=None)
+    subparsers.add_parser("report")
+    subparsers.add_parser("init")
+    return parser
 
 
 def generate_report_only():
-    """Generate a PDF report from the current portfolio state without running the agent."""
-    from agent.tools import generate_report
+    from services.execution_service import ExecutionService
+    from services.market_service import MarketService
+    from services.reporting_service import ReportingService
+    import uuid
+
     cycle_id = str(uuid.uuid4())[:8]
-    path = generate_report(cycle_id)
-    print(f"Report generated: {path}")
-    return path
+    path = ReportingService(
+        market_service=MarketService(),
+        execution_service=ExecutionService(),
+    ).generate_cycle_report(cycle_id)
+    print(path)
+
+
+def run_days(service: PortfolioAgentService, days: int, strategy: str, mode: str, mcp_profile: str):
+    audits = []
+    for _ in range(days):
+        audits.append(service.run_cycle(strategy_name=strategy, execution_mode=mode, mcp_profile=mcp_profile))
+    print_json([audit.model_dump() for audit in audits])
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Autonomous Portfolio Rebalancing Agent"
-    )
-    parser.add_argument(
-        "--strategy",
-        choices=["threshold", "calendar"],
-        default="threshold",
-        help="Rebalancing strategy to use (default: threshold)",
-    )
-    parser.add_argument(
-        "--profile",
-        choices=["balanced", "conservative", "growth", "crypto_heavy"],
-        default=None,
-        help="Portfolio allocation profile (default: balanced or PORTFOLIO_PROFILE env var)",
-    )
-    parser.add_argument(
-        "--simulate-days",
-        type=int,
-        default=0,
-        metavar="N",
-        help="Fast-forward N days of rebalancing cycles",
-    )
-    parser.add_argument(
-        "--report",
-        action="store_true",
-        help="Generate PDF report without running the agent",
-    )
-    parser.add_argument(
-        "--init",
-        action="store_true",
-        help="Deploy initial capital across target allocation and exit",
-    )
+    parser = build_parser()
     args = parser.parse_args()
 
-    # Set profile env var before any config imports so the correct profile loads
     if args.profile:
         os.environ["PORTFOLIO_PROFILE"] = args.profile
-        print(f"Using profile: {args.profile}")
 
-    if args.init:
+    command = args.command or "run-cycle"
+
+    if command == "init":
         init_portfolio()
+        return
+    if command == "report":
+        generate_report_only()
+        return
+
+    service = PortfolioAgentService()
+
+    if args.simulate_days > 0:
+        check_api_key()
+        run_days(service, args.simulate_days, args.strategy, args.mode, args.use_mcp)
+        return
+
+    observation = service.observe(strategy_name=args.strategy, execution_mode=args.mode, mcp_profile=args.use_mcp)
+    if command == "observe":
+        print_json(observation)
         return
 
     check_api_key()
+    decision, stats = service.decide(observation, execution_mode=args.mode, mcp_profile=args.use_mcp)
+    if command == "decide":
+        print_json({"observation": observation.model_dump(), "decision": decision.model_dump(), "observability": stats})
+        return
 
-    if args.report:
-        generate_report_only()
-    elif args.simulate_days > 0:
-        run_simulation(args.simulate_days, args.strategy)
-    else:
-        run_agent_cycle(args.strategy)
+    policy, executions = service.execute(observation, decision, execution_mode=args.mode)
+    if command == "execute":
+        print_json(
+            {
+                "observation": observation.model_dump(),
+                "decision": decision.model_dump(),
+                "policy": policy.model_dump(),
+                "executions": [e.model_dump() for e in executions],
+            }
+        )
+        return
+
+    audit = service.audit(observation, decision, policy, executions, execution_mode=args.mode, mcp_profile=args.use_mcp)
+    print_json(audit)
 
 
 if __name__ == "__main__":

@@ -17,3 +17,5 @@ class AgentState(TypedDict):
     messages: Annotated[list, operator.add]  # LangGraph message accumulator
     strategy_name: str                   # "threshold" or "calendar"
     errors: list                         # non-fatal errors collected during cycle
+    trade_plan: list                     # deterministic trades proposed before LLM
+    observability: dict                  # cycle metrics/errors for dashboard and audit

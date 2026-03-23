@@ -1,10 +1,12 @@
 """Tests for rebalancing strategies."""
 
+from datetime import timedelta
+
 import pytest
-from datetime import datetime, timedelta
 
 from strategies.threshold import ThresholdStrategy
 from strategies.calendar import CalendarStrategy
+from utils.time import utc_now
 
 
 TARGET = {"AAPL": 0.5, "MSFT": 0.5}
@@ -73,18 +75,18 @@ class TestCalendarStrategy:
         assert self.strategy.should_rebalance(portfolio, PRICES) is True
 
     def test_no_rebalance_if_recent(self):
-        recent = datetime.utcnow().isoformat()
+        recent = utc_now().isoformat()
         portfolio = _make_portfolio(last_rebalanced=recent)
         assert self.strategy.should_rebalance(portfolio, PRICES) is False
 
     def test_rebalance_after_one_week(self):
-        old = (datetime.utcnow() - timedelta(weeks=2)).isoformat()
+        old = (utc_now() - timedelta(weeks=2)).isoformat()
         portfolio = _make_portfolio(last_rebalanced=old)
         assert self.strategy.should_rebalance(portfolio, PRICES) is True
 
     def test_monthly_not_triggered_after_two_weeks(self):
         monthly = CalendarStrategy(frequency="monthly", target_allocation=TARGET)
-        two_weeks_ago = (datetime.utcnow() - timedelta(days=14)).isoformat()
+        two_weeks_ago = (utc_now() - timedelta(days=14)).isoformat()
         portfolio = _make_portfolio(last_rebalanced=two_weeks_ago)
         assert monthly.should_rebalance(portfolio, PRICES) is False
 

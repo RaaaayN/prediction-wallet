@@ -1,14 +1,11 @@
-"""Market data fetching and storage — adapted from src/data_collection.py."""
+"""Backward-compatible wrapper around the market service."""
 
-import sqlite3
-import time
-import os
-from datetime import datetime, timedelta
+from __future__ import annotations
 
 import pandas as pd
-import yfinance as yf
 
-from config import MARKET_DB, DATA_DIR, BENCHMARK_TICKER
+from config import MARKET_DB, MARKET_DATA_TTL_SECONDS
+from services.market_service import MarketService
 
 
 def add_technical_indicators(data: pd.DataFrame) -> pd.DataFrame:
@@ -17,7 +14,6 @@ def add_technical_indicators(data: pd.DataFrame) -> pd.DataFrame:
         data.columns = data.columns.get_level_values(0)
 
     close = data["Close"]
-
     data["SMA20"] = close.rolling(window=20).mean()
     data["EMA20"] = close.ewm(span=20, adjust=False).mean()
 
@@ -37,102 +33,11 @@ def add_technical_indicators(data: pd.DataFrame) -> pd.DataFrame:
     ema26 = close.ewm(span=26, adjust=False).mean()
     data["MACD"] = ema12 - ema26
     data["MACD_Signal"] = data["MACD"].ewm(span=9, adjust=False).mean()
-
     return data
 
 
-class MarketDataService:
-    """Fetches market data via yfinance and stores it in SQLite."""
+class MarketDataService(MarketService):
+    """Compatibility alias for the new market service."""
 
     def __init__(self, db_path: str = MARKET_DB):
-        self.db_path = db_path
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def fetch_and_store(self, tickers: list[str], period: str = "1y") -> dict[str, pd.DataFrame]:
-        """Download price data for all tickers and persist to SQLite."""
-        results = {}
-        for ticker in tickers:
-            try:
-                df = self._download(ticker, period)
-                if df.empty:
-                    print(f"[fetcher] No data for {ticker}, skipping.")
-                    continue
-                df = add_technical_indicators(df)
-                self._save_to_db(df, ticker)
-                results[ticker] = df
-                time.sleep(0.3)
-            except Exception as exc:
-                print(f"[fetcher] Error fetching {ticker}: {exc}")
-        return results
-
-    def get_latest_prices(self, tickers: list[str]) -> dict[str, float]:
-        """Return the most recent closing price for each ticker."""
-        prices = {}
-        for ticker in tickers:
-            try:
-                df = self._load_from_db(ticker)
-                if df is not None and not df.empty:
-                    prices[ticker] = float(df["Close"].iloc[-1])
-                else:
-                    # Fallback: live fetch
-                    live = yf.Ticker(ticker).fast_info
-                    prices[ticker] = float(live.get("lastPrice", live.get("regularMarketPrice", 0)))
-            except Exception as exc:
-                print(f"[fetcher] Could not get price for {ticker}: {exc}")
-                prices[ticker] = 0.0
-        return prices
-
-    def get_historical(self, ticker: str, days: int = 90) -> pd.DataFrame:
-        """Return a DataFrame with OHLCV + indicators for the last `days` rows."""
-        df = self._load_from_db(ticker)
-        if df is None or df.empty:
-            return pd.DataFrame()
-        return df.tail(days)
-
-    def get_benchmark(self, period: str = "1y") -> pd.DataFrame:
-        """Fetch S&P500 benchmark data."""
-        df = self._download(BENCHMARK_TICKER, period)
-        if not df.empty and isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df
-
-    def refresh_prices(self, tickers: list[str]) -> dict[str, float]:
-        """Live-fetch latest prices without storing (for real-time use)."""
-        prices = {}
-        for ticker in tickers:
-            try:
-                info = yf.Ticker(ticker).fast_info
-                price = info.get("lastPrice") or info.get("regularMarketPrice")
-                if price:
-                    prices[ticker] = float(price)
-            except Exception:
-                pass
-        return prices
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _download(self, ticker: str, period: str) -> pd.DataFrame:
-        df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=True)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df
-
-    def _save_to_db(self, df: pd.DataFrame, ticker: str) -> None:
-        conn = sqlite3.connect(self.db_path)
-        df.to_sql(ticker, conn, if_exists="replace", index=True)
-        conn.close()
-
-    def _load_from_db(self, ticker: str) -> pd.DataFrame | None:
-        try:
-            conn = sqlite3.connect(self.db_path)
-            df = pd.read_sql(f'SELECT * FROM "{ticker}"', conn, index_col="Date", parse_dates=["Date"])
-            conn.close()
-            return df
-        except Exception:
-            return None
+        super().__init__(db_path=db_path, min_refresh_interval_seconds=MARKET_DATA_TTL_SECONDS)
