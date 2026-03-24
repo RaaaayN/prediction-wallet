@@ -27,7 +27,7 @@ class ToolCapabilityRegistry:
         self._profiles = {
             "local": MCPProfile(
                 name="local",
-                description="Local MCP market and research tools",
+                description="Local MCP market data tools",
                 command=sys.executable,
                 args=("-m", server_module),
             )

@@ -20,11 +20,9 @@ agents/
   deps.py              — AgentDependencies (injection de dépendances)
 
 services/
-  agent_runtime.py     — AgentCycleService (couche LangGraph, maintenue en compat)
   execution_service.py — ExecutionService (portefeuille + ordres)
   market_service.py    — MarketService (yfinance → SQLite)
   reporting_service.py — ReportingService (PDF)
-  research_service.py  — LocalResearchGateway
   gateways.py          — interfaces communes
 
 integrations/mcp/
@@ -70,8 +68,7 @@ pytest tests/ -v
 
 ## Important behavior
 
-- l'agent principal est **Pydantic AI** (`PortfolioAgentService`), pas LangGraph
-- LangGraph (`AgentCycleService`) reste maintenu pour compatibilité mais n'est plus le chemin critique
+- l'agent principal est **Pydantic AI** (`PortfolioAgentService`) — seul chemin critique
 - seule une décision structurée (`TradeDecision`) peut être exécutée
 - chaque étape observe/decide/validate/execute/audit est tracée dans `decision_traces`
 - le kill switch (drawdown > 10%) est déterministe et bloque toute exécution

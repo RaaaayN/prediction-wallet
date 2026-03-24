@@ -38,7 +38,6 @@ class MarketSnapshot(BaseModel):
     prices: dict[str, float]
     metrics: dict[str, TickerMetrics] = Field(default_factory=dict)
     refresh_status: list[MarketDataStatus] = Field(default_factory=list)
-    research_summary: str = ""
 
 
 class RiskStatus(BaseModel):
