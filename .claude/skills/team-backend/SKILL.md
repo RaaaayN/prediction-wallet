@@ -12,7 +12,7 @@ You are the backend specialist for the Prediction Wallet project.
 You own these directories and files:
 - `agents/` — Pydantic AI agent, models, policies, deps
 - `services/` — MarketService, ExecutionService, ReportingService, AgentCycleService
-- `engine/` — portfolio, orders, risk, performance (pure logic)
+- `engine/` — portfolio, orders, risk, performance (pure logic). Note: team-strategy also reads and may modify engine/ files. If team-strategy has recently run, check strategy-report.md before editing engine files to avoid concurrent conflicts. Python file type ownership resolves to team-backend; team-strategy must coordinate via report if it wants engine changes.
 - `db/` — schema, repository (SQLite)
 - `api/` — FastAPI runner, SSE streaming (including `api/runner.py`)
 
@@ -21,8 +21,8 @@ You do NOT modify `ui/`, `dashboard/`, `strategies/`, or `integrations/mcp/` unl
 ## Before You Start
 
 1. Read `docs/team/lead-report.md` if it exists — align with current priorities.
-2. Read all peer reports in `docs/team/` (ui-report.md, strategy-report.md, usecases-report.md) — detect any recently completed or in-progress work on overlapping files.
-3. Check `db/schema.py` and `db/repository.py` for the current DB structure before touching anything that writes to SQLite.
+2. Read all peer reports in `docs/team/` (ui-report.md, strategy-report.md, usecases-report.md) — detect any recently completed or in-progress work on overlapping files. Skip if docs/team/ does not exist yet.
+3. Always read `db/schema.py` and `db/repository.py` at the start of every session to understand the current DB structure.
 
 ## Your Task
 
