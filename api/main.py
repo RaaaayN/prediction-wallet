@@ -36,7 +36,10 @@ def _db_path() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path())
+    from db.schema import init_db
+    path = _db_path()
+    init_db(path)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -139,18 +142,26 @@ async def get_market_status():
     return _rows("SELECT * FROM market_data_status ORDER BY ticker ASC")
 
 
+@app.get("/api/backtest")
+async def get_backtest(days: int = Query(90, ge=10, le=365)):
+    from engine.backtest import run_strategy_comparison
+    results = run_strategy_comparison(days=days)
+    if results is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Insufficient market data for backtest.")
+    return results
+
+
 @app.get("/api/config")
 async def get_config():
     try:
         from config import (
-            AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE,
-            MCP_PROFILE, TARGET_ALLOCATION,
+            AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE, TARGET_ALLOCATION,
         )
         return {
             "ai_provider": AI_PROVIDER,
             "agent_backend": AGENT_BACKEND,
             "execution_mode": EXECUTION_MODE,
-            "mcp_profile": MCP_PROFILE,
             "target_allocation": TARGET_ALLOCATION,
         }
     except Exception as exc:
@@ -162,7 +173,6 @@ async def get_config():
 class RunRequest(BaseModel):
     strategy: str = "threshold"
     mode: str = "simulate"
-    mcp: str = "none"
     profile: str | None = None
 
 
@@ -178,7 +188,7 @@ async def run_step(step: str, req: RunRequest = RunRequest()):
     if step in ("report", "init"):
         args = ["main.py", step]
     else:
-        args = build_cycle_args(step, req.strategy, req.mode, req.mcp, req.profile)
+        args = build_cycle_args(step, req.strategy, req.mode, req.profile)
 
     return StreamingResponse(
         stream_command(args),

@@ -31,10 +31,8 @@ from execution.kill_switch import KillSwitch
 from services.execution_service import ExecutionService
 from services.market_service import MarketService
 from services.reporting_service import ReportingService
-from services.research_service import LocalResearchGateway
 from strategies.calendar import CalendarStrategy
 from strategies.threshold import ThresholdStrategy
-from integrations.mcp.registry import ToolCapabilityRegistry
 from utils.time import utc_now_iso, utc_today_str
 
 
@@ -58,8 +56,7 @@ def build_portfolio_agent(model=None) -> Agent[AgentDependencies, TradeDecision]
         name="portfolio-agent",
         instructions=(
             "You are a governed portfolio agent. Review the current portfolio, market context, risk status, "
-            "and the deterministic trade plan. Approve only trades from that plan. Use MCP tools when available "
-            "for market and research context. Return a structured TradeDecision."
+            "and the deterministic trade plan. Approve only trades from that plan. Return a structured TradeDecision."
         ),
         defer_model_check=True,
     )
@@ -82,8 +79,7 @@ def build_portfolio_agent(model=None) -> Agent[AgentDependencies, TradeDecision]
 
                 metrics[ticker] = TickerMetrics(**PortfolioMetrics().ticker_metrics(df))
         refresh = [MarketDataStatus(**item) for item in ctx.deps.market_gateway.get_refresh_status()]
-        research = ctx.deps.research_gateway.summarize(tickers, {"metrics": {k: v.model_dump() for k, v in metrics.items()}})
-        return MarketSnapshot(prices=prices, metrics=metrics, refresh_status=refresh, research_summary=research)
+        return MarketSnapshot(prices=prices, metrics=metrics, refresh_status=refresh)
 
     @agent.tool
     def get_trade_plan(ctx: RunContext[AgentDependencies]) -> list[TradeProposal]:
@@ -100,7 +96,7 @@ def build_portfolio_agent(model=None) -> Agent[AgentDependencies, TradeDecision]
             drawdown=drawdown,
             kill_switch_active=KillSwitch().check_with_prices(portfolio, prices),
             execution_mode=ctx.deps.execution_mode,
-            mcp_required=ctx.deps.mcp_profile != "none",
+            mcp_required=False,
         )
         return risk
 
@@ -127,8 +123,6 @@ class PortfolioAgentService:
         market_gateway: MarketService | None = None,
         execution_service: ExecutionService | None = None,
         reporting_service: ReportingService | None = None,
-        research_gateway: LocalResearchGateway | None = None,
-        capability_registry: ToolCapabilityRegistry | None = None,
         agent=None,
     ):
         self.market_gateway = market_gateway or MarketService()
@@ -137,9 +131,7 @@ class PortfolioAgentService:
             market_service=self.market_gateway,
             execution_service=self.execution_service,
         )
-        self.research_gateway = research_gateway or LocalResearchGateway()
         self.audit_repository = AuditRepositoryAdapter()
-        self.capability_registry = capability_registry or ToolCapabilityRegistry()
         self.policy_engine = ExecutionPolicyEngine()
         self.agent = agent
 
@@ -148,7 +140,7 @@ class PortfolioAgentService:
             return CalendarStrategy()
         return ThresholdStrategy()
 
-    def observe(self, strategy_name: str = "threshold", execution_mode: str = "simulate", mcp_profile: str = "none", cycle_id: str | None = None) -> CycleObservation:
+    def observe(self, strategy_name: str = "threshold", execution_mode: str = "simulate", cycle_id: str | None = None) -> CycleObservation:
         cycle_id = cycle_id or str(uuid.uuid4())[:8]
         tickers = list(TARGET_ALLOCATION.keys())
         started = perf_counter()
@@ -175,10 +167,9 @@ class PortfolioAgentService:
             prices=prices,
             metrics=metrics,
             refresh_status=[MarketDataStatus(**item) for item in self.market_gateway.get_refresh_status()],
-            research_summary=self.research_gateway.summarize(tickers, {"metrics": {k: v.model_dump() for k, v in metrics.items()}}),
         )
-        risk = build_risk_status(drawdown=drawdown, kill_switch_active=kill_switch, execution_mode=execution_mode, mcp_required=mcp_profile != "none")
-        return CycleObservation(
+        risk = build_risk_status(drawdown=drawdown, kill_switch_active=kill_switch, execution_mode=execution_mode, mcp_required=False)
+        observation = CycleObservation(
             cycle_id=cycle_id,
             strategy_name=strategy_name,
             portfolio=portfolio,
@@ -189,26 +180,31 @@ class PortfolioAgentService:
                 "provider": AI_PROVIDER,
                 "agent_backend": AGENT_BACKEND,
                 "fetch_latency_ms": fetch_latency_ms,
-                "mcp_profile": mcp_profile,
                 "strategy_signal": strategy_signal,
             },
         )
+        self.audit_repository.save_decision_trace({
+            "cycle_id": cycle_id,
+            "stage": "observe",
+            "payload_json": observation.model_dump_json(),
+            "mcp_tools_json": json.dumps([]),
+            "provider": AI_PROVIDER,
+            "agent_backend": AGENT_BACKEND,
+            "execution_mode": execution_mode,
+        })
+        return observation
 
-    def decide(self, observation: CycleObservation, execution_mode: str = "simulate", mcp_profile: str = "none", model_override=None):
+    def decide(self, observation: CycleObservation, execution_mode: str = "simulate", model_override=None):
         deps = AgentDependencies(
             market_gateway=self.market_gateway,
             portfolio_repository=self.execution_service,
             execution_gateway=self.execution_service,
-            research_gateway=self.research_gateway,
             audit_repository=self.audit_repository,
             strategy_name=observation.strategy_name,
             execution_mode=execution_mode,
-            mcp_profile=mcp_profile,
-            capability_registry=self.capability_registry,
             active_trade_plan=[trade.model_dump() for trade in observation.trade_plan],
             cycle_id=observation.cycle_id,
         )
-        toolsets = self.capability_registry.build_toolsets(mcp_profile)
         agent = self.agent or build_portfolio_agent(model=model_override or build_agent_model())
         prompt = (
             f"Date: {utc_today_str()}\n"
@@ -218,7 +214,7 @@ class PortfolioAgentService:
             "Review the portfolio, risk status, and deterministic trade plan. "
             "Approve only safe trades from the plan and reject the others with reasons."
         )
-        result = agent.run_sync(prompt, deps=deps, model=model_override, toolsets=toolsets)
+        result = agent.run_sync(prompt, deps=deps, model=model_override)
         decision = result.output
         tool_names = self._extract_tool_names(result.all_messages_json())
         trace = {
@@ -273,7 +269,7 @@ class PortfolioAgentService:
         self.audit_repository.save_decision_trace(execution_trace)
         return policy, executions
 
-    def audit(self, observation: CycleObservation, decision: TradeDecision, policy, executions: list[ExecutionResult], execution_mode: str = "simulate", mcp_profile: str = "none") -> CycleAudit:
+    def audit(self, observation: CycleObservation, decision: TradeDecision, policy, executions: list[ExecutionResult], execution_mode: str = "simulate") -> CycleAudit:
         report_path = self.reporting_service.generate_cycle_report(observation.cycle_id)
         self.execution_service.update_peak(self.execution_service.get_portfolio_value(observation.market.prices))
         audit = CycleAudit(
@@ -282,7 +278,6 @@ class PortfolioAgentService:
             strategy_name=observation.strategy_name,
             agent_backend=AGENT_BACKEND,
             execution_mode=execution_mode,
-            mcp_profile=mcp_profile,
             portfolio=PortfolioSnapshot(**self.execution_service.portfolio_snapshot(observation.market.prices)),
             market=observation.market,
             risk=observation.risk,
@@ -308,15 +303,15 @@ class PortfolioAgentService:
         )
         return audit
 
-    def run_cycle(self, strategy_name: str = "threshold", execution_mode: str = "simulate", mcp_profile: str = "none", model_override=None) -> CycleAudit:
-        observation = self.observe(strategy_name=strategy_name, execution_mode=execution_mode, mcp_profile=mcp_profile)
-        decision, stats = self.decide(observation, execution_mode=execution_mode, mcp_profile=mcp_profile, model_override=model_override)
+    def run_cycle(self, strategy_name: str = "threshold", execution_mode: str = "simulate", model_override=None) -> CycleAudit:
+        observation = self.observe(strategy_name=strategy_name, execution_mode=execution_mode)
+        decision, stats = self.decide(observation, execution_mode=execution_mode, model_override=model_override)
         observation.observability.update(stats)
         policy, executions = self.execute(observation, decision, execution_mode=execution_mode)
-        return self.audit(observation, decision, policy, executions, execution_mode=execution_mode, mcp_profile=mcp_profile)
+        return self.audit(observation, decision, policy, executions, execution_mode=execution_mode)
 
-    def run_cycle_dict(self, strategy_name: str = "threshold", execution_mode: str = "simulate", mcp_profile: str = "none", model_override=None) -> dict:
-        audit = self.run_cycle(strategy_name=strategy_name, execution_mode=execution_mode, mcp_profile=mcp_profile, model_override=model_override)
+    def run_cycle_dict(self, strategy_name: str = "threshold", execution_mode: str = "simulate", model_override=None) -> dict:
+        audit = self.run_cycle(strategy_name=strategy_name, execution_mode=execution_mode, model_override=model_override)
         return {
             "cycle_id": audit.cycle_id,
             "strategy_name": audit.strategy_name,

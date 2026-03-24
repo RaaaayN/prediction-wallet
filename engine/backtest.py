@@ -1,4 +1,4 @@
-"""Reusable deterministic strategy comparison logic for the dashboard."""
+"""Deterministic strategy comparison backtest logic."""
 
 from __future__ import annotations
 

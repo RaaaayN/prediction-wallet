@@ -109,7 +109,6 @@ class CycleAudit(BaseModel):
     strategy_name: str
     agent_backend: str
     execution_mode: str
-    mcp_profile: str
     portfolio: PortfolioSnapshot
     market: MarketSnapshot
     risk: RiskStatus

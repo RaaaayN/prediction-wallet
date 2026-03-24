@@ -35,7 +35,7 @@ def test_save_and_get_decision_trace():
 
 def test_cli_observe_runs_without_model_key():
     result = subprocess.run(
-        [sys.executable, "main.py", "observe", "--use-mcp", "none"],
+        [sys.executable, "main.py", "observe"],
         capture_output=True,
         text=True,
         cwd="C:\\Users\\rayan\\OneDrive\\Documents\\GitHub\\prediction-wallet-1",

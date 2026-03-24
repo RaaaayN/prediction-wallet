@@ -7,10 +7,8 @@ from pydantic_ai.models.test import TestModel
 
 from agents.models import TradeDecision
 from agents.portfolio_agent import PortfolioAgentService
-from integrations.mcp.registry import ToolCapabilityRegistry
 from services.execution_service import ExecutionService
 from services.market_service import MarketService
-from services.research_service import LocalResearchGateway
 from execution.persistence import PortfolioStore, TradeLogStore
 
 
@@ -44,8 +42,6 @@ def build_service() -> PortfolioAgentService:
     return PortfolioAgentService(
         market_gateway=FakeMarketGateway(),
         execution_service=execution_service,
-        research_gateway=LocalResearchGateway(),
-        capability_registry=ToolCapabilityRegistry(),
     )
 
 
@@ -96,9 +92,3 @@ def test_policy_blocks_trade_outside_plan():
     assert policy.approved is False
     assert executions == []
     assert policy.blocked_trades[0].ticker == "TSLA"
-
-
-def test_local_mcp_profile_is_registered():
-    registry = ToolCapabilityRegistry()
-    profiles = registry.available_profiles()
-    assert any(profile["name"] == "local" for profile in profiles)
