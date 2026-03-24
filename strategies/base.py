@@ -42,9 +42,13 @@ class BaseStrategy(ABC):
         weights = {ticker: mv / total for ticker, mv in market_values.items()}
         return weights
 
-    def _compute_trade_orders(self, portfolio: dict, prices: dict) -> list[dict]:
+    def _compute_trade_orders(self, portfolio: dict, prices: dict, min_drift: float = 0.0) -> list[dict]:
         """
         Compute buy/sell orders needed to go from current weights to target weights.
+
+        Args:
+            min_drift: skip assets whose |current_weight - target_weight| <= min_drift (tolerance band)
+
         Returns: list of {"action", "ticker", "quantity", "reason"}
         """
-        return _generate_orders(portfolio, prices, self.target, min_qty=0.001)
+        return _generate_orders(portfolio, prices, self.target, min_qty=0.001, min_drift=min_drift)

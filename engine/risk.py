@@ -2,6 +2,39 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
+
+class RiskLevel(str, Enum):
+    """Tiered portfolio risk level."""
+    OK   = "ok"
+    WARN = "warn"
+    HALT = "halt"
+
+
+def get_risk_level(
+    drawdown: float,
+    warn_threshold: float = 0.07,
+    halt_threshold: float = 0.10,
+) -> RiskLevel:
+    """Return the tiered risk level for a given drawdown.
+
+    Args:
+        drawdown: current drawdown (negative fraction, e.g. -0.08)
+        warn_threshold: soft warning threshold (default 7%)
+        halt_threshold: hard stop threshold (default 10%)
+
+    Returns:
+        RiskLevel.HALT if drawdown exceeds halt_threshold,
+        RiskLevel.WARN if it exceeds warn_threshold,
+        RiskLevel.OK otherwise.
+    """
+    if drawdown <= -halt_threshold:
+        return RiskLevel.HALT
+    if drawdown <= -warn_threshold:
+        return RiskLevel.WARN
+    return RiskLevel.OK
+
 
 def compute_drawdown(current_value: float, peak_value: float) -> float:
     """Compute drawdown of current value from peak (negative number).

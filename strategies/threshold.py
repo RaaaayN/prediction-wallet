@@ -24,8 +24,8 @@ class ThresholdStrategy(BaseStrategy):
         return False
 
     def get_trades(self, portfolio: dict, prices: dict) -> list[dict]:
-        """Return orders to restore target weights."""
-        return self._compute_trade_orders(portfolio, prices)
+        """Return orders to restore target weights, skipping assets within the tolerance band."""
+        return self._compute_trade_orders(portfolio, prices, min_drift=self.threshold / 2)
 
     def get_drift_report(self, portfolio: dict, prices: dict) -> dict[str, float]:
         """Return per-ticker drift from target (for diagnostics)."""

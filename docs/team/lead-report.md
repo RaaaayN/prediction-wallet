@@ -212,3 +212,257 @@ Both must pass cleanly before the commit is finalized.
 - CLAUDE.md already updated (previous session) — no architecture doc work needed in Phase 1.
 - Phase 2 (backtest migration + Streamlit retirement) should not start until `/team-ui` has run.
 - Phase 3 (MCP upgrade or removal) is deferred indefinitely until a real data source is identified.
+
+---
+
+## Lead Report: 2026-03-24 17:00
+**Last Updated:** 2026-03-24
+
+### Context
+
+Phases 1, 2, 3 complètes. Tous les agents ont maintenant des rapports. Premier bilan complet d'équipe.
+
+### Team Status
+
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-24 — Dead code cleanup + API hardening | 2026-03-24 16:00 | Current |
+| ui | 2026-03-24 — Backtest tab + portfolio improvements | 2026-03-24 16:30 | Current |
+| strategy | 2026-03-24 — Engine/strategy analysis (10 priorities) | 2026-03-24 15:00 | Current |
+| usecases | 2026-03-24 — Full Feature Audit | 2026-03-24 | Current |
+
+### Ce qui a été accompli (Phases 1–3)
+
+- **Phase 1** : `agent/`, `services/agent_runtime.py`, `services/research_service.py` supprimés. `LocalResearchGateway` retiré du wiring. CLAUDE.md mis à jour. API hardened (`init_db()` + `get_running_loop()`).
+- **Phase 2** : `engine/backtest.py` créé, `GET /api/backtest` ajouté, dashboard Streamlit supprimé. L'onglet Backtest HTML/JS est maintenant fonctionnel.
+- **Phase 3** : `integrations/mcp/` supprimé. `mcp_profile` retiré de tous les composants (agent, CLI, API, UI). 41/41 tests verts.
+
+### Cross-Agent Dependencies
+
+- **backend → ui** : `MarketSnapshot.research_summary` est toujours présent dans `agents/models.py` avec valeur `""`. Le backend recommande de le supprimer mais demande à team-ui de vérifier si le champ est rendu dans l'UI avant de le retirer. Coordination requise avant suppression.
+- **backend → ui** : `pf.pnl_dollars` / `pf.pnl_pct` utilisés dans les stat cards UI — backend doit confirmer que ces champs sont présents dans `portfolio.json` (ou les ajouter à `/api/portfolio`).
+- **strategy → backend** : Priority 8 (séparation hard/soft violations dans `agents/policies.py`) est une modification backend pure. Team-strategy l'a identifiée, team-backend confirme que c'est leur scope.
+- **Toutes les autres priorités strategy** (1–7, 9–10) sont auto-contenues dans `engine/` et `strategies/` — aucune coordination inter-agents requise.
+
+### Top 3 Priorities
+
+1. **[team-strategy]** — Séparer hard/soft violations dans `agents/policies.py` (Priority 8 strategy) — Un seul ticker bloqué (prix manquant, ETH-USD hors plan) rejette l'intégralité du cycle et annule 8 trades valides. C'est le problème de **correctness** le plus critique : le système peut refuser toutes les exécutions à cause d'un seul edge case. Implémentation auto-contenue.
+
+2. **[team-strategy]** — Tolerance band rebalancing dans `engine/orders.py` (Priority 3 strategy) — Rebalancer vers target ± half-threshold au lieu de target exact. Réduit le turnover de ~30–40%. Implémentation < 1h, aucune coordination requête.
+
+3. **[team-strategy]** — Historical VaR (Priority 1) + Sortino/Calmar (Priority 2) dans `engine/performance.py` — Le `parametric_var` actuel sous-estime systématiquement le risque crypto (fat tails). Historical VaR ne fait aucune hypothèse distributionnelle. Sortino et Calmar sont les métriques standard pour un portefeuille avec kill switch. Ces métriques apparaîtront automatiquement dans le rapport PDF et les traces — aucun changement UI requis.
+
+### Identified Risks
+
+- **Policy engine correctness** (critique) : Un seul trade bloqué annule tout le cycle. En conditions réelles, un ticker sans prix cotée bloquerait toutes les exécutions valides. Voir Priority 8 strategy / open issue #3 backend.
+- **`MarketSnapshot.research_summary` champ zombie** : Toujours dans `agents/models.py`, toujours `""`. Risque de confusion pour les futurs développeurs. Coordination backend/ui avant suppression.
+- **`CycleAudit.errors` toujours `[]`** : Champ jamais peuplé. Trompe les consommateurs de l'API (dashboard, rapport). Soit peupler, soit supprimer.
+- **`api/main.py` raw SQL** : Requêtes SQL dupliquées entre `api/main.py` et `db/repository.py`. Un changement de schéma peut casser l'API silencieusement. Tech debt moyen.
+- **Sharpe calculé avec rf=2%** (config hardcodée) : Taux réel 2026 ~4.5%. Le Sharpe rapporté est ~0.25 points trop haut. Affecte la fiabilité des rapports PDF.
+
+### Recommended Action Plan
+
+**Maintenant — aucune coordination requise :**
+- Lancer `/team-strategy` pour implémenter les Priorities 1, 2, 3, 4, 5, 7, 8 (engine + strategies + policies).
+  - Priority 1 : Historical VaR dans `performance_report`
+  - Priority 2 : Sortino + Calmar
+  - Priority 3 : Tolerance band rebalancing
+  - Priority 4 : Tiered risk levels (OK / WARN / HALT)
+  - Priority 5 : rf comme constante config
+  - Priority 7 : Calendar drift guard
+  - Priority 8 : Hard/soft violation split
+
+**Ensuite — coordination backend/ui :**
+- Vérifier si `pf.pnl_dollars`/`pf.pnl_pct` sont dans `portfolio.json` (backend quick check).
+- Supprimer `MarketSnapshot.research_summary` de `agents/models.py` après confirmation UI.
+- Nettoyer `CycleAudit.errors` (peupler ou supprimer).
+
+**Plus tard — tech debt :**
+- Router le SQL de `api/main.py` via `db/repository.py`.
+- Init-once flag pour `db/repository._connect()`.
+
+### Stale Reports
+(aucun — tous les agents ont des sessions 2026-03-24)
+
+---
+
+## Lead Report: 2026-03-24 18:00
+**Last Updated:** 2026-03-24
+
+### Context
+
+L'utilisateur indique avoir terminé de lancer `/team-strategy`. Synthèse post-strategy.
+
+### Team Status
+
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-24 16:00 — Dead code cleanup + API hardening | 2026-03-24 16:00 | Current |
+| ui | 2026-03-24 16:30 — Backtest tab + portfolio improvements | 2026-03-24 16:30 | Current |
+| strategy | 2026-03-24 15:00 — Analysis only (10 priorities identifiées) | 2026-03-24 15:00 | **Stale** ⚠️ |
+| usecases | 2026-03-24 — Full Feature Audit | 2026-03-24 | Current |
+
+### ⚠️ Discordance Détectée — Strategy Report
+
+L'utilisateur confirme avoir lancé `/team-strategy`, mais le fichier `docs/team/strategy-report.md` ne contient **qu'une seule session** datée 15:00 (analyse uniquement, pas d'implémentation). Aucune session d'implémentation n'a été appendée.
+
+**Conséquence** : l'état réel du code (engine/, strategies/, policies.py) après le run de team-strategy est **inconnu** depuis les rapports. Le code a peut-être été modifié sans trace dans le rapport d'équipe.
+
+**Action recommandée** : relancer `/team-strategy` pour qu'il appende un rapport d'implémentation, ou inspecter `git log` pour voir ce qui a réellement été commité.
+
+### Cross-Agent Dependencies
+
+Les dépendances en suspens identifiées dans le rapport 17:00 restent ouvertes :
+
+- **backend → ui** : `MarketSnapshot.research_summary` (champ zombie `""`) — coordination requise avant suppression.
+- **backend → ui** : `pf.pnl_dollars` / `pf.pnl_pct` — UI affiche `--` si absents. Backend doit confirmer la présence dans `portfolio.json`.
+- **strategy → backend/ui** : Si les nouvelles métriques (Sortino, Calmar, VaR historial) ont été ajoutées à `performance_report`, une page Performance dans l'UI serait maintenant justifiée. team-ui l'a mentionné comme amélioration future.
+
+### Top 3 Priorities
+
+1. **[team-strategy]** — Re-run pour confirmer l'état d'implémentation — Le rapport strategy est en phase "analyse seule" et aucune session d'implémentation n'est enregistrée. Sans ce rapport, impossible de savoir si les 10 priorités ont été implémentées ou non. C'est un **blocker pour toute priorisation correcte**.
+
+2. **[team-backend]** — Résoudre les deux items de coordination backend/ui pendants :
+   - Vérifier que `portfolio.json` expose `pnl_dollars`/`pnl_pct` (ou les calculer dans `/api/portfolio`)
+   - Supprimer `MarketSnapshot.research_summary` de `agents/models.py` après confirmation UI
+   Ces deux items sont bloqués depuis le rapport backend 16:00 sans action.
+
+3. **[team-backend]** — Nettoyer `CycleAudit.errors` (toujours `[]`) — Soit peupler le champ depuis les erreurs d'exécution réelles, soit le supprimer du modèle. Champ trompeur pour les consommateurs API et le PDF.
+
+### Identified Risks
+
+- **Implémentation strategy non tracée** : Si team-strategy a modifié `engine/orders.py`, `engine/risk.py`, `agents/policies.py` sans appendre au rapport, les autres agents (backend, ui) n'ont pas de visibilité sur ces changements. Risque de conflits silencieux si backend touche policies.py sans savoir que strategy vient de le modifier.
+- **Policy hard/soft split** (Priority 8) : Si non implémentée, reste le problème de correctness le plus critique — un ticker sans prix bloque toutes les exécutions valides.
+- **rf hardcodé à 2%** (Priority 5) : Si non corrigé, le Sharpe rapporté reste ~0.25 points trop haut. Tous les rapports PDF générés depuis le début du projet ont un Sharpe biaisé.
+
+### Recommended Action Plan
+
+**Immédiatement :**
+1. Relancer `/team-strategy` — obtenir un rapport d'implémentation clair listant ce qui a été fait et ce qui reste.
+2. Inspecter `git log --oneline -10` pour voir les commits récents de team-strategy.
+
+**Après confirmation strategy :**
+3. Si Priority 8 (policy hard/soft) n'est pas implémentée → la donner à team-backend (scope policies.py).
+4. Si nouvelles métriques ajoutées (Sortino, Calmar, VaR) → donner à team-ui la page Performance.
+5. Backend quick wins : pnl_dollars/pnl_pct + research_summary cleanup + CycleAudit.errors.
+
+### Stale Reports
+- **strategy** : last updated 2026-03-24 15:00 (analyse seule) — **relancer `/team-strategy`** pour obtenir le rapport d'implémentation.
+
+---
+
+## Lead Report: 2026-03-24 18:30
+**Last Updated:** 2026-03-24
+
+### Context
+
+Strategy report relu après second run. Diagnostic final sur l'état d'implémentation.
+
+### Team Status
+
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-24 16:00 — Dead code cleanup + API hardening | 2026-03-24 16:00 | Current |
+| ui | 2026-03-24 16:30 — Backtest tab + portfolio improvements | 2026-03-24 16:30 | Current |
+| strategy | 2026-03-24 15:30 — Synthèse priorités (analyse seule, Phase 1) | 2026-03-24 15:30 | Current — **en attente d'implémentation** |
+| usecases | 2026-03-24 — Full Feature Audit | 2026-03-24 | Current |
+
+### Diagnostic : Pourquoi team-strategy n'a rien implémenté
+
+Deux sessions d'analyse ont été produites (15:00 + 15:30). Le dernier run a explicitement conclu :
+
+> *"Dire 'proceed with implementation' pour démarrer la Phase 2."*
+
+Team-strategy est un agent **délibératif** : il analyse d'abord, implémente seulement sur confirmation explicite. Rien dans les deux derniers runs ne lui a dit de procéder. Aucun code n'a été modifié.
+
+### Action requise
+
+**Une seule instruction suffit** — relance `/team-strategy` avec un message explicite :
+
+```
+/team-strategy proceed with implementation — priorités 1 à 7 du strategy-report
+```
+
+Cela couvrira :
+- P1 : `historical_var` + VaR 95%/99% + CVaR dans `performance_report`
+- P2 : `sortino_ratio` + `calmar_ratio`
+- P3 : tolerance band rebalancing dans `engine/orders.py`
+- P4 : tiered risk levels (OK/WARN/HALT) dans `engine/risk.py`
+- P5 : rf en constante config
+- P6 : variable drift bands dans `strategies/threshold.py`
+- P7 : calendar drift guard dans `strategies/calendar.py`
+
+Priority 8 (policy hard/soft split) est laissée à team-backend — c'est `agents/policies.py`, hors scope strict de team-strategy.
+
+### Stale Reports
+(aucun)
+
+---
+
+## Lead Report: 2026-03-24 19:00
+**Last Updated:** 2026-03-24
+
+### Context
+
+Team-strategy a produit une session d'implémentation (Phase 2). Bilan post-implémentation.
+
+### Team Status
+
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-24 16:00 — Dead code cleanup + API hardening | 2026-03-24 16:00 | Current |
+| ui | 2026-03-24 16:30 — Backtest tab + portfolio improvements | 2026-03-24 16:30 | Current |
+| strategy | 2026-03-24 16:00 — Phase 2 implementation (P1–P5) | 2026-03-24 16:00 | Current |
+| usecases | 2026-03-24 — Full Feature Audit | 2026-03-24 | Current |
+
+### Ce qui a été implémenté par team-strategy (Priorities 1–5)
+
+| P# | Changement | Fichier |
+|----|-----------|---------|
+| 1 | `historical_var` + VaR 95/99 + CVaR 95/99 dans `performance_report` | `engine/performance.py` |
+| 2 | `sortino_ratio` + `calmar_ratio` dans `performance_report` | `engine/performance.py` |
+| 3 | Tolerance band (`min_drift = threshold/2`) dans `generate_rebalance_orders` | `engine/orders.py`, `strategies/` |
+| 4 | `RiskLevel` enum (OK/WARN/HALT) + `get_risk_level()` | `engine/risk.py` |
+| 5 | `RISK_FREE_RATE = 0.045` en constante config (était 0.02 hardcodé) | `settings.py`, `engine/performance.py` |
+
+30 nouveaux tests dans `tests/test_engine.py` — tous verts.
+
+**Déférés par strategy :** P6 (drift bands variables), P7 (calendar drift guard), P8 (policy hard/soft split).
+
+### ⚠️ Point d'attention : pas de commit git
+
+Le git log ne montre aucun commit de team-strategy. Les changements sont probablement sur disque mais **non commités**. À faire avant de continuer.
+
+### Cross-Agent Dependencies
+
+- **strategy → ui** (débloqué) : `performance_report` expose maintenant 8 nouveaux champs + `RiskLevel`. L'UI peut afficher une page Performance et un indicateur de risque coloré **sans aucun changement backend**. Explicitement validé par strategy.
+- **strategy → backend** (P8 non implémenté) : La séparation hard/soft violations dans `agents/policies.py` reste ouverte. Strategy la délègue à team-backend.
+- **backend → ui** (toujours ouvert) : `pf.pnl_dollars`/`pf.pnl_pct` non confirmés dans `portfolio.json`. Cards UI affichent `--`.
+- **backend → models** (toujours ouvert) : `MarketSnapshot.research_summary` champ zombie (`""`). Coordination backend/ui requise.
+
+### Top 3 Priorities
+
+1. **[team-ui]** — Ajouter une page/section Performance dans l'UI HTML/JS — `performance_report` expose maintenant Sortino, Calmar, VaR 95/99 (param + historique), CVaR 95/99. Aucune modification backend requise. Un indicateur `RiskLevel` coloré (vert/jaune/rouge) via `get_risk_level()` serait directement utilisable via `/api/config` ou un nouvel endpoint. Valeur utilisateur élevée, aucun blocker.
+
+2. **[team-backend]** — Implémenter la séparation hard/soft violations dans `agents/policies.py` (P8 strategy) — Un seul trade bloqué annule tout le cycle. C'est le problème de correctness le plus critique restant. Team-strategy a explicitement délégué ce travail à backend. Scope clair : `agents/policies.py` uniquement.
+
+3. **[team-strategy]** — Implémenter P6 (drift bands variables par actif) + P7 (calendar drift guard) — P6 est la priorité haute restante : BTC/ETH avec 5% de threshold identique à BND génère du sur-trading constant. P7 est trivial (low complexity, skip si drift < 1%). Les deux sont auto-contenus.
+
+### Identified Risks
+
+- **Changements non commités** : team-strategy a modifié `engine/performance.py`, `engine/orders.py`, `engine/risk.py`, `strategies/base.py`, `strategies/threshold.py`, `settings.py`, + 1 nouveau fichier de tests. Aucun commit visible dans `git log`. Risque de perte si la session se ferme.
+- **P8 toujours ouvert** (policy correctness) : toujours le risque fonctionnel le plus élevé en conditions réelles.
+- **`RISK_FREE_RATE` changé de 2% à 4.5%** : tous les rapports PDF et les métriques précédents avaient un Sharpe biaisé. Rupture de comparabilité historique — à documenter.
+
+### Recommended Action Plan
+
+**Maintenant :**
+1. **Commiter** les changements de team-strategy (`git add` + `git commit`).
+
+**Ensuite (ordre recommandé) :**
+2. Lancer `/team-ui` — ajouter page Performance + indicateur RiskLevel dans l'UI.
+3. Lancer `/team-backend` — implémenter P8 (policy hard/soft split).
+4. Lancer `/team-strategy` — implémenter P6 + P7 (drift bands variables + calendar guard).
+
+### Stale Reports
+(aucun)

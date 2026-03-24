@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from config import RISK_FREE_RATE
+
 
 def cumulative_return(history: list[dict]) -> float:
     """Compute cumulative return from portfolio history.
@@ -61,7 +63,7 @@ def rolling_volatility(returns: pd.Series, window: int = 30) -> pd.Series:
     return returns.rolling(window=window).std() * np.sqrt(252)
 
 
-def sharpe_ratio(returns: pd.Series, rf: float = 0.02) -> float:
+def sharpe_ratio(returns: pd.Series, rf: float = RISK_FREE_RATE) -> float:
     """Annualized Sharpe ratio.
 
     Args:
@@ -214,6 +216,61 @@ def conditional_var(returns: pd.Series, confidence: float = 0.95, portfolio_valu
     return float(cvar_pct * portfolio_value)
 
 
+def historical_var(returns: pd.Series, confidence: float = 0.95, portfolio_value: float = 1.0) -> float:
+    """Historical (empirical) Value at Risk — no distributional assumption.
+
+    Args:
+        returns: daily return series
+        confidence: confidence level (default 0.95)
+        portfolio_value: total portfolio value in dollars
+
+    Returns:
+        VaR as a positive dollar loss
+    """
+    if returns.empty:
+        return 0.0
+    cutoff = returns.quantile(1 - confidence)
+    return float(max(0.0, -cutoff * portfolio_value))
+
+
+def sortino_ratio(returns: pd.Series, rf: float = RISK_FREE_RATE, mar: float = 0.0) -> float:
+    """Annualized Sortino ratio — uses only downside deviation.
+
+    Args:
+        returns: daily return series
+        rf: annual risk-free rate
+        mar: minimum acceptable return (daily, default 0.0)
+
+    Returns:
+        Sortino ratio (0.0 if no downside deviation)
+    """
+    if returns.empty:
+        return 0.0
+    downside = returns[returns < mar]
+    if downside.empty or downside.std() == 0:
+        return 0.0
+    excess = returns.mean() * 252 - rf
+    downside_vol = downside.std() * np.sqrt(252)
+    return float(excess / downside_vol)
+
+
+def calmar_ratio(history: list[dict], returns: pd.Series) -> float:
+    """Calmar ratio — annualized return divided by absolute max drawdown.
+
+    Args:
+        history: portfolio snapshot history [{date, total_value}, ...]
+        returns: daily return series (unused but kept for API consistency)
+
+    Returns:
+        Calmar ratio (0.0 if max drawdown is zero)
+    """
+    mdd = abs(max_drawdown(history))
+    if mdd == 0:
+        return 0.0
+    ann_ret = annualized_return(history)
+    return float(ann_ret / mdd)
+
+
 def performance_report(
     history: list[dict],
     trades: list[dict],
@@ -254,7 +311,15 @@ def performance_report(
         "annualized_return": annualized_return(history),
         "volatility": float(daily_returns.std() * np.sqrt(252)) if not daily_returns.empty else 0.0,
         "sharpe": sharpe_ratio(daily_returns),
+        "sortino": sortino_ratio(daily_returns),
+        "calmar": calmar_ratio(history, daily_returns),
         "max_drawdown": max_drawdown(history),
+        "var_95_parametric": parametric_var(daily_returns, 0.95, avg_value),
+        "var_99_parametric": parametric_var(daily_returns, 0.99, avg_value),
+        "var_95_historical": historical_var(daily_returns, 0.95, avg_value),
+        "var_99_historical": historical_var(daily_returns, 0.99, avg_value),
+        "cvar_95": conditional_var(daily_returns, 0.95, avg_value),
+        "cvar_99": conditional_var(daily_returns, 0.99, avg_value),
         "turnover": turnover(trades, avg_value),
         "transaction_costs": costs,
         "hit_ratio": hit_ratio(trades),
