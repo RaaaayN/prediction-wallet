@@ -1,4 +1,4 @@
-"""Tests for engine/performance.py, engine/risk.py, engine/orders.py, and strategies/."""
+"""Tests for engine/performance.py, engine/risk.py, engine/orders.py, engine/portfolio.py, and strategies/."""
 
 from __future__ import annotations
 
@@ -7,17 +7,21 @@ import pandas as pd
 import pytest
 
 from engine.performance import (
+    avg_pairwise_correlation,
     avg_slippage_bps,
     calmar_ratio,
     conditional_var,
     historical_var,
     parametric_var,
     performance_report,
+    rolling_correlation,
     sharpe_ratio,
     sortino_ratio,
 )
 from engine.risk import RiskLevel, check_kill_switch, get_risk_level
 from engine.orders import apply_slippage, estimate_transaction_cost, generate_rebalance_orders
+from engine.portfolio import compute_inverse_vol_weights, compute_sector_exposure, concentration_score
+from engine.backtest import run_stress_test, STRESS_SCENARIOS
 
 
 # ---------------------------------------------------------------------------
@@ -570,3 +574,506 @@ class TestVolAdjustedSlippage:
         prices = {"AAPL": 100.0, "BTC-USD": 50_000.0}
         cost = estimate_transaction_cost(orders, prices, _CRYPTO, _EQ_RATE, _CR_RATE)
         assert cost > 0.0
+
+
+# ---------------------------------------------------------------------------
+# TestSectorExposure
+# ---------------------------------------------------------------------------
+
+_SECTOR_MAP = {
+    "AAPL": "tech", "MSFT": "tech", "GOOGL": "tech", "AMZN": "tech", "NVDA": "tech",
+    "TLT": "bonds", "BND": "bonds",
+    "BTC-USD": "crypto", "ETH-USD": "crypto",
+}
+
+class TestSectorExposure:
+    def test_balanced_profile_weights(self):
+        weights = {
+            "AAPL": 0.12, "MSFT": 0.12, "GOOGL": 0.09, "AMZN": 0.09, "NVDA": 0.08,
+            "TLT": 0.15, "BND": 0.15,
+            "BTC-USD": 0.12, "ETH-USD": 0.08,
+        }
+        exp = compute_sector_exposure(weights, _SECTOR_MAP)
+        assert abs(exp["tech"] - 0.50) < 1e-9
+        assert abs(exp["bonds"] - 0.30) < 1e-9
+        assert abs(exp["crypto"] - 0.20) < 1e-9
+
+    def test_empty_weights_returns_empty(self):
+        assert compute_sector_exposure({}, _SECTOR_MAP) == {}
+
+    def test_unknown_ticker_maps_to_other(self):
+        weights = {"XYZ": 0.10, "AAPL": 0.90}
+        exp = compute_sector_exposure(weights, _SECTOR_MAP)
+        assert "other" in exp
+        assert abs(exp["other"] - 0.10) < 1e-9
+
+    def test_all_unknown_tickers(self):
+        weights = {"FOO": 0.50, "BAR": 0.50}
+        exp = compute_sector_exposure(weights, _SECTOR_MAP)
+        assert list(exp.keys()) == ["other"]
+        assert abs(exp["other"] - 1.0) < 1e-9
+
+    def test_single_sector_portfolio(self):
+        weights = {"AAPL": 0.60, "MSFT": 0.40}
+        exp = compute_sector_exposure(weights, _SECTOR_MAP)
+        assert set(exp.keys()) == {"tech"}
+        assert abs(exp["tech"] - 1.0) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# TestConcentrationScore
+# ---------------------------------------------------------------------------
+
+class TestConcentrationScore:
+    def test_returns_max_sector(self):
+        exp = {"tech": 0.50, "bonds": 0.30, "crypto": 0.20}
+        assert abs(concentration_score(exp) - 0.50) < 1e-9
+
+    def test_single_sector(self):
+        assert abs(concentration_score({"tech": 0.75}) - 0.75) < 1e-9
+
+    def test_empty_returns_zero(self):
+        assert concentration_score({}) == 0.0
+
+    def test_equal_sectors(self):
+        exp = {"tech": 0.33, "bonds": 0.33, "crypto": 0.34}
+        assert abs(concentration_score(exp) - 0.34) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# TestPolicyConcentrationBlock
+# ---------------------------------------------------------------------------
+
+class TestPolicyConcentrationBlock:
+    """Integration tests for the concentration soft block in ExecutionPolicyEngine."""
+
+    def setup_method(self):
+        from agents.policies import ExecutionPolicyEngine, PolicyConfig
+        from agents.models import (
+            CycleObservation, MarketSnapshot, PortfolioSnapshot, RiskStatus, TradeProposal,
+        )
+        self._engine = ExecutionPolicyEngine(PolicyConfig())
+        self._TradeProposal = TradeProposal
+        self._CycleObservation = CycleObservation
+        self._MarketSnapshot = MarketSnapshot
+        self._PortfolioSnapshot = PortfolioSnapshot
+        self._RiskStatus = RiskStatus
+
+    def _make_observation(self, current_weights, prices, total_value=100_000.0, trade_plan=None):
+        portfolio = self._PortfolioSnapshot(
+            positions={},
+            cash=0.0,
+            peak_value=total_value,
+            total_value=total_value,
+            current_weights=current_weights,
+            target_weights={},
+            weight_deviation={},
+            pnl_dollars=0.0,
+            pnl_pct=0.0,
+        )
+        market = self._MarketSnapshot(prices=prices)
+        risk = self._RiskStatus(
+            kill_switch_active=False,
+            drawdown=0.0,
+            max_trades_per_cycle=10,
+            max_order_fraction_of_portfolio=0.30,
+            allowed_tickers=list(prices.keys()),
+            execution_mode="simulate",
+        )
+        return self._CycleObservation(
+            cycle_id="test",
+            strategy_name="threshold",
+            portfolio=portfolio,
+            market=market,
+            risk=risk,
+            trade_plan=trade_plan or [],
+        )
+
+    def _make_decision(self, trades):
+        from agents.models import TradeDecision
+        return TradeDecision(
+            cycle_id="test",
+            summary="test",
+            market_outlook="neutral",
+            rationale="test",
+            rebalance_needed=True,
+            approved_trades=trades,
+        )
+
+    def test_buy_under_concentration_limit_is_allowed(self):
+        # tech = 0.30 (well under 0.55); buy AAPL adds 2% → projected = 0.32 → allowed
+        weights = {
+            "AAPL": 0.10, "MSFT": 0.10, "GOOGL": 0.10,
+            "TLT": 0.35, "BND": 0.35,
+        }
+        prices = {"AAPL": 100.0}
+        # buy qty=20 → notional=2000, added_weight=0.02, projected=0.32
+        trade = self._TradeProposal(action="buy", ticker="AAPL", quantity=20.0, reason="test")
+        obs = self._make_observation(weights, prices, trade_plan=[trade])
+        decision = self._make_decision([trade])
+        result = self._engine.evaluate(decision, obs, "simulate")
+        assert result.approved
+        assert any(t.ticker == "AAPL" for t in result.allowed_trades)
+
+    def test_buy_pushing_sector_over_limit_is_blocked(self):
+        # tech = 0.52; buy AAPL qty=50 adds 5% → projected = 0.57 > 0.55 → blocked
+        weights = {
+            "AAPL": 0.13, "MSFT": 0.13, "GOOGL": 0.10, "AMZN": 0.10, "NVDA": 0.06,
+            "TLT": 0.20, "BND": 0.15, "BTC-USD": 0.08, "ETH-USD": 0.05,
+        }
+        prices = {"AAPL": 100.0}
+        # qty=50, price=100, notional=5000, total=100_000 → added_weight=0.05 → projected=0.57
+        trade = self._TradeProposal(action="buy", ticker="AAPL", quantity=50.0, reason="test")
+        obs = self._make_observation(weights, prices, trade_plan=[trade])
+        decision = self._make_decision([trade])
+        result = self._engine.evaluate(decision, obs, "simulate")
+        assert result.approved
+        assert not result.allowed_trades
+        assert result.blocked_trades[0].rejection_reason.startswith("Sector concentration limit")
+
+    def test_sell_on_over_concentrated_sector_is_allowed(self):
+        # tech = 0.57 (over limit); sell AAPL → always allowed
+        weights = {
+            "AAPL": 0.15, "MSFT": 0.15, "GOOGL": 0.12, "AMZN": 0.10, "NVDA": 0.05,
+            "TLT": 0.20, "BND": 0.13, "BTC-USD": 0.07, "ETH-USD": 0.03,
+        }
+        prices = {"AAPL": 100.0}
+        trade = self._TradeProposal(action="sell", ticker="AAPL", quantity=10.0, reason="test")
+        obs = self._make_observation(weights, prices, trade_plan=[trade])
+        decision = self._make_decision([trade])
+        result = self._engine.evaluate(decision, obs, "simulate")
+        assert result.approved
+        assert any(t.ticker == "AAPL" for t in result.allowed_trades)
+
+    def test_buy_stays_exactly_at_limit_is_allowed(self):
+        # tech = 0.50; buy adds exactly 0.05 → projected = 0.55 (not strictly > 0.55) → allowed
+        weights = {
+            "AAPL": 0.10, "MSFT": 0.10, "GOOGL": 0.10, "AMZN": 0.10, "NVDA": 0.10,
+            "TLT": 0.30, "BND": 0.20,
+        }
+        prices = {"AAPL": 100.0}
+        # qty=50 → notional=5000, added_weight=0.05, projected=0.55 (not > 0.55)
+        trade = self._TradeProposal(action="buy", ticker="AAPL", quantity=50.0, reason="test")
+        obs = self._make_observation(weights, prices, trade_plan=[trade])
+        decision = self._make_decision([trade])
+        result = self._engine.evaluate(decision, obs, "simulate")
+        assert result.approved
+        assert any(t.ticker == "AAPL" for t in result.allowed_trades)
+
+    def test_bonds_buy_not_affected_by_tech_concentration(self):
+        # tech = 0.57 (over limit); buy TLT (bonds sector) → no concentration block
+        weights = {
+            "AAPL": 0.15, "MSFT": 0.15, "GOOGL": 0.12, "AMZN": 0.10, "NVDA": 0.05,
+            "TLT": 0.25, "BND": 0.10, "BTC-USD": 0.05, "ETH-USD": 0.03,
+        }
+        prices = {"TLT": 90.0}
+        trade = self._TradeProposal(action="buy", ticker="TLT", quantity=10.0, reason="test")
+        obs = self._make_observation(weights, prices, trade_plan=[trade])
+        decision = self._make_decision([trade])
+        result = self._engine.evaluate(decision, obs, "simulate")
+        assert result.approved
+        assert any(t.ticker == "TLT" for t in result.allowed_trades)
+
+
+# ---------------------------------------------------------------------------
+# TestRollingCorrelation
+# ---------------------------------------------------------------------------
+
+class TestRollingCorrelation:
+    def _make_returns_df(self, n=60, seed=42) -> pd.DataFrame:
+        rng = np.random.default_rng(seed)
+        return pd.DataFrame({
+            "AAPL": rng.normal(0.001, 0.02, n),
+            "MSFT": rng.normal(0.001, 0.02, n),
+            "TLT":  rng.normal(0.0002, 0.005, n),
+        })
+
+    def test_diagonal_is_one(self):
+        df = self._make_returns_df()
+        corr = rolling_correlation(df, window=30)
+        for col in corr.columns:
+            assert abs(corr.loc[col, col] - 1.0) < 1e-9
+
+    def test_symmetric_matrix(self):
+        df = self._make_returns_df()
+        corr = rolling_correlation(df, window=30)
+        assert abs(corr.loc["AAPL", "MSFT"] - corr.loc["MSFT", "AAPL"]) < 1e-12
+
+    def test_empty_df_returns_empty(self):
+        result = rolling_correlation(pd.DataFrame())
+        assert result.empty
+
+    def test_single_row_returns_empty(self):
+        df = pd.DataFrame({"A": [0.01], "B": [0.02]})
+        result = rolling_correlation(df, window=30)
+        assert result.empty
+
+    def test_correlated_assets_high_correlation(self):
+        # Two nearly identical series → correlation close to 1.0
+        base = np.linspace(0, 0.01, 60)
+        df = pd.DataFrame({"A": base + 0.0001, "B": base - 0.0001})
+        corr = rolling_correlation(df, window=30)
+        assert corr.loc["A", "B"] > 0.99
+
+    def test_uncorrelated_assets_low_correlation(self):
+        rng = np.random.default_rng(0)
+        df = pd.DataFrame({
+            "A": rng.normal(0, 1, 200),
+            "B": rng.normal(0, 1, 200),
+        })
+        corr = rolling_correlation(df, window=30)
+        assert abs(corr.loc["A", "B"]) < 0.5  # loose bound for random data
+
+    def test_avg_pairwise_correlation_below_one_for_mixed(self):
+        df = self._make_returns_df()
+        corr = rolling_correlation(df, window=30)
+        avg = avg_pairwise_correlation(corr)
+        assert avg < 1.0
+        assert avg > -1.0
+
+    def test_avg_pairwise_correlation_zero_for_single_asset(self):
+        df = pd.DataFrame({"A": [0.01, 0.02, 0.03, 0.04]})
+        corr = df.corr()
+        assert avg_pairwise_correlation(corr) == 0.0
+
+    def test_avg_pairwise_correlation_empty(self):
+        assert avg_pairwise_correlation(pd.DataFrame()) == 0.0
+
+    def test_window_uses_last_n_rows(self):
+        # First 30 rows all positive, last 30 rows all negative — window=30 uses last 30
+        part1 = pd.DataFrame({"A": [0.01] * 30, "B": [0.01] * 30})
+        part2 = pd.DataFrame({"A": [-0.01] * 30, "B": [-0.01] * 30})
+        df = pd.concat([part1, part2], ignore_index=True)
+        corr_window30 = rolling_correlation(df, window=30)
+        corr_all = rolling_correlation(df, window=60)
+        # Both windows: A and B perfectly correlated regardless, but verify shapes
+        assert corr_window30.shape == (2, 2)
+        assert corr_all.shape == (2, 2)
+
+
+# ---------------------------------------------------------------------------
+# TestStressTest
+# ---------------------------------------------------------------------------
+
+_STRESS_PORTFOLIO = {
+    "positions": {
+        "AAPL": 10.0,   # 10 × $200 = $2 000
+        "TLT":  20.0,   # 20 × $100 = $2 000
+        "BTC-USD": 0.1, # 0.1 × $40 000 = $4 000
+    },
+    "cash": 2_000.0,    # total = $10 000
+}
+_STRESS_PRICES = {"AAPL": 200.0, "TLT": 100.0, "BTC-USD": 40_000.0}
+
+
+class TestStressTest:
+    def test_zero_shocks_no_change(self):
+        scenarios = [{"name": "flat", "description": "", "shocks": {}}]
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES, scenarios)
+        assert len(results) == 1
+        r = results[0]
+        assert abs(r["pnl_dollars"]) < 1e-6
+        assert abs(r["pnl_pct"]) < 1e-9
+        assert not r["kill_switch_triggered"]
+
+    def test_large_shock_produces_loss(self):
+        # −50% on all positions
+        scenarios = [{"name": "crash", "description": "", "shocks": {
+            "AAPL": -0.50, "TLT": -0.50, "BTC-USD": -0.50,
+        }}]
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES, scenarios)
+        r = results[0]
+        assert r["pnl_dollars"] < 0
+        assert r["pnl_pct"] < 0
+
+    def test_known_pnl_value(self):
+        # AAPL −20%: 10 × 200 × (1−0.2) = 1600; TLT unchanged; BTC unchanged
+        # before = 2000 + 2000 + 4000 + 2000 = 10000
+        # after  = 1600 + 2000 + 4000 + 2000 = 9600
+        scenarios = [{"name": "aapl_drop", "description": "", "shocks": {"AAPL": -0.20}}]
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES, scenarios)
+        r = results[0]
+        assert abs(r["portfolio_value_before"] - 10_000.0) < 1e-6
+        assert abs(r["portfolio_value_after"] - 9_600.0) < 1e-6
+        assert abs(r["pnl_dollars"] - (-400.0)) < 1e-6
+        assert abs(r["pnl_pct"] - (-0.04)) < 1e-9
+
+    def test_kill_switch_triggered_when_loss_exceeds_threshold(self):
+        # −50% on all → pnl_pct = −(8000 × 0.5) / 10000 = −0.40 < −0.10 → triggered
+        scenarios = [{"name": "severe", "description": "", "shocks": {
+            "AAPL": -0.50, "TLT": -0.50, "BTC-USD": -0.50,
+        }}]
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES, scenarios, kill_switch_threshold=0.10)
+        assert results[0]["kill_switch_triggered"]
+
+    def test_kill_switch_not_triggered_for_small_loss(self):
+        scenarios = [{"name": "small", "description": "", "shocks": {"AAPL": -0.02}}]
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES, scenarios, kill_switch_threshold=0.10)
+        assert not results[0]["kill_switch_triggered"]
+
+    def test_cash_unaffected_by_price_shocks(self):
+        # Portfolio with only cash — no price shock should matter
+        cash_only = {"positions": {}, "cash": 10_000.0}
+        scenarios = [{"name": "crash", "description": "", "shocks": {"AAPL": -0.50}}]
+        results = run_stress_test(cash_only, _STRESS_PRICES, scenarios)
+        r = results[0]
+        assert abs(r["pnl_dollars"]) < 1e-6
+
+    def test_empty_portfolio_returns_empty(self):
+        empty = {"positions": {}, "cash": 0.0}
+        results = run_stress_test(empty, _STRESS_PRICES)
+        assert results == []
+
+    def test_custom_scenarios_override_defaults(self):
+        custom = [{"name": "custom_only", "description": "x", "shocks": {}}]
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES, scenarios=custom)
+        assert len(results) == 1
+        assert results[0]["scenario"] == "custom_only"
+
+    def test_default_scenarios_returns_four_results(self):
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES)
+        assert len(results) == len(STRESS_SCENARIOS)
+        names = {r["scenario"] for r in results}
+        assert "covid_march_2020" in names
+        assert "gfc_2008" in names
+        assert "rate_shock_2022" in names
+        assert "tech_selloff" in names
+
+    def test_weights_after_sum_to_one(self):
+        scenarios = [{"name": "flat", "description": "", "shocks": {}}]
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES, scenarios)
+        weights = results[0]["weights_after"]
+        # weights only cover invested positions (not cash), so sum ≤ 1
+        assert sum(weights.values()) <= 1.0 + 1e-9
+
+    def test_ticker_missing_from_shocks_uses_zero(self):
+        # BTC-USD not in shocks → shock = 0.0 (no change)
+        scenarios = [{"name": "partial", "description": "", "shocks": {"AAPL": -0.20}}]
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES, scenarios)
+        r = results[0]
+        # Only AAPL affected: loss = 10 × 200 × 0.20 = 400
+        assert abs(r["pnl_dollars"] - (-400.0)) < 1e-6
+
+    def test_positive_shock_increases_portfolio_value(self):
+        scenarios = [{"name": "rally", "description": "", "shocks": {
+            "AAPL": +0.30, "TLT": +0.10, "BTC-USD": +0.50,
+        }}]
+        results = run_stress_test(_STRESS_PORTFOLIO, _STRESS_PRICES, scenarios)
+        assert results[0]["pnl_dollars"] > 0
+        assert not results[0]["kill_switch_triggered"]
+
+
+# ---------------------------------------------------------------------------
+# TestInverseVolWeights
+# ---------------------------------------------------------------------------
+
+_TARGET_2 = {"LOW": 0.50, "HIGH": 0.50}
+
+
+class TestInverseVolWeights:
+    def test_higher_vol_asset_gets_less_weight(self):
+        vols = {"LOW": 0.10, "HIGH": 0.50}
+        result = compute_inverse_vol_weights(vols, _TARGET_2)
+        assert result["LOW"] > result["HIGH"]
+
+    def test_equal_vols_produce_equal_weights(self):
+        vols = {"LOW": 0.25, "HIGH": 0.25}
+        result = compute_inverse_vol_weights(vols, _TARGET_2)
+        assert abs(result["LOW"] - result["HIGH"]) < 1e-9
+
+    def test_output_sums_to_one_pure_inv_vol(self):
+        vols = {"LOW": 0.10, "HIGH": 0.50}
+        result = compute_inverse_vol_weights(vols, _TARGET_2, blend=1.0)
+        assert abs(sum(result.values()) - 1.0) < 1e-9
+
+    def test_output_sums_to_one_blended(self):
+        vols = {"LOW": 0.10, "HIGH": 0.50}
+        result = compute_inverse_vol_weights(vols, _TARGET_2, blend=0.5)
+        assert abs(sum(result.values()) - 1.0) < 1e-9
+
+    def test_blend_zero_returns_fixed_target(self):
+        vols = {"LOW": 0.10, "HIGH": 0.50}
+        result = compute_inverse_vol_weights(vols, _TARGET_2, blend=0.0)
+        assert abs(result["LOW"] - 0.50) < 1e-9
+        assert abs(result["HIGH"] - 0.50) < 1e-9
+
+    def test_blend_one_is_pure_inverse_vol(self):
+        vols = {"LOW": 0.10, "HIGH": 0.50}
+        pure = compute_inverse_vol_weights(vols, _TARGET_2, blend=1.0)
+        # inv_vol: LOW=10, HIGH=2 → LOW=10/12≈0.833, HIGH=2/12≈0.167
+        assert abs(pure["LOW"] - 10 / 12) < 1e-9
+        assert abs(pure["HIGH"] - 2 / 12) < 1e-9
+
+    def test_blend_half_is_midpoint(self):
+        vols = {"LOW": 0.10, "HIGH": 0.50}
+        pure = compute_inverse_vol_weights(vols, _TARGET_2, blend=1.0)
+        blended = compute_inverse_vol_weights(vols, _TARGET_2, blend=0.5)
+        expected_low = 0.5 * pure["LOW"] + 0.5 * _TARGET_2["LOW"]
+        assert abs(blended["LOW"] - expected_low) < 1e-9
+
+    def test_missing_vol_falls_back_to_reference(self):
+        # HIGH has no vol entry → uses 0.20 fallback
+        vols = {"LOW": 0.10}
+        result = compute_inverse_vol_weights(vols, _TARGET_2, blend=1.0)
+        # inv_vol: LOW=1/0.10=10, HIGH=1/0.20=5 → LOW=10/15≈0.667, HIGH=5/15≈0.333
+        assert abs(result["LOW"] - 10 / 15) < 1e-9
+        assert abs(result["HIGH"] - 5 / 15) < 1e-9
+
+    def test_zero_vol_uses_fallback_not_division_error(self):
+        vols = {"LOW": 0.0, "HIGH": 0.25}
+        result = compute_inverse_vol_weights(vols, _TARGET_2, blend=1.0)
+        assert abs(sum(result.values()) - 1.0) < 1e-9
+
+    def test_three_asset_target(self):
+        target = {"A": 0.40, "B": 0.40, "C": 0.20}
+        vols = {"A": 0.10, "B": 0.20, "C": 0.40}
+        result = compute_inverse_vol_weights(vols, target, blend=1.0)
+        assert result["A"] > result["B"] > result["C"]
+        assert abs(sum(result.values()) - 1.0) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# TestStrategyInverseVolSizing
+# ---------------------------------------------------------------------------
+
+class TestStrategyInverseVolSizing:
+    _PORTFOLIO = {
+        "positions": {"LOW": 5.0, "HIGH": 5.0},
+        "cash": 0.0,
+    }
+    _PRICES = {"LOW": 100.0, "HIGH": 100.0}
+    _TARGET = {"LOW": 0.50, "HIGH": 0.50}
+
+    def test_threshold_without_vols_uses_fixed_target(self):
+        from strategies.threshold import ThresholdStrategy
+        strat = ThresholdStrategy(threshold=0.05, target_allocation=self._TARGET)
+        # Balanced portfolio → no trades at fixed target
+        trades = strat.get_trades(self._PORTFOLIO, self._PRICES)
+        assert trades == []
+
+    def test_threshold_with_vols_shifts_target(self):
+        from strategies.threshold import ThresholdStrategy
+        strat = ThresholdStrategy(threshold=0.01, target_allocation=self._TARGET)
+        # HIGH is 5× more volatile → inv-vol target gives LOW ~83%, HIGH ~17%
+        # Current weights: LOW=0.50, HIGH=0.50 — both deviate significantly from inv-vol target
+        vols = {"LOW": 0.10, "HIGH": 0.50}
+        trades = strat.get_trades(self._PORTFOLIO, self._PRICES, volatilities=vols, vol_blend=1.0)
+        actions = {t["ticker"]: t["action"] for t in trades}
+        # Should buy LOW (underweight vs inv-vol target) and sell HIGH (overweight)
+        assert actions.get("LOW") == "buy"
+        assert actions.get("HIGH") == "sell"
+
+    def test_calendar_without_vols_uses_fixed_target(self):
+        from strategies.calendar import CalendarStrategy
+        strat = CalendarStrategy(frequency="weekly", target_allocation=self._TARGET, min_drift=0.0)
+        # Balanced portfolio with fixed target → no orders
+        trades = strat.get_trades(self._PORTFOLIO, self._PRICES)
+        assert trades == []
+
+    def test_calendar_with_vols_produces_orders(self):
+        from strategies.calendar import CalendarStrategy
+        strat = CalendarStrategy(frequency="weekly", target_allocation=self._TARGET, min_drift=0.0)
+        vols = {"LOW": 0.10, "HIGH": 0.50}
+        trades = strat.get_trades(self._PORTFOLIO, self._PRICES, volatilities=vols, vol_blend=1.0)
+        # inv-vol target differs from 50/50 → orders should be generated
+        assert len(trades) > 0

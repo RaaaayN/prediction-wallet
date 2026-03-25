@@ -53,5 +53,17 @@ class CalendarStrategy(BaseStrategy):
 
         return True
 
-    def get_trades(self, portfolio: dict, prices: dict) -> list[dict]:
-        return self._compute_trade_orders(portfolio, prices)
+    def get_trades(
+        self,
+        portfolio: dict,
+        prices: dict,
+        volatilities: dict[str, float] | None = None,
+        vol_blend: float = 1.0,
+    ) -> list[dict]:
+        """Return rebalancing orders, optionally using inverse-vol weighted targets.
+
+        Args:
+            volatilities: optional ticker → annualised 30-day vol for inverse-vol sizing.
+            vol_blend: blend between fixed (0.0) and pure inverse-vol (1.0) targets.
+        """
+        return self._compute_trade_orders(portfolio, prices, volatilities=volatilities, vol_blend=vol_blend)

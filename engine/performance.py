@@ -360,3 +360,41 @@ def performance_report(
         report["benchmark_cumulative_return"] = None
 
     return report
+
+
+def rolling_correlation(
+    returns_df: pd.DataFrame,
+    window: int = 30,
+) -> pd.DataFrame:
+    """Compute correlation matrix over the last `window` periods.
+
+    Args:
+        returns_df: DataFrame with columns = tickers, rows = daily returns
+        window: number of most-recent periods to use (default 30 days)
+
+    Returns:
+        Correlation matrix as a DataFrame. Returns an empty DataFrame if
+        input has fewer than 2 rows or is empty.
+    """
+    if returns_df.empty or len(returns_df) < 2:
+        return pd.DataFrame()
+    return returns_df.iloc[-window:].corr()
+
+
+def avg_pairwise_correlation(corr_matrix: pd.DataFrame) -> float:
+    """Mean of off-diagonal elements of a correlation matrix.
+
+    Measures average pairwise correlation across assets.
+    Lower values indicate better diversification.
+
+    Args:
+        corr_matrix: square correlation matrix (output of rolling_correlation or pd.DataFrame.corr)
+
+    Returns:
+        Average off-diagonal correlation. Returns 0.0 for matrices with fewer than 2 assets.
+    """
+    n = len(corr_matrix)
+    if n <= 1:
+        return 0.0
+    mask = ~np.eye(n, dtype=bool)
+    return float(corr_matrix.values[mask].mean())

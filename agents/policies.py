@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from config import MAX_ORDER_FRACTION_OF_PORTFOLIO, MAX_TRADES_PER_CYCLE, TARGET_ALLOCATION
+from config import MAX_ORDER_FRACTION_OF_PORTFOLIO, MAX_SECTOR_CONCENTRATION, MAX_TRADES_PER_CYCLE, SECTOR_MAP, TARGET_ALLOCATION
 from agents.models import PolicyEvaluation, PolicyViolation, RejectedTrade, RiskStatus, TradeDecision, TradeProposal
+from engine.portfolio import compute_sector_exposure
 
 
 @dataclass
@@ -141,6 +142,26 @@ class ExecutionPolicyEngine:
                     )
                 )
                 continue
+            # Sector concentration check: block buys that push a sector above MAX_SECTOR_CONCENTRATION.
+            # Sells always pass — they reduce concentration.
+            sector = SECTOR_MAP.get(trade.ticker)
+            if sector and trade.action == "buy":
+                current_exposure = compute_sector_exposure(
+                    observation.portfolio.current_weights, SECTOR_MAP
+                )
+                added_weight = (price * float(trade.quantity)) / total_value if total_value > 0 else 0.0
+                projected = current_exposure.get(sector, 0.0) + added_weight
+                if projected > MAX_SECTOR_CONCENTRATION:
+                    blocked.append(
+                        RejectedTrade(
+                            **trade.model_dump(),
+                            rejection_reason=(
+                                f"Sector concentration limit: {sector} would reach "
+                                f"{projected:.1%} > {MAX_SECTOR_CONCENTRATION:.1%}."
+                            ),
+                        )
+                    )
+                    continue
             allowed.append(trade)
 
         return PolicyEvaluation(approved=True, allowed_trades=allowed, blocked_trades=blocked, violations=[])

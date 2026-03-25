@@ -849,3 +849,113 @@ Features #15 (Explainability), #8 (Realistic costs), #12 (Event semantics) impl�
 
 ### Stale Reports
 (aucun)
+
+---
+
+## Lead Report: 2026-03-25 16:00
+**Last Updated:** 2026-03-25 16:00
+
+### Team Status
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-25 — #11 confidence scoring + #1 policy-as-code | 2026-03-25 | Current |
+| ui | 2026-03-25 — event_type badges + drift_before/slippage_pct columns | 2026-03-25 | Current |
+| strategy | 2026-03-25 — #8 vol-adjusted slippage + priorities A–E | 2026-03-25 | Current |
+| usecases | 2026-03-25 — 15-feature evaluation (8 Accept, 7 Defer) | 2026-03-25 | Current |
+
+### Roadmap Status — 8 Accepted Features
+
+| # | Feature | Status |
+|---|---------|--------|
+| #15 | Explainability structurée | ✅ Committed (e384ed0) |
+| #12 | Event semantics (event_type + tags) | ✅ Committed (e384ed0) |
+| #11 | Confidence scoring + data_freshness | ✅ Committed (cf34f6a) |
+| #8  | Vol-adjusted + size-adjusted slippage | ✅ Committed (e384ed0) |
+| #6  | Corrélation dynamique + concentration risk | ⚠️ User reports implemented — no source diff found. Likely Phase 1 analysis only. |
+| #5  | Stress testing par scénarios | ⚠️ User reports implemented — no source diff found. Likely Phase 1 analysis only. |
+| #1  | Policy-as-code hiérarchique | ✅ Committed (cf34f6a) |
+| #3  | Dynamic position sizing | ⚠️ User reports implemented — no source diff found. Likely Phase 1 analysis only. |
+
+### Cross-Agent Dependencies
+- **#6 (correlation) → #1 (policy)**: PolicyConfig already in place. The sector concentration score (#6) can plug directly into Layer 1 as a soft block. Dependency satisfied.
+- **#5 (stress testing) → engine/backtest.py**: Extends the existing backtest infrastructure with scenario definitions. Self-contained.
+- **#3 (dynamic sizing) → engine/orders.py**: Inverse-vol weighting mode — deepest change to rebalancing logic. Leave last.
+
+### Top 3 Priorities
+
+1. **[team-strategy]** — Implement #6 correlation/concentration if not yet done — produces `sector_exposure` and `concentration_score` data that feeds into PolicyConfig Layer 1 rules. The strategy report still lists "50% tech concentration unchecked" as an open issue.
+2. **[team-strategy]** — Implement #5 stress testing — pure `engine/backtest.py` extension, zero production risk, demonstrates portfolio resilience across 2008/2020/2022 scenarios.
+3. **[team-strategy]** — Implement #3 dynamic sizing — inverse-vol weighting in `engine/orders.py`. Now safe: policy engine, confidence scoring, and cost model are all in place to validate the results.
+
+### Identified Risks
+- **#6/#5/#3 status unclear**: User reported implementing these but git diff shows no source changes for engine/ or strategies/ beyond what was already committed. Recommend running `/team-strategy` to implement Phase 2 for each of these, or confirming which are actually done.
+- **146 tests passing** — baseline is solid. All committed features have test coverage.
+
+### Recommended Action Plan
+1. Run `/team-strategy` with prompt "implement #6 correlation/concentration, Phase 2"
+2. Run `/team-strategy` with prompt "implement #5 stress testing, Phase 2"
+3. Run `/team-strategy` with prompt "implement #3 dynamic sizing, Phase 2"
+4. After all 3 done: run `/team-backend` to check if concentration score should be wired into policy Layer 1
+5. Once complete: **all 8 Accept features done** → consider opening a PR to merge `feat/agent-team-skills` into `main`
+
+### Stale Reports (if any)
+(aucun)
+
+---
+
+## Lead Report: 2026-03-25 17:30
+**Last Updated:** 2026-03-25 17:30
+
+### Team Status
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-25 10:30 — CycleAudit.errors tests | 2026-03-25 | Current |
+| ui | 2026-03-25 — event_type badges + drift_before/slippage_pct | 2026-03-25 | Current |
+| strategy | 2026-03-25 — #6/#5/#3 all implemented | 2026-03-25 | Current |
+| usecases | 2026-03-25 — 15-feature evaluation (8 Accept, 7 Defer) | 2026-03-25 | Current |
+
+### All 8 Accept Features — Final Status
+
+| # | Feature | Implemented | Wired in agent cycle |
+|---|---------|-------------|----------------------|
+| #15 | Explainability (per-trade audit fields) | ✅ | ✅ `execute()` populates 5 fields |
+| #12 | Event semantics (event_type + tags) | ✅ | ✅ all 5 trace call sites |
+| #11 | Confidence scoring + data_freshness | ✅ | ✅ `decide()` injects freshness |
+| #8  | Vol/size-adjusted slippage | ✅ | ⚠️ optional params — not yet passed from agent |
+| #6  | Sector concentration policy check | ✅ | ✅ Layer 2 soft block in PolicyEngine |
+| #5  | Stress testing (4 crisis scenarios) | ✅ | ⚠️ standalone — not yet in PDF or API |
+| #1  | Policy-as-code (PolicyConfig + 3 layers) | ✅ | ✅ loaded from active profile |
+| #3  | Dynamic sizing (inverse-vol weights) | ✅ | ⚠️ optional param — not yet passed from agent |
+
+### Cross-Agent Dependencies
+
+- **#3 → backend**: `volatilities` kwarg ready in strategies but `portfolio_agent.py` doesn't pass vol data yet. `vol_blend` not in profiles/*.yaml. Wire-up is a backend task.
+- **#8 → backend**: Same situation — `volatility` param in `apply_slippage` needs per-ticker vol from `MarketService` passed through the agent cycle.
+- **#5 → backend/reporting**: `run_stress_test` is ready but not called from `ReportingService`. Wire into PDF as section 7.
+- **#6 → config**: `SECTOR_MAP` and `MAX_SECTOR_CONCENTRATION` hardcoded in `config.py`. Future profiles would need their own sector maps — low priority for now.
+
+### Top 3 Priorities
+
+1. **[user + team-backend]** — **Commit & push current changes** — 196 tests passing, all 8 features implemented. Stage: `config.py`, `engine/backtest.py`, `engine/performance.py`, `engine/portfolio.py`, `strategies/base.py`, `strategies/threshold.py`, `strategies/calendar.py`, `agents/policies.py`, `tests/test_engine.py`, `docs/team/`.
+2. **[team-backend]** — Wire `volatilities` from MarketService into `portfolio_agent.py → get_trades()` calls and expose `vol_blend` in profiles/*.yaml — this activates dynamic sizing end-to-end. Without this, #3 is implemented but dormant.
+3. **[team-backend or team-strategy]** — Wire `run_stress_test` into `ReportingService` PDF (section 7) and expose via `/api/stress` endpoint — stress test results are computed nowhere visible to the user yet.
+
+### Identified Risks
+
+- **Kill switch threshold too conservative**: All 4 stress scenarios (`covid_march_2020`, `gfc_2008`, `rate_shock_2022`, `tech_selloff`) trigger the 10% kill switch. This is accurate modelling — the portfolio WOULD halt — but it also means the kill switch provides zero discrimination between scenarios. The strategy report recommends 15–20%. This is a profile-level config decision (per-profile `kill_switch_drawdown` already supports it).
+- **`vol_blend=1.0` cuts crypto target from 20% → ~5%**: With pure inverse-vol weighting, crypto is dramatically underweighted vs profile targets. The strategy report recommends `blend=0.3` as a starting point. Set this when wiring into profiles.
+- **`MarketSnapshot.research_summary` still in models.py**: Always `""`. Minor cosmetic noise. Low risk — remove in a cleanup pass.
+
+### Recommended Action Plan
+
+**This session:**
+1. Commit + push all changes (196 tests)
+
+**Next sessions (in order):**
+2. `/team-backend` — wire `volatilities` into `portfolio_agent.py`, add `vol_blend` to profiles/*.yaml with `default: 0.3`
+3. `/team-backend` — wire `run_stress_test` into `ReportingService.generate_pdf()` and add `GET /api/stress` endpoint
+4. Optionally: `/team-ui` — add correlation heatmap tab using `rolling_correlation` (data already available in market DB)
+5. **Open PR** `feat/agent-team-skills → main` — all 8 features done, 196 tests, no blockers
+
+### Stale Reports (if any)
+(aucun)

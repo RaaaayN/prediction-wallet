@@ -38,16 +38,34 @@ class ThresholdStrategy(BaseStrategy):
                 return True
         return False
 
-    def get_trades(self, portfolio: dict, prices: dict) -> list[dict]:
-        """Return orders to restore target weights, respecting per-asset tolerance bands."""
+    def get_trades(
+        self,
+        portfolio: dict,
+        prices: dict,
+        volatilities: dict[str, float] | None = None,
+        vol_blend: float = 1.0,
+    ) -> list[dict]:
+        """Return orders to restore target weights, respecting per-asset tolerance bands.
+
+        Args:
+            volatilities: optional ticker → annualised 30-day vol for inverse-vol sizing.
+                          When provided, target weights are adjusted before order generation.
+            vol_blend: blend between fixed (0.0) and pure inverse-vol (1.0) targets.
+        """
+        from engine.portfolio import compute_inverse_vol_weights
+        effective_target = (
+            compute_inverse_vol_weights(volatilities, self.target, blend=vol_blend)
+            if volatilities
+            else self.target
+        )
         current_weights = self._compute_current_weights(portfolio, prices)
-        orders = _generate_orders(portfolio, prices, self.target, min_qty=0.001)
+        orders = _generate_orders(portfolio, prices, effective_target, min_qty=0.001)
         filtered = []
         for order in orders:
             ticker = order["ticker"]
             band = self._get_threshold(ticker) / 2
             current_w = current_weights.get(ticker, 0.0)
-            target_w = self.target.get(ticker, 0.0)
+            target_w = effective_target.get(ticker, 0.0)
             if abs(current_w - target_w) > band:
                 filtered.append(order)
         return filtered
