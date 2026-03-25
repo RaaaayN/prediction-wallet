@@ -164,6 +164,11 @@ def tracking_error(portfolio_returns: pd.Series, benchmark_returns: pd.Series) -
 def hit_ratio(trades: list[dict]) -> float:
     """Fraction of trades that were successful.
 
+    .. deprecated::
+        Based on a simulator ``success`` boolean that is trivially True for all
+        executed trades in simulation. Use :func:`avg_slippage_bps` instead for a
+        meaningful execution quality metric. Kept for backward compatibility.
+
     Args:
         trades: list of trade dicts with a 'success' boolean key
 
@@ -174,6 +179,30 @@ def hit_ratio(trades: list[dict]) -> float:
         return 0.0
     successes = sum(1 for t in trades if t.get("success", False))
     return successes / len(trades)
+
+
+def avg_slippage_bps(trades: list[dict]) -> float:
+    """Average execution slippage in basis points across all trades.
+
+    Measures execution quality: how far fill prices deviated from market prices.
+    Lower is better. Relevant for paper/live mode where fills reflect real market
+    conditions rather than a fixed slippage model.
+
+    Args:
+        trades: list of trade dicts with 'market_price' and 'fill_price' keys
+
+    Returns:
+        Average slippage in basis points (e.g. 50.0 = 0.50%)
+    """
+    if not trades:
+        return 0.0
+    slippages = []
+    for t in trades:
+        market = t.get("market_price", 0.0)
+        fill = t.get("fill_price", market)
+        if market > 0:
+            slippages.append(abs(fill - market) / market * 10_000)
+    return float(np.mean(slippages)) if slippages else 0.0
 
 
 def parametric_var(returns: pd.Series, confidence: float = 0.95, portfolio_value: float = 1.0) -> float:
@@ -318,7 +347,7 @@ def performance_report(
         "cvar_99": conditional_var(daily_returns, 0.99, avg_value),
         "turnover": turnover(trades, avg_value),
         "transaction_costs": costs,
-        "hit_ratio": hit_ratio(trades),
+        "avg_slippage_bps": avg_slippage_bps(trades),
     }
 
     if benchmark_history:

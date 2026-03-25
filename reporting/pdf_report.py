@@ -124,7 +124,7 @@ class PDFReporter:
             return [Paragraph("5. Performance Attribution", self.styles["SectionHeader"]), Paragraph("Insufficient history for performance attribution.", self.styles["Body"]), Spacer(1, 0.3 * cm)]
         try:
             import pandas as pd
-            from engine.performance import annualized_return, cumulative_return, max_drawdown, sharpe_ratio, transaction_costs_total, turnover
+            from engine.performance import annualized_return, avg_slippage_bps, cumulative_return, max_drawdown, sharpe_ratio, sortino_ratio, transaction_costs_total, turnover
 
             hist_list = [{"date": h.get("date", ""), "total_value": h["total_value"]} for h in history]
             values = pd.Series([h["total_value"] for h in history])
@@ -134,15 +134,18 @@ class PDFReporter:
             net_final = history[-1]["total_value"] - costs
             net_start = history[0]["total_value"]
             cum_ret_net = (net_final - net_start) / net_start if net_start > 0 else 0.0
+            slippage_bps = avg_slippage_bps(trades)
             table = Table(
                 [
                     ["Metric", "Gross", "Net"],
                     ["Cumulative Return", f"{cum_ret_gross:+.2%}", f"{cum_ret_net:+.2%}"],
                     ["Annualized Return", f"{annualized_return(hist_list):+.2%}", "-"],
                     ["Sharpe Ratio", f"{sharpe_ratio(daily_returns):.2f}", "-"],
+                    ["Sortino Ratio", f"{sortino_ratio(daily_returns):.2f}", "-"],
                     ["Max Drawdown", f"{max_drawdown(hist_list):.2%}", "-"],
                     ["Annualized Turnover", f"{turnover(trades, float(values.mean())):.2%}", "-"],
                     ["Transaction Costs", "-", f"${costs:,.2f}"],
+                    ["Avg Slippage", "-", f"{slippage_bps:.1f} bps"],
                     ["Cost Drag", "-", f"{cum_ret_gross - cum_ret_net:.2%}"],
                 ],
                 colWidths=[7 * cm, 4 * cm, 4 * cm],

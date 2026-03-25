@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from engine.performance import (
+    avg_slippage_bps,
     calmar_ratio,
     conditional_var,
     historical_var,
@@ -159,7 +160,7 @@ class TestPerformanceReportFields:
         "cvar_99",
         "turnover",
         "transaction_costs",
-        "hit_ratio",
+        "avg_slippage_bps",
     }
 
     def test_all_expected_keys_present(self):
@@ -286,6 +287,53 @@ class TestToleranceBandOrders:
         # With min_notional=0, small drift may still pass min_qty check
         # Just verify the parameter doesn't break normal execution
         assert isinstance(orders, list)
+
+
+# ---------------------------------------------------------------------------
+# TestAvgSlippageBps (P10 fix)
+# ---------------------------------------------------------------------------
+
+class TestAvgSlippageBps:
+    def _make_trade(self, market: float, fill: float, action: str = "buy") -> dict:
+        return {"market_price": market, "fill_price": fill, "action": action, "quantity": 1.0}
+
+    def test_empty_trades_returns_zero(self):
+        assert avg_slippage_bps([]) == 0.0
+
+    def test_no_slippage_returns_zero(self):
+        trades = [self._make_trade(100.0, 100.0)]
+        assert avg_slippage_bps(trades) == 0.0
+
+    def test_known_slippage(self):
+        # fill = 101 vs market = 100 → 1% = 100 bps
+        trades = [self._make_trade(100.0, 101.0)]
+        assert abs(avg_slippage_bps(trades) - 100.0) < 0.01
+
+    def test_averages_across_trades(self):
+        # 100 bps + 200 bps → avg = 150 bps
+        trades = [
+            self._make_trade(100.0, 101.0),  # 100 bps
+            self._make_trade(100.0, 102.0),  # 200 bps
+        ]
+        assert abs(avg_slippage_bps(trades) - 150.0) < 0.01
+
+    def test_in_performance_report(self):
+        history = _make_history(n=60)
+        trades = [
+            {"market_price": 100.0, "fill_price": 100.1, "action": "buy", "quantity": 1.0},
+        ]
+        report = performance_report(history, trades)
+        assert "avg_slippage_bps" in report
+        assert "hit_ratio" not in report
+        assert report["avg_slippage_bps"] >= 0.0
+
+    def test_zero_market_price_ignored(self):
+        trades = [
+            {"market_price": 0.0, "fill_price": 0.0, "action": "buy", "quantity": 1.0},
+            self._make_trade(100.0, 101.0),
+        ]
+        # First trade has market=0 → skipped; only second contributes
+        assert abs(avg_slippage_bps(trades) - 100.0) < 0.01
 
 
 # ---------------------------------------------------------------------------

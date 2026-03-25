@@ -5,7 +5,7 @@ import tempfile
 
 from pydantic_ai.models.test import TestModel
 
-from agents.models import TradeDecision
+from agents.models import ExecutionResult, PolicyEvaluation, PolicyViolation, TradeDecision
 from agents.portfolio_agent import PortfolioAgentService
 from services.execution_service import ExecutionService
 from services.market_service import MarketService
@@ -92,3 +92,105 @@ def test_policy_blocks_trade_outside_plan():
     assert policy.approved is True  # soft block: other valid trades still allowed
     assert executions == []
     assert policy.blocked_trades[0].ticker == "TSLA"
+
+
+# ── CycleAudit.errors tests ───────────────────────────────────────────────────
+
+def _no_op_decision(service, observation) -> TradeDecision:
+    """Build a no-op TradeDecision via TestModel (no trades, no side effects)."""
+    model = TestModel(
+        custom_output_args={
+            "cycle_id": observation.cycle_id,
+            "summary": "test",
+            "market_outlook": "neutral",
+            "rationale": "test",
+            "rebalance_needed": False,
+            "approved_trades": [],
+            "rejected_trades": [],
+            "risk_flags": [],
+        }
+    )
+    decision, _ = service.decide(observation, model_override=model)
+    return decision
+
+
+def test_audit_errors_empty_on_clean_cycle():
+    """Clean cycle with no violations or failed executions → errors is empty."""
+    service = build_service()
+    observation = service.observe()
+    decision = _no_op_decision(service, observation)
+    policy, executions = service.execute(observation, decision)
+    audit = service.audit(observation, decision, policy, executions)
+
+    assert isinstance(audit.errors, list)
+    assert audit.errors == []
+
+
+def test_audit_errors_populated_from_hard_violation():
+    """Kill switch active → policy.violations → audit.errors contains the message."""
+    service = build_service()
+    observation = service.observe()
+    observation.risk = observation.risk.model_copy(update={"kill_switch_active": True})
+    decision = _no_op_decision(service, observation)
+    policy, executions = service.execute(observation, decision)
+
+    assert policy.approved is False
+    assert any(v.code == "kill_switch_active" for v in policy.violations)
+
+    audit = service.audit(observation, decision, policy, executions)
+
+    assert any("kill switch" in e.lower() for e in audit.errors)
+
+
+def test_audit_errors_populated_from_failed_execution():
+    """A failed ExecutionResult with a non-empty error string appears in audit.errors."""
+    from utils.time import utc_now_iso
+
+    service = build_service()
+    observation = service.observe()
+    decision = _no_op_decision(service, observation)
+    clean_policy = PolicyEvaluation(approved=True, allowed_trades=[], blocked_trades=[], violations=[])
+    failed_exec = ExecutionResult(
+        trade_id="t-test",
+        action="buy",
+        ticker="AAPL",
+        quantity=1.0,
+        market_price=100.0,
+        fill_price=0.0,
+        cost=0.0,
+        timestamp=utc_now_iso(),
+        reason="test",
+        success=False,
+        error="Simulated execution failure",
+    )
+
+    audit = service.audit(observation, decision, clean_policy, [failed_exec])
+
+    assert "Simulated execution failure" in audit.errors
+
+
+def test_audit_errors_ignores_empty_error_strings():
+    """Successful executions with error='' do not appear in audit.errors."""
+    from utils.time import utc_now_iso
+
+    service = build_service()
+    observation = service.observe()
+    decision = _no_op_decision(service, observation)
+    clean_policy = PolicyEvaluation(approved=True, allowed_trades=[], blocked_trades=[], violations=[])
+    successful_exec = ExecutionResult(
+        trade_id="t-ok",
+        action="buy",
+        ticker="AAPL",
+        quantity=1.0,
+        market_price=100.0,
+        fill_price=100.5,
+        cost=100.5,
+        timestamp=utc_now_iso(),
+        reason="rebalance",
+        success=True,
+        error="",
+    )
+
+    audit = service.audit(observation, decision, clean_policy, [successful_exec])
+
+    assert audit.errors == []

@@ -111,3 +111,31 @@ Reports are append-only. Each session adds a dated section below.
 2. **Coordinate `research_summary` removal with team-ui** before removing the field from `agents/models.py`.
 3. **Next backend priority**: add test coverage for `CycleAudit.errors`, then verify `run_cycle`/`run_cycle_dict` mcp_profile parameter threading.
 4. **No engine/ changes this session** — strategy report P6/P7 remain open for team-strategy.
+
+## Session: 2026-03-25 10:30 — Test CycleAudit.errors
+**Last Updated:** 2026-03-25 10:30
+
+### What Was Done
+
+- Added 4 tests to `tests/test_portfolio_agent.py` covering the `CycleAudit.errors` field:
+  - `test_audit_errors_empty_on_clean_cycle` — clean cycle produces `errors == []`
+  - `test_audit_errors_populated_from_hard_violation` — kill switch active → error message in `audit.errors`
+  - `test_audit_errors_populated_from_failed_execution` — failed `ExecutionResult` with non-empty error string appears in `audit.errors`
+  - `test_audit_errors_ignores_empty_error_strings` — successful executions with `error=""` do not pollute `audit.errors`
+- Added `_no_op_decision()` helper (local to test file) to avoid repeating TestModel boilerplate across audit tests
+- Added `ExecutionResult`, `PolicyEvaluation`, `PolicyViolation` to imports in test file
+- **All 98 tests pass**
+
+### Open Issues
+
+- `MarketSnapshot.research_summary` field still present in `agents/models.py`, always `""` — remove after team-ui confirms it is not rendered
+- `PolicyViolation` imported in test file but only used indirectly via `policy.violations` assertions — can be cleaned up if unused import becomes a lint issue
+
+### Blockers / Dependencies
+
+- (none)
+
+### Recommendations for the Leader
+
+- Open issues from prior sessions are now fully tested and closed. Backend is in a stable, well-tested state.
+- Next meaningful backend work is the `research_summary` field removal (coordinate with team-ui first).

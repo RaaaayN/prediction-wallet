@@ -4,6 +4,91 @@ Reports are append-only. Each session adds a dated section below.
 
 ---
 
+## Session: 2026-03-25 — Post-cleanup audit (all previous recommendations verified)
+**Last Updated:** 2026-03-25
+
+### Context
+
+Full re-audit after a significant cleanup sprint. All seven recommendations from the previous session (2026-03-24) have been implemented. This session verifies their completion, re-evaluates the full feature set in its current state, and surfaces one new category of issues: dead `pyproject.toml` dependencies.
+
+### Previous Recommendations — Completion Status
+
+| Recommendation | Status |
+|---------------|--------|
+| Delete `agent/` package | ✅ Deleted |
+| Delete `services/agent_runtime.py` | ✅ Deleted |
+| Delete `services/research_service.py` + remove `research_summary` from models | ✅ Done — `MarketSnapshot.research_summary` field removed entirely |
+| Retire Streamlit dashboard (`dashboard/`) | ✅ Deleted — `dashboard_main.py` also removed |
+| Port backtest to HTML/JS UI + add `/api/backtest` endpoint | ✅ Done — `engine/backtest.py` (moved from dashboard), `/api/backtest` endpoint live |
+| Remove MCP `local` profile / `integrations/mcp/` | ✅ Deleted — `mcp_profile` parameter removed from CLI and agent |
+| Update CLAUDE.md | ✅ Done — references to dead code removed, architecture now accurate |
+
+### Feature Audits
+
+| Feature | Location | Verdict | Rationale |
+|---------|----------|---------|-----------|
+| Pydantic AI agent | `agents/portfolio_agent.py`, `agents/models.py`, `agents/policies.py`, `agents/deps.py` | **Useful** | Sole critical path. Observe/decide/validate/execute/audit cycle clean and traceable. No dead code found. |
+| Gateway protocols | `services/gateways.py` | **Useful** | Clean Protocol definitions (MarketDataGateway, PortfolioRepository, ExecutionGateway, AuditRepository). `ResearchGateway` removed. Remaining four are actively implemented. |
+| Engine (financial math) | `engine/portfolio.py`, `engine/orders.py`, `engine/risk.py`, `engine/performance.py` | **Useful** | Core math. All significantly improved this sprint: tolerance bands, min_notional, tiered RiskLevel, historical VaR, Sortino, Calmar, kill switch boundary fix. |
+| Backtest engine | `engine/backtest.py` | **Useful** | Moved from `dashboard/backtest.py` to `engine/` — correct location. Called by `/api/backtest`. Strategy comparison (threshold / calendar / buy-and-hold) now available in HTML/JS UI. |
+| SQLite persistence | `db/schema.py`, `db/repository.py` | **Useful** | Audit trail intact. Init-once optimization (2026-03-25) reduces connection overhead. |
+| Trade execution layer | `execution/simulator.py`, `execution/persistence.py`, `execution/kill_switch.py`, `execution/types.py` | **Useful** | File-backed portfolio state (portfolio.json) + SQLite-backed audit. Kill switch boundary inconsistency fixed (2026-03-25). |
+| Service layer | `services/execution_service.py`, `services/market_service.py`, `services/reporting_service.py` | **Useful** | Clean service separation. No dead code. |
+| Strategies | `strategies/threshold.py`, `strategies/calendar.py` | **Useful** | Both improved: per-asset drift bands, calendar drift guard, tolerance-band rebalancing. |
+| Market data | `market/fetcher.py`, `market/metrics.py` | **Useful** | yfinance → SQLite pipeline. Used by agent and backtest. |
+| PDF reporting | `reporting/pdf_report.py`, `services/reporting_service.py` | **Useful** | Generated each audit step. Durable per-cycle artifact. |
+| Portfolio profiles | `profiles/*.yaml`, `portfolio_loader.py`, `settings.py` | **Useful** | 4 profiles. Now supports `per_asset_threshold` in YAML. Runtime switching via env var or `--profile`. |
+| FastAPI + HTML/JS UI | `api/main.py`, `api/runner.py`, `ui/index.html` | **Useful** | Now the **only UI**. Backtest, Performance, Trace, Portfolio, History tabs all functional. SSE subprocess cleanup on disconnect added. |
+| Test suite | `tests/` (8 files) | **Useful** | Expanded from 36 to 81 tests. New `test_engine.py` (30 tests), `test_policies.py` (10 tests). All 81 pass per backend report. |
+| `pyproject.toml` dependencies | `pyproject.toml` | **Useless (8 dead deps)** | See "Open Issues" below. Eight packages listed as direct dependencies have zero imports in the codebase. Combined install weight is significant. |
+
+### Dead Dependencies Audit (pyproject.toml)
+
+| Dependency | Why It Was Added | Current Status | Verdict |
+|-----------|-----------------|----------------|---------|
+| `streamlit>=1.40.0` | Streamlit dashboard | Dashboard deleted | **Remove** |
+| `plotly>=5.18.0` | Streamlit dashboard charts | No imports anywhere | **Remove** |
+| `langgraph>=0.2.0` | LangGraph agent | `agent/` package deleted | **Remove** |
+| `langchain-anthropic>=0.3.0` | LangGraph agent | `agent/` package deleted | **Remove** |
+| `langchain-core>=0.3.0` | LangGraph agent | `agent/` package deleted | **Remove** |
+| `mcp[cli]>=1.14.1` | MCP integration | `integrations/mcp/` deleted | **Remove** |
+| `PyPortfolioOpt>=1.5.5` | Portfolio optimization (never used) | Zero imports — was never used | **Remove** |
+| `cvxpy>=1.4.0` | Convex optimization (used by PyPortfolioOpt) | Zero imports — was never used | **Remove** |
+
+**Note on `google-genai`**: Not imported directly in project code (Pydantic AI uses it internally). It is correctly listed as a direct dep since `pydantic_ai.models.google.GoogleModel` is initialized explicitly in `portfolio_agent.py`. **Keep**.
+
+### New Feature Evaluations
+
+*(No new features proposed in this session — audit-only request.)*
+
+### Open Issues
+
+1. **8 dead dependencies in `pyproject.toml`**: `streamlit`, `plotly`, `langgraph`, `langchain-anthropic`, `langchain-core`, `mcp[cli]`, `PyPortfolioOpt`, `cvxpy`. All have zero imports in the current codebase. Removing them reduces install time, reduces transitive dependency surface, and removes misleading signals about what the project uses. This is a one-line-per-package edit in `pyproject.toml`.
+
+2. **`hit_ratio` still based on `success` boolean** (strategy report P10, deferred): `performance_report` computes hit ratio as fraction of trades where `success=True`. This flag is set by the simulator at execution time, not by actual outcome measurement. True hit ratio requires comparing fill price vs. later market price. Low urgency, but misleading for performance reporting.
+
+3. **No test for `CycleAudit.errors` population** (carried from backend): `errors=[v.message for v in policy.violations]` is correct code but untested. Low risk; a single test case (hard violation → error populated) would close this.
+
+4. **`db/repository._connect()` thread safety** (carried from backend): `_DB_INITIALIZED.add()` is GIL-protected under CPython. Acceptable assumption; documented in backend report. No action needed unless concurrency model changes.
+
+5. **`portfolio_loader.py` not in CLAUDE.md architecture section**: The file exists and is used by `settings.py`, but is not listed in the architecture section. Minor documentation gap.
+
+### Blockers / Dependencies
+
+- (none) — Full read access confirmed. No missing information.
+
+### Recommendations for the Leader
+
+1. **Remove 8 dead `pyproject.toml` deps** — this is a 1-minute backend task: delete 8 lines from `pyproject.toml`, run `uv sync`. Zero code changes, zero risk, significant install overhead reduction. Highest value-to-effort ratio of anything currently open.
+
+2. **Architecture is now clean** — the codebase accurately reflects CLAUDE.md. No hidden dead code layers remain. This is the first session where there is nothing actively misleading or redundant in the project structure.
+
+3. **`hit_ratio` fix is low priority but worth scheduling** — it's a performance reporting accuracy issue, not a functional bug. A future strategy session could fix it once P&L tracking is available per execution.
+
+4. **The HTML/JS UI is feature-complete** — Portfolio, Allocation (donut), History (drawdown sub-chart), Performance (12 metrics, rolling Sharpe), Traces (stage filter), Cycles, Backtest (all 3 strategies). No further UI gaps identified. Future UI work should be demand-driven, not speculative.
+
+---
+
 ## Session: 2026-03-24 — Full Feature Audit (existing codebase)
 **Last Updated:** 2026-03-24
 
