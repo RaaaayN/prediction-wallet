@@ -7,6 +7,11 @@ kill_switch_drawdown: 0.07
 slippage_equities: 0.001
 slippage_crypto: 0.005
 
+# Per-asset drift thresholds: tighter bands for bonds in conservative portfolio
+per_asset_threshold:
+  TLT: 0.02
+  BND: 0.02
+
 target_allocation:
   AAPL: 0.10
   MSFT: 0.10

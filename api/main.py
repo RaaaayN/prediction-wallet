@@ -42,10 +42,17 @@ async def root():
 
 @app.get("/api/portfolio")
 async def get_portfolio():
-    from config import PORTFOLIO_FILE
+    from config import INITIAL_CAPITAL, PORTFOLIO_FILE
     try:
         with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        # Compute pnl from last history entry (raw JSON doesn't store these fields)
+        history = data.get("history", [])
+        total_value = history[-1]["total_value"] if history else data.get("cash", INITIAL_CAPITAL)
+        pnl_dollars = total_value - INITIAL_CAPITAL
+        data.setdefault("pnl_dollars", pnl_dollars)
+        data.setdefault("pnl_pct", pnl_dollars / INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else 0.0)
+        return data
     except FileNotFoundError:
         return {"error": "Portfolio not initialized. Run: python main.py init"}
 

@@ -25,24 +25,19 @@ services/
   reporting_service.py — ReportingService (PDF)
   gateways.py          — interfaces communes
 
-integrations/mcp/
-  registry.py          — ToolCapabilityRegistry (profils MCP)
-  server.py            — serveur MCP local (local_market_snapshot, local_research_summary)
-
 db/
   schema.py            — DDL: portfolio_snapshots, executions, agent_runs, decision_traces
   repository.py        — save_snapshot, save_execution, save_agent_run, save_decision_trace
 
-dashboard/
-  ui.py                — assembleur Streamlit
-  data.py              — loaders DB
-  backtest.py          — helpers backtest
-
 engine/
   portfolio.py         — compute_weights, compute_drift, compute_portfolio_value
-  orders.py            — generate_rebalance_orders, apply_slippage
-  risk.py              — compute_drawdown, check_kill_switch
-  performance.py       — performance_report, parametric_var, conditional_var
+  orders.py            — generate_rebalance_orders, apply_slippage, min_drift/min_notional
+  risk.py              — compute_drawdown, check_kill_switch, RiskLevel (OK/WARN/HALT)
+  performance.py       — performance_report, VaR (parametric + historical), CVaR, Sortino, Calmar
+  backtest.py          — run_strategy_comparison (threshold / calendar / buy-and-hold)
+
+ui/
+  index.html           — HTML/JS single-page UI (SSE streaming, all tabs)
 ```
 
 ## CLI
@@ -50,21 +45,21 @@ engine/
 ```bash
 python main.py init
 python main.py observe
-python main.py decide --use-mcp local
+python main.py decide
 python main.py execute
 python main.py audit
-python main.py run-cycle --mode simulate --use-mcp local
+python main.py run-cycle --mode simulate
 python main.py report
-streamlit run dashboard_main.py
 pytest tests/ -v
 ```
 
 ## Config & providers
 
 - `AI_PROVIDER=gemini` (défaut) ou `anthropic` — switché via `.env`
-- `MCP_PROFILE=local` ou `none`
 - `EXECUTION_MODE=simulate` ou `paper`
+- `PORTFOLIO_PROFILE=balanced` (défaut) — switché via `.env` ou `--profile` CLI arg
 - `settings.py` + `profiles/*.yaml` sont la source de vérité pour les profils portefeuille
+- `profiles/*.yaml` supporte `per_asset_threshold` pour des bandes de drift par actif
 
 ## Important behavior
 

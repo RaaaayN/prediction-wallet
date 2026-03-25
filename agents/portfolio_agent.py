@@ -138,7 +138,10 @@ class PortfolioAgentService:
     def _get_strategy(self, strategy_name: str):
         if strategy_name == "calendar":
             return CalendarStrategy()
-        return ThresholdStrategy()
+        from portfolio_loader import get_active_profile
+        profile = get_active_profile()
+        per_asset = profile.get("per_asset_threshold") or {}
+        return ThresholdStrategy(per_asset_threshold=per_asset or None)
 
     def observe(self, strategy_name: str = "threshold", execution_mode: str = "simulate", cycle_id: str | None = None) -> CycleObservation:
         cycle_id = cycle_id or str(uuid.uuid4())[:8]

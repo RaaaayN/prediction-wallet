@@ -661,13 +661,6 @@ function renderObservePayload(p) {
     mktHtml += '</tbody></table></div>';
   }
 
-  // Research summary
-  let researchHtml = '';
-  if (mkt.research_summary) {
-    researchHtml = `<div class="trace-section"><h4>Research Summary</h4>
-      <div class="quote-block">${esc(mkt.research_summary)}</div></div>`;
-  }
-
   // Trade plan
   let planHtml = '';
   if (plan.length > 0) {
@@ -692,7 +685,7 @@ function renderObservePayload(p) {
     planHtml = `<div class="trace-section"><h4>Trade Plan</h4><p class="text-sm text-gray-500">No trades required — portfolio within target bands.</p></div>`;
   }
 
-  return killBanner + statsHtml + allocHtml + mktHtml + planHtml + researchHtml;
+  return killBanner + statsHtml + allocHtml + mktHtml + planHtml;
 }
 
 function renderDecidePayload(p) {

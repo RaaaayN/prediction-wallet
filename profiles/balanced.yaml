@@ -7,6 +7,13 @@ kill_switch_drawdown: 0.10
 slippage_equities: 0.001
 slippage_crypto: 0.005
 
+# Per-asset drift thresholds: wider for volatile crypto, tighter for bonds
+per_asset_threshold:
+  BTC-USD: 0.08
+  ETH-USD: 0.08
+  TLT: 0.03
+  BND: 0.03
+
 target_allocation:
   AAPL: 0.12
   MSFT: 0.12
