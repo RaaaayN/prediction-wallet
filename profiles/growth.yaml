@@ -24,3 +24,11 @@ target_allocation:
   BND: 0.10
   BTC-USD: 0.06
   ETH-USD: 0.04
+
+# Hierarchical policy rules (#1 policy-as-code)
+policy:
+  min_confidence: 0.15         # growth profile tolerates more uncertainty
+  stale_data_blocks: false
+  per_ticker_max_fraction:
+    BTC-USD: 0.10              # small crypto allocation — keep individual trades tight
+    ETH-USD: 0.06

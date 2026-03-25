@@ -88,3 +88,38 @@ Added a new **Performance** tab to `ui/index.html` (7th tab, between Cycles and 
 2. **`/api/performance` endpoint is no longer needed**: All performance metrics are now computed client-side. Backend effort saved.
 
 3. **Next UI priority**: With Performance + Backtest + all core tabs implemented, the main remaining work is Streamlit retirement (delete `dashboard/`, `dashboard_main.py`, remove `streamlit` dep). This is a straightforward deletion — no new UI code needed.
+
+---
+
+## Session: 2026-03-25 — Trade history: event_type badges + drift_before/slippage_pct
+**Last Updated:** 2026-03-25
+
+### What Was Done
+
+Updated the executions table in the History tab (`ui/index.html` — `loadHistory()` function).
+
+**Three new data points per row:**
+
+1. **`event_type` badge** (new column after Cycle): resolved client-side by fetching `GET /api/traces?limit=200` in parallel with the existing fetches, building a `cycle_id → event_type` lookup map, then calling `eventTypeBadge()` per row. Badge colors: yellow for "threshold", blue for "calendar", green for "manual", blue for any unknown value, `—` if no trace found. No backend change required.
+
+2. **`drift_before` column** (after Qty): reads `e.drift_before` directly from the executions API response (already a migration column in the `executions` table). Displayed as a signed percentage (+X.X%), color-coded: red if overweight (> +1.5%), green if underweight (< −1.5%), gray otherwise.
+
+3. **`slippage_pct` column** (after Slippage $): reads `e.slippage_pct` directly from the executions API response (migration column). Displayed as 3-decimal percentage (e.g. "0.050%"). Shows `—` if field is null (backward compat with rows created before the migration).
+
+**Table now has 12 columns**: Time | Cycle | Event | Ticker | Action | Qty | Fill Price | Drift Before | Slippage $ | Slippage % | Cost | Status
+
+**New helper added**: `eventTypeBadge(et)` function inserted before `loadPortfolio()`.
+
+### Open Issues
+
+- `event_type` field in `decision_traces` may be empty for older rows (pre-migration). Displays `—` gracefully in those cases.
+- `drift_before` and `slippage_pct` will be `0.0` (not null) for rows written before the migration columns were added — these will show `+0.0%` and `0.000%` rather than `—`. Acceptable.
+
+### Blockers / Dependencies
+
+- (none)
+
+### Recommendations for the Leader
+
+1. Streamlit retirement is the next clean win — `dashboard/`, `dashboard_main.py`, and the `streamlit` dependency can be deleted without any UI rework now that the HTML/JS UI covers all views including Backtest.
+2. Consider adding `event_type` to the `executions` table directly (team-backend) to avoid the extra `/api/traces` fetch in `loadHistory()` and make the join simpler.

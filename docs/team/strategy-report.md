@@ -465,3 +465,431 @@ Currently, a single blocked trade (e.g., missing price data for ETH-USD) causes 
    - Volatility-adjusted drift bands in threshold strategy (Priority 6) — prevents over-trading crypto positions
 
 4. **No cross-agent coordination needed for Phase 1**: All proposed improvements are self-contained within `engine/` and `strategies/`. No backend API changes required. No UI changes required (new metrics will surface automatically in the performance report dict, which the dashboard already consumes).
+
+---
+
+## Session: 2026-03-25 — Feature #6: Correlation/Concentration analysis
+**Last Updated:** 2026-03-25
+**Phase:** 1 (analysis)
+
+### What Was Done
+
+Phase 1 analysis of feature #6 from `docs/team/usecases-report.md` ("Corrélation dynamique + concentration risk"). Reviewed: `engine/portfolio.py`, `engine/risk.py`, `engine/performance.py`, `agents/policies.py`, `agents/models.py`, `config.py`, `profiles/balanced.yaml`.
+
+**Current state — what exists:**
+- `engine/portfolio.py`: computes individual ticker weights, drift, portfolio value — no sector aggregation
+- `engine/risk.py`: drawdown + kill switch only — zero sector awareness
+- `agents/policies.py`: 5 checks (ticker universe, plan consistency, market price, notional cap, trade count) — no concentration limit
+- `config.py`: exposes `TARGET_ALLOCATION` and `CRYPTO_TICKERS` (auto-derived) — no sector map
+- `profiles/balanced.yaml`: tech = 50% (AAPL+MSFT+GOOGL+AMZN+NVDA = 12+12+9+9+8), bonds = 30%, crypto = 20%
+
+**Gap vs. banking practice:**
+The 50% tech concentration is documented in `usecases-report.md` as an unmitigated risk. In a real fund, a 50% single-sector allocation would trigger both a compliance pre-trade check and an investment committee escalation. Current code:
+1. Has no sector classification of any kind
+2. Has no concentration limit in the policy engine
+3. Would allow the LLM to propose additional tech buys even if the portfolio drifted to 55%+ tech
+4. Does not compute pairwise correlation — high tech-sector correlation (AAPL/MSFT/GOOGL/AMZN/NVDA correlated > 0.7 in typical regimes) means effective diversification is lower than 9 tickers implies
+
+### Recommendations
+
+| Priority | Recommendation | Impact | Complexity | File(s) |
+|----------|---------------|--------|------------|---------|
+| 1 | `SECTOR_MAP` + `MAX_SECTOR_CONCENTRATION` constants | H | L | `config.py` |
+| 2 | `compute_sector_exposure` + `concentration_score` functions | H | L | `engine/portfolio.py` |
+| 3 | Concentration soft block in `ExecutionPolicyEngine` | H | M | `agents/policies.py` |
+| 4 | `rolling_correlation` + `avg_pairwise_correlation` standalone utilities | M | L | `engine/performance.py` |
+| 5 | Tests for all new functions | H | M | `tests/test_engine.py` |
+
+### Proposed Implementation Detail
+
+**Priority 1 — `config.py`**
+
+Add as derived constants (like existing `CRYPTO_TICKERS`):
+- `SECTOR_MAP: dict[str, str]` — hardcoded classification for the 9 portfolio tickers: `tech` (5 names), `bonds` (TLT, BND), `crypto` (BTC-USD, ETH-USD)
+- `MAX_SECTOR_CONCENTRATION: float = 0.55` — soft block 5pp above the 50% tech target, avoids false positives during normal drift
+
+**Priority 2 — `engine/portfolio.py`**
+
+- `compute_sector_exposure(weights, sector_map) -> dict[str, float]`: aggregates per-ticker weights into sector buckets; tickers not in map fall to `"other"` (graceful for future profiles)
+- `concentration_score(sector_exposure) -> float`: returns `max(sector_exposure.values())` — the simplest and most auditable metric (avoids HHI complexity at this stage)
+
+**Priority 3 — `agents/policies.py`**
+
+In the per-trade loop, after the notional cap check, add a concentration soft block:
+- Import `SECTOR_MAP`, `MAX_SECTOR_CONCENTRATION` from `config`
+- Import `compute_sector_exposure` from `engine.portfolio`
+- For each **buy** trade: compute projected sector weight = current + `(price * qty) / total_value`
+- If projected > `MAX_SECTOR_CONCENTRATION` → soft block with reason message
+- **Sells are never blocked** — they reduce concentration and must always be allowed
+- Tickers not in `SECTOR_MAP` → no concentration check (backward compatible)
+
+**Priority 4 — `engine/performance.py`**
+
+- `rolling_correlation(returns_df, window=30) -> pd.DataFrame`: correlation matrix over last N periods
+- `avg_pairwise_correlation(corr_matrix) -> float`: mean off-diagonal element — diversification indicator
+- These are standalone utilities; `performance_report` does not need to change (it has no per-ticker returns today)
+
+**Priority 5 — `tests/test_engine.py`**
+
+New test classes:
+- `TestSectorExposure`: balanced portfolio → tech=0.50/bonds=0.30/crypto=0.20; empty weights; unknown ticker → "other"
+- `TestConcentrationScore`: known exposures → correct max; empty dict → 0.0
+- `TestPolicyConcentrationBlock`: buy under limit → allowed; buy pushing tech to 57% → soft blocked; sell on over-concentrated sector → allowed; ticker not in SECTOR_MAP → no block
+- `TestRollingCorrelation`: correlated series → diagonal=1.0; uncorrelated → off-diagonal ≈ 0; empty → empty; avg_pairwise_correlation < 1.0 for mixed portfolio
+
+### Open Issues
+
+- `SECTOR_MAP` is hardcoded for the balanced profile's 9 tickers. Other profiles with different tickers would map unknowns to "other" (graceful degradation, not a blocker).
+- The 55% threshold is a design choice. If daily drift routinely pushes tech to 51–53%, consider raising to 58% to avoid false-positive blocks during normal rebalancing.
+- `rolling_correlation` requires a multi-ticker returns DataFrame. The `engine/` layer has no DB access by design — the caller (backtest runner or a future `market/correlation.py`) must supply it.
+
+### Blockers / Dependencies
+
+- (none) — all changes are self-contained in `engine/`, `agents/policies.py`, and `config.py`. No DB schema changes, no service layer changes, no UI changes required.
+
+### Recommendations for the Leader
+
+1. **Priorities 1+2+3 are a cohesive unit**: sector map → exposure function → policy check. All three together close the documented concentration risk. Each is small; total delta is < 50 lines across 3 files.
+
+2. **Priority 3 (policy block) is the highest-value item**: it prevents the agent from making the tech concentration worse. It's the only change that actively affects execution behavior.
+
+3. **Priority 4 (rolling correlation) is independent**: a standalone utility for future use in strategy comparison and regime detection (#2 in usecases backlog). Can be done in the same session or deferred.
+
+4. **Sequence from usecases-report**: feature #6 (this session) data (`compute_sector_exposure`) is a direct input to future feature #1 (policy-as-code hierarchy), where sector rules can reference live sector exposure. Implement #6 first.
+
+---
+
+## Session: 2026-03-25 — Feature #5: Stress testing analysis
+**Last Updated:** 2026-03-25
+**Phase:** 1 (analysis)
+
+### What Was Done
+
+Phase 1 analysis of feature #5 from `docs/team/usecases-report.md` ("Stress testing par scénarios"). Reviewed: `engine/backtest.py`, `engine/performance.py`, `config.py`.
+
+**Current state — what exists:**
+- `engine/backtest.py` has a single function: `run_strategy_comparison(days=90)` — an in-sample historical backtest comparing threshold / calendar / buy-and-hold strategies using real SQLite market data
+- Output: `cum_ret`, `sharpe`, `max_dd`, `n_trades`, `costs` per strategy
+- Zero scenario/stress testing capability anywhere in the codebase
+- `engine/performance.py` has VaR/CVaR functions that could consume stress-scenario outputs, but no caller exists
+
+**Gap vs. banking practice:**
+In regulated asset management, stress testing is a regulatory requirement (UCITS, AIFMD, Dodd-Frank). Key scenarios that should be covered for this 9-asset portfolio:
+- **COVID March 2020**: equities -35%, crypto -50%, bonds +15% (flight to quality)
+- **GFC Sep-Oct 2008**: equities -45%, bonds +10%
+- **Rate shock 2022**: Fed tightening; growth stocks -30 to -55%, bonds -15 to -25%, crypto -65 to -70%
+- **Concentrated tech selloff**: targeted shock to the 50% tech allocation
+
+The current codebase has no way to ask "what happens to the portfolio if tech drops 40%?" before executing a cycle.
+
+### Recommendations
+
+| Priority | Recommendation | Impact | Complexity | File(s) |
+|----------|---------------|--------|------------|---------|
+| 1 | `STRESS_SCENARIOS` constant — 4 predefined crisis scenarios | H | L | `engine/backtest.py` |
+| 2 | `run_stress_test(portfolio, prices, scenarios)` function | H | M | `engine/backtest.py` |
+| 3 | Tests for stress test function | H | M | `tests/test_engine.py` |
+
+### Proposed Implementation Detail
+
+**Priority 1 — `STRESS_SCENARIOS` in `engine/backtest.py`**
+
+Module-level constant — same file as `run_strategy_comparison`, consistent with the existing "backtest/scenario" theme:
+
+```python
+STRESS_SCENARIOS: list[dict] = [
+    {
+        "name": "covid_march_2020",
+        "description": "COVID-19 crash (Feb-Mar 2020): equities -35%, crypto -50%, bonds +15%",
+        "shocks": {
+            "AAPL": -0.35, "MSFT": -0.35, "GOOGL": -0.35, "AMZN": +0.20, "NVDA": -0.40,
+            "TLT": +0.15, "BND": +0.08,
+            "BTC-USD": -0.50, "ETH-USD": -0.60,
+        },
+    },
+    {
+        "name": "gfc_2008",
+        "description": "Global Financial Crisis (Sep-Oct 2008): equities -45%, bonds +10%",
+        "shocks": {
+            "AAPL": -0.45, "MSFT": -0.45, "GOOGL": -0.45, "AMZN": -0.40, "NVDA": -0.55,
+            "TLT": +0.10, "BND": +0.08,
+            "BTC-USD": -0.60, "ETH-USD": -0.65,
+        },
+    },
+    {
+        "name": "rate_shock_2022",
+        "description": "Fed rate shock 2022: growth equities -30 to -55%, bonds -15%, crypto -65%",
+        "shocks": {
+            "AAPL": -0.25, "MSFT": -0.30, "GOOGL": -0.40, "AMZN": -0.50, "NVDA": -0.55,
+            "TLT": -0.25, "BND": -0.15,
+            "BTC-USD": -0.65, "ETH-USD": -0.70,
+        },
+    },
+    {
+        "name": "tech_selloff",
+        "description": "Concentrated tech selloff: tech -40%, bonds flat, crypto -20%",
+        "shocks": {
+            "AAPL": -0.40, "MSFT": -0.40, "GOOGL": -0.40, "AMZN": -0.40, "NVDA": -0.50,
+            "TLT": 0.0, "BND": 0.0,
+            "BTC-USD": -0.20, "ETH-USD": -0.25,
+        },
+    },
+]
+```
+
+Design decisions:
+- AMZN gets `+0.20` in COVID scenario (e-commerce beneficiary — reflects actual market behavior)
+- Crypto shocks use conservative estimates for GFC 2008 since BTC/ETH were nascent; numbers are stress-test plausible, not historical
+- `rate_shock_2022` is particularly relevant for this portfolio: bonds AND equities both lose (no diversification benefit from bonds), while crypto crashes — the worst outcome for a 50% tech / 20% crypto portfolio
+
+**Priority 2 — `run_stress_test` in `engine/backtest.py`**
+
+```python
+def run_stress_test(
+    portfolio: dict,
+    prices: dict[str, float],
+    scenarios: list[dict] | None = None,
+    kill_switch_threshold: float = KILL_SWITCH_DRAWDOWN,
+) -> list[dict]:
+    """Apply shock scenarios to the current portfolio and measure impact.
+
+    Pure simulation — no trades, no I/O. Each scenario applies multiplicative
+    price shocks and reports the resulting portfolio value, P&L, and whether
+    the kill switch would be triggered.
+
+    Args:
+        portfolio: dict with 'positions' (ticker→qty) and 'cash'
+        prices: ticker → current market price
+        scenarios: list of scenario dicts (default: STRESS_SCENARIOS)
+        kill_switch_threshold: positive drawdown threshold (default from config)
+
+    Returns:
+        List of result dicts, one per scenario, each containing:
+          scenario, description, portfolio_value_before, portfolio_value_after,
+          pnl_dollars, pnl_pct, kill_switch_triggered, weights_after
+    """
+```
+
+Implementation logic:
+1. Compute `current_value = cash + sum(qty * price)` from baseline
+2. For each scenario: apply `shocked_price = price * (1 + shock)` per ticker
+3. Compute `stressed_value`, `pnl_dollars`, `pnl_pct`
+4. Compute `weights_after` from stressed positions (for visualization)
+5. Check `kill_switch_triggered = pnl_pct <= -kill_switch_threshold`
+6. No trades executed, no slippage — pure mark-to-market shock
+
+Key design decisions:
+- Tickers not in `shocks` dict get `shock=0.0` (unchanged) — safe default
+- Cash is unaffected by price shocks (correct for nominal cash)
+- Returns a list, one dict per scenario — easy to serialize and display in UI
+- `kill_switch_threshold` defaults to `KILL_SWITCH_DRAWDOWN` from config (currently 10%)
+- No I/O, no LLM — pure engine function, consistent with the `engine/` pattern
+
+**Expected outputs for balanced profile ($100k) under each scenario:**
+
+| Scenario | Est. P&L | Est. Loss% | Kill switch? |
+|----------|----------|-----------|--------------|
+| COVID March 2020 | ~-$20k | -20% | Yes (>10%) |
+| GFC 2008 | ~-$30k | -30% | Yes |
+| Rate shock 2022 | ~-$35k | -35% | Yes |
+| Tech selloff | ~-$22k | -22% | Yes |
+
+All 4 scenarios trigger the kill switch on the current balanced profile. This is valuable information for policy tuning — the 10% kill switch threshold is below the minimum crisis drawdown for this asset mix.
+
+**Priority 3 — Tests in `tests/test_engine.py`**
+
+New class `TestStressTest`:
+- Zero shocks → no value change, `pnl_pct=0.0`
+- Known shock (-50% on all equities) → computable expected loss
+- Kill switch triggered when portfolio drops > 10%
+- Kill switch not triggered for small shocks (-5%)
+- Cash unaffected by price shocks
+- Ticker not in shocks → uses 0.0 (no change)
+- Custom scenarios override defaults
+- Empty portfolio → empty results list
+- `weights_after` sums to approximately 1.0 for non-empty portfolio
+
+### Open Issues
+
+- **GFC 2008 crypto numbers are extrapolated** — BTC/ETH did not exist meaningfully in 2008. Stress test plausible figures are used (-60/-65%), but these should be reviewed. Consider adding a "note" field to scenario dicts to flag this.
+- **No time dimension**: current design is a single-step shock (instantaneous). A multi-step path simulation (e.g., gradual 30-day drawdown) would be more realistic but is a future extension (Priority 3 from the usecases backlog).
+- **No rebalancing during stress**: `run_stress_test` applies shocks to a static portfolio without any rebalancing between steps. A future extension could run `generate_rebalance_orders` during the scenario to see if systematic rebalancing would have helped (buy-the-dip effect in COVID).
+
+### Blockers / Dependencies
+
+- (none) — `run_stress_test` is pure computation (no I/O, no market data fetch). It takes the current portfolio snapshot and current prices as inputs — both already available at every cycle step.
+
+### Recommendations for the Leader
+
+1. **Highest-value finding from this analysis**: all 4 crisis scenarios trigger the 10% kill switch for the current balanced profile. This is strategically important — if the kill switch fires in a routine market correction, it locks the agent out of recovery trades. The team should decide whether to raise the kill switch threshold or introduce a WARN-level (7%) that reduces position size without fully halting.
+
+2. **Zero production risk**: `run_stress_test` is a read-only function. It does not execute trades, write to DB, or call any external service. It can be called at any point in the cycle (e.g., at the start of the observe phase) as a background diagnostic.
+
+3. **Direct dependency chain**: feature #5 (stress testing) → feature #1 (policy-as-code hierarchy). Once stress scenarios can be run programmatically, policy rules can reference scenario outcomes: "if the COVID scenario results in a kill switch trigger, require human confirmation before any crypto buy."
+
+4. **Sequence**: implement `STRESS_SCENARIOS` + `run_stress_test` first, then wire it into the PDF report (section 7: "Stress Test Results") and eventually into the HTML UI as a new tab.
+
+---
+
+## Session: 2026-03-25 — Feature #3: Dynamic position sizing analysis
+**Last Updated:** 2026-03-25
+**Phase:** 1 (analysis)
+
+### What Was Done
+
+Phase 1 analysis of feature #3 from `docs/team/usecases-report.md` ("Dynamic position sizing — inverse-vol weighting"). Reviewed: `engine/orders.py`, `engine/portfolio.py`, `strategies/base.py`, `strategies/threshold.py`, `strategies/calendar.py`, `agents/models.py`, `agents/portfolio_agent.py` (observe flow), `profiles/balanced.yaml`.
+
+**Current state — what exists:**
+- `generate_rebalance_orders` targets exact fixed weights from `TARGET_ALLOCATION` — no volatility input
+- `TickerMetrics.volatility_30d` is computed in `portfolio_agent.observe()` via `PortfolioMetrics().ticker_metrics(df)` and stored in `MarketSnapshot.metrics`
+- The volatility data is surfaced in the PDF report (section 4, Risk Metrics) and dashboard, but **never used to adjust position sizing**
+- `strategy.get_trades(portfolio, prices)` only receives portfolio and prices — no way for the strategy to access volatility at order-generation time
+- `profiles/balanced.yaml` allocates 50% to tech: NVDA (8%) has the same dollar-weight treatment as TLT (15%), despite NVDA having ~4–5× the annualized vol of TLT
+
+**Gap vs. banking practice:**
+Fixed-weight allocation ignores risk per dollar invested. Under the current scheme:
+- NVDA at 8% with ~55% annualized vol contributes ~15% of total portfolio variance
+- TLT at 15% with ~12% annualized vol contributes ~6% of total portfolio variance
+- BTC-USD at 12% with ~75% vol contributes ~35% of total portfolio variance
+
+The portfolio's effective risk is dominated by crypto and high-vol tech, not by the nominal weights. Inverse-volatility weighting corrects this: it allocates capital inversely proportional to each asset's volatility so that each position contributes an equal amount of risk to the portfolio.
+
+**Expected impact of pure inverse-vol weighting on the balanced profile** (approximate):
+
+| Sector | Fixed target | Inv-vol weight | Change |
+|--------|-------------|---------------|--------|
+| Tech (ex-NVDA) | 42% | ~32% | −10pp |
+| NVDA | 8% | ~3% | −5pp |
+| Bonds | 30% | ~55% | +25pp |
+| Crypto | 20% | ~5% | −15pp |
+
+The shift is large — pure inverse-vol significantly increases bonds exposure and slashes crypto. A `blend` parameter allowing partial adjustment (e.g., 30% inverse-vol + 70% fixed) provides a gentler, configurable transition.
+
+### Recommendations
+
+| Priority | Recommendation | Impact | Complexity | File(s) |
+|----------|---------------|--------|------------|---------|
+| 1 | `compute_inverse_vol_weights(volatilities, target, blend)` in `engine/portfolio.py` | H | L | `engine/portfolio.py` |
+| 2 | `volatilities` kwarg in `BaseStrategy._compute_trade_orders` | H | L | `strategies/base.py` |
+| 3 | `volatilities` kwarg in `ThresholdStrategy.get_trades` + `CalendarStrategy.get_trades` | H | L | `strategies/threshold.py`, `strategies/calendar.py` |
+| 4 | Tests for all new functions | H | M | `tests/test_engine.py` |
+
+Note: wiring `volatilities` into `portfolio_agent.py:observe()` is a team-backend task (see Blockers below). The strategy-side changes are fully self-contained and backward compatible.
+
+### Proposed Implementation Detail
+
+**Priority 1 — `compute_inverse_vol_weights` in `engine/portfolio.py`**
+
+```python
+def compute_inverse_vol_weights(
+    volatilities: dict[str, float],
+    target: dict[str, float],
+    blend: float = 1.0,
+) -> dict[str, float]:
+    """Compute inverse-volatility weighted target allocation.
+
+    Each asset's weight is proportional to 1/volatility, so higher-vol assets
+    receive less capital. The blend parameter controls the mix between pure
+    inverse-vol and the original fixed target allocation.
+
+    Args:
+        volatilities: ticker → annualized 30-day volatility (e.g. 0.25 = 25%)
+        target: base fixed-weight target (used as fallback for missing vols
+                and to define the ticker universe)
+        blend: 0.0 = pure fixed target (no adjustment), 1.0 = pure inverse-vol.
+               Values in between interpolate linearly.
+
+    Returns:
+        ticker → adjusted weight (sums to 1.0)
+
+    Notes:
+        - Tickers missing from volatilities (or vol ≤ 0) fall back to a
+          reference vol of 0.20 (20% — typical equity baseline) to avoid
+          division by zero while remaining conservative.
+        - Only tickers present in target are included in the output.
+    """
+    _REF_VOL_FALLBACK = 0.20
+    inv_vols = {
+        ticker: 1.0 / max(volatilities.get(ticker, 0.0), _REF_VOL_FALLBACK)
+        for ticker in target
+    }
+    total_inv = sum(inv_vols.values())
+    if total_inv <= 0:
+        return dict(target)
+    inv_vol_weights = {t: iv / total_inv for t, iv in inv_vols.items()}
+    if blend >= 1.0:
+        return inv_vol_weights
+    if blend <= 0.0:
+        return dict(target)
+    return {
+        t: blend * inv_vol_weights[t] + (1.0 - blend) * target.get(t, 0.0)
+        for t in target
+    }
+```
+
+Key design decisions:
+- `blend=1.0` is pure inverse-vol; `blend=0.0` is unchanged fixed weights — fully backward compatible at the default
+- Fallback to `0.20` ref vol (not zero) prevents division-by-zero and is a reasonable equity default
+- Output always sums to 1.0 (both pure modes and blended)
+- Ticker universe is defined by `target` — no new tickers are introduced
+
+**Priority 2 — `BaseStrategy._compute_trade_orders` extension**
+
+Add `volatilities: dict[str, float] | None = None` and `vol_blend: float = 1.0`:
+
+```python
+def _compute_trade_orders(
+    self,
+    portfolio: dict,
+    prices: dict,
+    min_drift: float = 0.0,
+    volatilities: dict[str, float] | None = None,
+    vol_blend: float = 1.0,
+) -> list[dict]:
+    target = self.target
+    if volatilities:
+        from engine.portfolio import compute_inverse_vol_weights
+        target = compute_inverse_vol_weights(volatilities, self.target, blend=vol_blend)
+    return _generate_orders(portfolio, prices, target, min_qty=0.001, min_drift=min_drift)
+```
+
+**Priority 3 — Strategy `get_trades` extensions**
+
+`ThresholdStrategy.get_trades` and `CalendarStrategy.get_trades` each get `volatilities: dict[str, float] | None = None, vol_blend: float = 1.0` kwargs and pass them through to `_compute_trade_orders`. The existing call sites in `portfolio_agent.py` pass no volatilities → `None` → fixed weights (zero behavioral change without opt-in).
+
+**Priority 4 — Tests in `tests/test_engine.py`**
+
+New class `TestInverseVolWeights`:
+- Known vols → verify higher-vol asset gets less weight than lower-vol asset
+- All equal vols → weights equal to 1/N for each ticker
+- `blend=0.0` → returns original target unchanged
+- `blend=1.0` → pure inverse-vol
+- `blend=0.5` → each weight is midpoint between fixed and inverse-vol
+- Missing vol for a ticker → falls back to 0.20 reference vol
+- Zero vol → treated as reference vol (no division by zero)
+- Output always sums to 1.0
+
+New class `TestStrategyVolBand`:
+- `ThresholdStrategy.get_trades` without volatilities → same result as before
+- `ThresholdStrategy.get_trades` with volatilities (blend=1.0) → higher-vol ticker gets smaller target weight → rebalance orders differ from fixed-weight baseline
+
+### Open Issues
+
+- **`blend` default value requires a product decision**: `blend=1.0` (pure inverse-vol by default) is the theoretically correct value but would shift the portfolio significantly (bonds from 30% → ~55%). Recommended: set `blend=0.5` or `blend=0.3` as the default for gradual adoption, or expose it as a profile YAML parameter.
+- **`vol_blend` not in profiles**: adding `vol_blend` to `profiles/*.yaml` (like `drift_threshold` and `per_asset_threshold`) would make it configurable per profile without code changes. This is a settings change that team-backend should coordinate.
+- **Threshold strategy per-asset bands**: when inverse-vol weights are used, the `per_asset_threshold` bands in `profiles/*.yaml` were set relative to fixed targets. They remain valid as tolerance bands, but their percentages may no longer reflect the same drift significance at the new vol-adjusted targets.
+
+### Blockers / Dependencies
+
+- **team-backend** — must wire `volatilities` from `MarketSnapshot.metrics` into `strategy.get_trades(portfolio, prices, volatilities=vols)` in `portfolio_agent.py:observe()`. Without this, the feature exists in `strategies/` but is never activated in the live agent cycle.
+- Specifically: `vols = {t: m.volatility_30d for t, m in observation.market.metrics.items() if m.volatility_30d > 0}` at line 173 of `portfolio_agent.py`.
+
+### Recommendations for the Leader
+
+1. **Strategy-side changes are zero-risk** (Priorities 1–3): `compute_inverse_vol_weights` is a new pure function; the `volatilities` kwarg defaults to `None` everywhere — existing behavior is unchanged until team-backend wires it in.
+
+2. **Blend decision is a product choice**: pure inverse-vol would slash crypto from 20% → ~5% target. For a portfolio that was intentionally designed with 20% crypto, this may not be desired. Recommend `blend=0.3` as a starting point (gentle tilt toward risk parity without abandoning the intent of the target allocation).
+
+3. **Add `vol_blend` to profiles**: this is the cleanest way to make it configurable per profile (risk-tolerant profile can use blend=0.0; conservative profile can use blend=0.7). Requires a `settings.py` + profile YAML update — coordinate with team-backend.
+
+4. **Sequence**: feature #3 is listed last in the usecases implementation sequence because it changes how quantities are computed — the deepest behavioral change. It should be implemented after features #6 (concentration) and #1 (policy-as-code), which both depend on stable rebalancing logic.

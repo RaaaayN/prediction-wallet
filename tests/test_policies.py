@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from agents.models import TradeDecision, TradeProposal
-from agents.policies import ExecutionPolicyEngine
+from agents.policies import ExecutionPolicyEngine, PolicyConfig
 from config import MAX_ORDER_FRACTION_OF_PORTFOLIO, MAX_TRADES_PER_CYCLE, TARGET_ALLOCATION
 
 _VALID_TICKER = next(iter(TARGET_ALLOCATION))  # first ticker in universe (e.g. AAPL)
@@ -169,3 +169,187 @@ def test_no_trades_is_approved():
     assert result.approved is True
     assert result.allowed_trades == []
     assert result.violations == []
+
+
+# ── PolicyConfig tests ─────────────────────────────────────────────────────────
+
+def test_policy_config_defaults_are_neutral():
+    """Default PolicyConfig disables all optional checks."""
+    cfg = PolicyConfig()
+    assert cfg.min_confidence == 0.0
+    assert cfg.stale_data_blocks is False
+    assert cfg.per_ticker_max_fraction == {}
+
+
+def test_policy_config_from_profile_parses_values():
+    """PolicyConfig.from_profile() reads the policy: block correctly."""
+    profile = {
+        "policy": {
+            "min_confidence": 0.3,
+            "stale_data_blocks": True,
+            "per_ticker_max_fraction": {"BTC-USD": 0.15},
+        }
+    }
+    cfg = PolicyConfig.from_profile(profile)
+    assert cfg.min_confidence == 0.3
+    assert cfg.stale_data_blocks is True
+    assert cfg.per_ticker_max_fraction == {"BTC-USD": 0.15}
+
+
+def test_policy_config_from_profile_missing_policy_section():
+    """Profile without policy: section produces neutral defaults."""
+    cfg = PolicyConfig.from_profile({"target_allocation": {}})
+    assert cfg.min_confidence == 0.0
+    assert cfg.stale_data_blocks is False
+
+
+# ── Layer 1: market context tests ─────────────────────────────────────────────
+
+def test_low_confidence_soft_blocks_all_trades():
+    """When decision.confidence < min_confidence, all trades are soft-blocked."""
+    cfg = PolicyConfig(min_confidence=0.5)
+    eng = ExecutionPolicyEngine(cfg)
+    trade = _make_trade()
+    obs = _make_obs(prices={_VALID_TICKER: _VALID_PRICE}, trade_plan=[trade])
+    decision = _make_decision([trade])
+    decision = decision.model_copy(update={"confidence": 0.2})
+
+    result = eng.evaluate(decision, obs, "simulate")
+
+    assert result.approved is True   # soft block, not hard abort
+    assert result.allowed_trades == []
+    assert len(result.blocked_trades) == 1
+    assert result.blocked_trades[0].ticker == _VALID_TICKER
+    assert "confidence" in result.blocked_trades[0].rejection_reason.lower()
+    assert result.violations == []
+
+
+def test_sufficient_confidence_passes_through():
+    """When decision.confidence >= min_confidence, the market context check passes."""
+    cfg = PolicyConfig(min_confidence=0.3)
+    eng = ExecutionPolicyEngine(cfg)
+    trade = _make_trade()
+    obs = _make_obs(prices={_VALID_TICKER: _VALID_PRICE}, trade_plan=[trade])
+    decision = _make_decision([trade])
+    decision = decision.model_copy(update={"confidence": 0.8})
+
+    result = eng.evaluate(decision, obs, "simulate")
+
+    assert result.approved is True
+    assert len(result.allowed_trades) == 1
+
+
+def test_stale_data_blocks_all_trades_when_enabled():
+    """stale_data_blocks=True + data_freshness='stale' → all trades soft-blocked."""
+    cfg = PolicyConfig(stale_data_blocks=True)
+    eng = ExecutionPolicyEngine(cfg)
+    trade = _make_trade()
+    obs = _make_obs(prices={_VALID_TICKER: _VALID_PRICE}, trade_plan=[trade])
+    decision = _make_decision([trade])
+    decision = decision.model_copy(update={"data_freshness": "stale"})
+
+    result = eng.evaluate(decision, obs, "simulate")
+
+    assert result.approved is True
+    assert result.allowed_trades == []
+    assert "stale" in result.blocked_trades[0].rejection_reason.lower()
+
+
+def test_stale_data_does_not_block_when_disabled():
+    """stale_data_blocks=False (default) ignores data_freshness."""
+    cfg = PolicyConfig(stale_data_blocks=False)
+    eng = ExecutionPolicyEngine(cfg)
+    trade = _make_trade()
+    obs = _make_obs(prices={_VALID_TICKER: _VALID_PRICE}, trade_plan=[trade])
+    decision = _make_decision([trade])
+    decision = decision.model_copy(update={"data_freshness": "stale"})
+
+    result = eng.evaluate(decision, obs, "simulate")
+
+    assert result.approved is True
+    assert len(result.allowed_trades) == 1
+
+
+def test_partial_freshness_does_not_block():
+    """data_freshness='partial' never triggers stale_data_blocks (only 'stale' does)."""
+    cfg = PolicyConfig(stale_data_blocks=True)
+    eng = ExecutionPolicyEngine(cfg)
+    trade = _make_trade()
+    obs = _make_obs(prices={_VALID_TICKER: _VALID_PRICE}, trade_plan=[trade])
+    decision = _make_decision([trade])
+    decision = decision.model_copy(update={"data_freshness": "partial"})
+
+    result = eng.evaluate(decision, obs, "simulate")
+
+    assert result.approved is True
+    assert len(result.allowed_trades) == 1
+
+
+def test_layer1_soft_block_does_not_prevent_hard_violations():
+    """Kill switch (hard violation) takes priority over low confidence (soft block)."""
+    cfg = PolicyConfig(min_confidence=0.9)
+    eng = ExecutionPolicyEngine(cfg)
+    trade = _make_trade()
+    obs = _make_obs(kill_switch=True, prices={_VALID_TICKER: _VALID_PRICE}, trade_plan=[trade])
+    decision = _make_decision([trade])
+    decision = decision.model_copy(update={"confidence": 0.1})
+
+    result = eng.evaluate(decision, obs, "simulate")
+
+    assert result.approved is False  # hard violation wins
+    assert any(v.code == "kill_switch_active" for v in result.violations)
+
+
+# ── Layer 2: per-ticker cap tests ─────────────────────────────────────────────
+
+def test_per_ticker_cap_blocks_oversized_trade():
+    """A trade within the global cap but exceeding a per-ticker cap is soft-blocked."""
+    tight_cap = 0.001  # 0.1% — tiny cap
+    cfg = PolicyConfig(per_ticker_max_fraction={_VALID_TICKER: tight_cap})
+    eng = ExecutionPolicyEngine(cfg)
+    trade = _make_trade(quantity=10.0)  # 10 shares × $150 = $1500 = 1.5% > 0.1%
+    obs = _make_obs(prices={_VALID_TICKER: _VALID_PRICE}, trade_plan=[trade])
+
+    result = eng.evaluate(_make_decision([trade]), obs, "simulate")
+
+    assert result.approved is True
+    assert result.allowed_trades == []
+    assert "per-ticker" in result.blocked_trades[0].rejection_reason.lower()
+
+
+def test_per_ticker_cap_passes_small_trade():
+    """A trade within both global and per-ticker caps is allowed."""
+    cfg = PolicyConfig(per_ticker_max_fraction={_VALID_TICKER: 0.10})  # 10% cap
+    eng = ExecutionPolicyEngine(cfg)
+    # 1 share × $150 = $150 = 0.15% of $100k — well within 10%
+    trade = _make_trade(quantity=1.0)
+    obs = _make_obs(prices={_VALID_TICKER: _VALID_PRICE}, trade_plan=[trade])
+
+    result = eng.evaluate(_make_decision([trade]), obs, "simulate")
+
+    assert result.approved is True
+    assert len(result.allowed_trades) == 1
+
+
+def test_per_ticker_cap_only_applies_to_configured_tickers():
+    """Tickers without a per-ticker cap entry are evaluated against global cap only."""
+    cfg = PolicyConfig(per_ticker_max_fraction={"MSFT": 0.001})  # tight cap on MSFT only
+    eng = ExecutionPolicyEngine(cfg)
+    trade = _make_trade(ticker=_VALID_TICKER, quantity=1.0)  # AAPL, no per-ticker cap
+    obs = _make_obs(prices={_VALID_TICKER: _VALID_PRICE}, trade_plan=[trade])
+
+    result = eng.evaluate(_make_decision([trade]), obs, "simulate")
+
+    assert result.approved is True
+    assert len(result.allowed_trades) == 1
+
+
+def test_profile_policy_config_from_all_profiles():
+    """PolicyConfig.from_profile loads without error for all four YAML profiles."""
+    from portfolio_loader import load_profile
+    for name in ("balanced", "conservative", "growth", "crypto_heavy"):
+        profile = load_profile(name)
+        cfg = PolicyConfig.from_profile(profile)
+        assert isinstance(cfg.min_confidence, float)
+        assert isinstance(cfg.stale_data_blocks, bool)
+        assert isinstance(cfg.per_ticker_max_fraction, dict)

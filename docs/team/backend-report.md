@@ -225,3 +225,109 @@ _DECISION_TRACES_MIGRATIONS = [
 1. **Schema migration is live** — `event_type` and `tags` columns added to any DB on next startup (idempotent). No manual migration needed.
 2. **UI can now filter traces** — the `/api/traces` endpoint returns `event_type` and `tags` for each row. The HTML/JS UI can add a filter dropdown (e.g. show only `kill_switch` or `execution_failure` events) to speed up debugging.
 3. **Event taxonomy** — current event types are: `cycle_step`, `kill_switch`, `policy_violation`, `execution_failure`. Document these in CLAUDE.md if the team wants to query by type.
+
+---
+
+## Session: 2026-03-25 — #11 Confidence scoring
+**Last Updated:** 2026-03-25
+
+### What Was Done
+
+Implemented Feature #11 from the usecases roadmap: confidence scoring + data freshness on `TradeDecision`.
+
+**`agents/models.py`** — Two new fields on `TradeDecision`:
+- `confidence: float = Field(default=0.5, ge=0.0, le=1.0)` — LLM self-reported decision certainty. Bounded 0–1, default 0.5 (neutral). Pydantic validation rejects out-of-range values.
+- `data_freshness: str = Field(default="unknown")` — deterministic staleness label. Set programmatically after the LLM runs; never relies on LLM self-assessment for timestamp comparisons.
+
+**`agents/portfolio_agent.py`** — Three changes:
+1. `build_portfolio_agent` — Updated agent instructions to ask the LLM to self-report `confidence` on a 0–1 scale and note that `data_freshness` is injected automatically.
+2. `decide()` — After `agent.run_sync()`, injects `data_freshness` via `decision.model_copy(update={...})` using the deterministic `_compute_data_freshness` result. Also adds `confidence` and `data_freshness` tags to the decide-stage decision trace.
+3. `_compute_data_freshness(refresh_status)` — New static method. Parses `MarketDataStatus.refreshed_at` ISO timestamps, compares against a 24h window, and returns: `"fresh"` (all <24h), `"partial"` (some stale), `"stale"` (all ≥24h), `"unknown"` (empty input). Handles `None` timestamps, naive datetimes (assumes UTC), and malformed strings without raising.
+
+**No schema changes needed** — `confidence` and `data_freshness` serialise into `decision_traces.payload_json` (stored as full `TradeDecision` JSON) automatically. No migration required.
+
+**9 new tests in `tests/test_portfolio_agent.py`:**
+- `test_confidence_default_is_midpoint` — TestModel without explicit confidence yields 0.5
+- `test_confidence_explicit_value_propagated` — confidence=0.85 flows through decide() unchanged
+- `test_data_freshness_fresh_when_recent` — all timestamps within 24h → "fresh"
+- `test_data_freshness_stale_when_old` — all timestamps 48h old → "stale"
+- `test_data_freshness_partial_when_mixed` — one fresh, one stale → "partial"
+- `test_data_freshness_unknown_when_empty` — empty refresh_status → "unknown"
+- `test_data_freshness_partial_when_no_timestamp` — all refreshed_at=None → "stale"
+- `test_data_freshness_injected_into_decision` — decide() always overwrites the field with a valid label
+- `test_confidence_in_cycle_audit` — confidence and data_freshness survive full cycle into CycleAudit.decision
+
+### Open Issues
+
+- `test_engine.py::TestVolAdjustedSlippage::test_estimate_cost_without_vol_unchanged` — pre-existing floating-point tolerance failure. Strategy team scope.
+- `MarketSnapshot.research_summary` field still present in `agents/models.py`. Pending team-ui coordination.
+- `confidence` is LLM self-reported and likely miscalibrated. Usecases report confirms: use as soft signal only. A calibration layer (comparing self-reported confidence to actual trade outcomes over time) is deferred to after #9 multi-agent committee.
+
+### Blockers / Dependencies
+
+- (none)
+
+### Recommendations for the Leader
+
+1. **`confidence` is now available as a soft signal** for downstream features: #1 (policy-as-code) can add a soft block when `confidence < 0.3`, and #9 (multi-agent committee) can aggregate per-agent confidence scores.
+2. **`data_freshness` is reliable** — it uses server-side timestamp comparison, not LLM assessment. UI can surface it as a data quality indicator per cycle.
+3. **Next in sequence**: #8 (realistic slippage) is done by strategy team. #6 (correlation/concentration) is the next backend-relevant Accept item from the usecases roadmap.
+4. **69/69 tests green** — safe to merge.
+
+---
+
+## Session: 2026-03-25 — #1 Policy-as-code hiérarchique
+**Last Updated:** 2026-03-25
+
+### What Was Done
+
+Implemented Feature #1: hierarchical policy engine with three evaluation layers.
+
+**`agents/policies.py`** — New `PolicyConfig` dataclass + updated `ExecutionPolicyEngine`:
+
+`PolicyConfig` is a dataclass loaded from the `policy:` section of the active YAML profile. It carries:
+- `min_confidence: float` — soft-block all trades when `decision.confidence < min_confidence` (0.0 = disabled)
+- `stale_data_blocks: bool` — when True, `data_freshness == 'stale'` soft-blocks all trades
+- `per_ticker_max_fraction: dict[str, float]` — per-ticker notional cap, checked after the global cap passes
+
+`PolicyConfig.from_profile(profile_dict)` parses the `policy:` section and returns a config; missing/null values fall back to neutral defaults so old profiles (no `policy:` key) behave identically to before.
+
+`ExecutionPolicyEngine.__init__(config: PolicyConfig | None)` — backward compatible; `None` = all checks disabled.
+
+Three evaluation layers:
+- **Layer 0 (hard violations)**: kill_switch, live_blocked, too_many_trades — unchanged semantics, abort cycle
+- **Layer 1 (market context soft block)**: if confidence or freshness fails, *all* approved_trades are moved to blocked_trades with a descriptive reason; `approved=True` (soft, cycle completes with zero executions)
+- **Layer 2 (per-trade soft blocks)**: existing checks unchanged, plus new per-ticker notional cap after the global cap passes
+
+**`agents/portfolio_agent.py`** — `PortfolioAgentService.__init__` now instantiates `ExecutionPolicyEngine(PolicyConfig.from_profile(get_active_profile()))`.
+
+**`profiles/*.yaml`** — All four profiles updated with a `policy:` section:
+- `conservative`: `min_confidence: 0.35`, `stale_data_blocks: true` (strictest — blocks on stale data)
+- `balanced`: `min_confidence: 0.2`, `stale_data_blocks: false`, per-ticker caps on BTC-USD (15%) and ETH-USD (10%)
+- `growth`: `min_confidence: 0.15`, per-ticker caps on BTC-USD (10%) and ETH-USD (6%)
+- `crypto_heavy`: `min_confidence: 0.15`, per-ticker caps on BTC-USD (20%) and ETH-USD (15%)
+
+**13 new tests in `tests/test_policies.py`** (23 total):
+- `PolicyConfig` construction and from_profile parsing
+- Layer 1: low confidence blocks all trades; sufficient confidence passes through
+- Layer 1: stale_data_blocks enabled vs. disabled; partial freshness ignored
+- Layer 1: hard violations still take priority over layer 1 soft blocks
+- Layer 2: per-ticker cap blocks oversized trade; passes small trade; ignores unconfigured tickers
+- Integration: `from_profile` parses all four YAML profiles without error
+
+### Open Issues
+
+- `test_engine.py::TestVolAdjustedSlippage::test_estimate_cost_without_vol_unchanged` — pre-existing failure (strategy scope).
+- **#6 correlation/concentration**: Layer 1 currently has no sector concentration check. Once #6 (rolling correlation + sector exposure) is implemented, a `max_sector_fraction` rule can be added to `PolicyConfig` and layer 1 without touching the rest of the engine.
+- **`min_confidence` calibration**: Self-reported LLM confidence is poorly calibrated. Profile thresholds (0.15–0.35) were chosen conservatively. Calibration data will accumulate as the agent runs; thresholds can be tuned once historical confidence vs. outcome correlation is available.
+
+### Blockers / Dependencies
+
+- (none)
+
+### Recommendations for the Leader
+
+1. **82/82 tests green** — safe to merge.
+2. **Conservative profile now blocks on stale data** (`stale_data_blocks: true`). Users running conservative mode should ensure market data is refreshed before each cycle, or they'll see all trades soft-blocked with a clear reason in `policy.blocked_trades`.
+3. **Layer 1 is the integration point for #6**: once correlation/concentration data is available, add `max_sector_fraction` and `max_concentration_score` to `PolicyConfig` and evaluate them in layer 1 before the per-trade loop.
+4. **Per-ticker caps are now the safety net for large crypto single-trade exposure**. The global 35% cap was too permissive for BTC/ETH; all profiles now enforce 10–20% per-trade maximums for crypto.

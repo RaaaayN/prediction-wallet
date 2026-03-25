@@ -24,3 +24,11 @@ target_allocation:
   BND: 0.15
   BTC-USD: 0.12
   ETH-USD: 0.08
+
+# Hierarchical policy rules (#1 policy-as-code)
+policy:
+  min_confidence: 0.2          # soft-block all trades when agent confidence < 0.2
+  stale_data_blocks: false     # stale data logs a warning but does not block execution
+  per_ticker_max_fraction:
+    BTC-USD: 0.15              # stricter than global 35% cap for volatile crypto
+    ETH-USD: 0.10

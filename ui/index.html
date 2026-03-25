@@ -984,6 +984,16 @@ function statCard(label, value, colorClass) {
   </div>`;
 }
 
+// ── event type badge ───────────────────────────────────────────────────────
+function eventTypeBadge(et) {
+  if (!et) return '<span class="text-gray-600 text-xs">—</span>';
+  const cls = et === 'threshold' ? 'warn'
+            : et === 'calendar'  ? 'info'
+            : et === 'manual'    ? 'ok'
+            : 'info';
+  return badge(et, cls);
+}
+
 // ── portfolio ──────────────────────────────────────────────────────────────
 async function loadPortfolio() {
   const [pf, pos] = await Promise.all([
@@ -1097,10 +1107,21 @@ async function loadPortfolio() {
 
 // ── history chart ──────────────────────────────────────────────────────────
 async function loadHistory() {
-  const [snaps, execs] = await Promise.all([
+  const [snaps, execs, traces] = await Promise.all([
     fetch(`${API}/api/snapshots?limit=120`).then(r=>r.json()),
     fetch(`${API}/api/executions?limit=50`).then(r=>r.json()),
+    fetch(`${API}/api/traces?limit=200`).then(r=>r.json()),
   ]);
+
+  // Build cycle_id → event_type lookup from traces
+  const eventTypeMap = {};
+  if (Array.isArray(traces)) {
+    for (const t of traces) {
+      if (t.event_type && !eventTypeMap[t.cycle_id]) {
+        eventTypeMap[t.cycle_id] = t.event_type;
+      }
+    }
+  }
 
   const labels = snaps.map(s => s.timestamp ? s.timestamp.slice(0,16).replace('T',' ') : '');
   const values = snaps.map(s => s.total_value);
@@ -1180,25 +1201,35 @@ async function loadHistory() {
   let html = `<table><thead><tr>
     <th class="text-left">Time</th>
     <th class="text-left">Cycle</th>
+    <th class="text-left">Event</th>
     <th class="text-left">Ticker</th>
     <th class="text-left">Action</th>
     <th class="text-right">Qty</th>
     <th class="text-right">Fill Price</th>
+    <th class="text-right">Drift Before</th>
+    <th class="text-right">Slippage $</th>
+    <th class="text-right">Slippage %</th>
     <th class="text-right">Cost</th>
-    <th class="text-right">Slippage</th>
     <th class="text-left">Status</th>
   </tr></thead><tbody>`;
   for (const e of execs) {
     const ok = e.success === 1;
+    const evType = eventTypeMap[e.cycle_id] || null;
+    const driftPct = (e.drift_before || 0) * 100;
+    const driftCls = driftPct > 1.5 ? 'text-red-400' : driftPct < -1.5 ? 'text-green-400' : 'text-gray-400';
+    const slipPct = e.slippage_pct != null ? (e.slippage_pct * 100).toFixed(3) + '%' : '—';
     html += `<tr>
       <td class="text-xs text-gray-500">${esc((e.timestamp||'').slice(0,16))}</td>
       <td class="font-mono text-xs text-gray-400">${esc(e.cycle_id||'')}</td>
+      <td>${eventTypeBadge(evType)}</td>
       <td class="font-mono font-semibold">${esc(e.ticker)}</td>
       <td class="${e.action==='buy'?'text-green-400':'text-red-400'} font-semibold uppercase text-xs">${esc(e.action)}</td>
       <td class="text-right font-mono">${fmt(e.quantity,4)}</td>
       <td class="text-right">${fmtUSD(e.fill_price)}</td>
-      <td class="text-right">${fmtUSD(e.cost)}</td>
+      <td class="text-right ${driftCls}">${driftPct >= 0 ? '+' : ''}${driftPct.toFixed(1)}%</td>
       <td class="text-right text-yellow-400">${fmtUSD(e.slippage)}</td>
+      <td class="text-right text-yellow-400 text-xs">${slipPct}</td>
+      <td class="text-right">${fmtUSD(e.cost)}</td>
       <td>${ok ? badge('OK','ok') : badge('ERR','err')}</td>
     </tr>`;
   }

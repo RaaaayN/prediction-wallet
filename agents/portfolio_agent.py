@@ -24,7 +24,7 @@ from agents.models import (
     TradeDecision,
     TradeProposal,
 )
-from agents.policies import ExecutionPolicyEngine, build_risk_status
+from agents.policies import ExecutionPolicyEngine, PolicyConfig, build_risk_status
 from config import AGENT_BACKEND, AI_PROVIDER, CLAUDE_MODEL, GEMINI_MODEL, TARGET_ALLOCATION
 from engine.portfolio import compute_portfolio_value
 from execution.kill_switch import KillSwitch
@@ -136,7 +136,8 @@ class PortfolioAgentService:
             execution_service=self.execution_service,
         )
         self.audit_repository = AuditRepositoryAdapter()
-        self.policy_engine = ExecutionPolicyEngine()
+        from portfolio_loader import get_active_profile
+        self.policy_engine = ExecutionPolicyEngine(PolicyConfig.from_profile(get_active_profile()))
         self.agent = agent
 
     def _get_strategy(self, strategy_name: str):
