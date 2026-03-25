@@ -287,6 +287,8 @@ class PortfolioAgentService:
             executions=executions,
             report_path=report_path,
             observability=observation.observability,
+            errors=[v.message for v in policy.violations]
+                   + [e.error for e in executions if not e.success and e.error],
         )
         self.audit_repository.save_cycle_audit(self._audit_to_legacy_dict(audit))
         self.audit_repository.save_decision_trace(

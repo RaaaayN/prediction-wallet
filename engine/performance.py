@@ -68,7 +68,7 @@ def sharpe_ratio(returns: pd.Series, rf: float = RISK_FREE_RATE) -> float:
 
     Args:
         returns: daily return series
-        rf: annual risk-free rate (default 2%)
+        rf: annual risk-free rate (default: RISK_FREE_RATE from config)
 
     Returns:
         Sharpe ratio
@@ -297,13 +297,9 @@ def performance_report(
 
     cum_ret_gross = cumulative_return(history)
     # Net: subtract total costs from final value
-    net_history = history.copy()
-    if len(net_history) >= 1:
-        net_final = history[-1]["total_value"] - costs
-        net_start = history[0]["total_value"]
-        cum_ret_net = (net_final - net_start) / net_start if net_start > 0 else 0.0
-    else:
-        cum_ret_net = cum_ret_gross
+    net_final = history[-1]["total_value"] - costs
+    net_start = history[0]["total_value"]
+    cum_ret_net = (net_final - net_start) / net_start if net_start > 0 else 0.0
 
     report = {
         "cumulative_return_gross": cum_ret_gross,

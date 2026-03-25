@@ -466,3 +466,85 @@ Le git log ne montre aucun commit de team-strategy. Les changements sont probabl
 
 ### Stale Reports
 (aucun)
+
+---
+
+## Lead Report: 2026-03-25 10:30
+**Last Updated:** 2026-03-25 10:30
+
+### Context
+
+Backend Phase 2 + Strategy Phase 2 complétés. UI Performance tab ajoutée. Bilan complet post-implémentation.
+
+### Team Status
+
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-25 10:00 — Policy split + backend hardening (phase 2) | 2026-03-25 10:00 | Current |
+| ui | 2026-03-24 17:00 — Performance tab + Portfolio improvements | 2026-03-24 17:00 | Current |
+| strategy | 2026-03-25 — Phase 2 implementation (P6+P7+cleanup) | 2026-03-25 | Current |
+| usecases | 2026-03-24 — Full Feature Audit | 2026-03-24 | Current |
+
+### Ce qui a été accompli (Backend Phase 2 + Strategy Phase 2)
+
+**Backend Phase 2:**
+| Item | Changement | Fichier |
+|------|-----------|---------|
+| P4 | init-once par chemin DB (`_DB_INITIALIZED: set[str]`) | `db/repository.py` |
+| P1 | Policy hard/soft violation split — hard bloque tout, soft bloque seulement le trade | `agents/policies.py` |
+| P2 | `CycleAudit.errors` désormais peuplé (violations + exécutions échouées) | `agents/portfolio_agent.py` |
+| P5 | SQL déduplication — tous les endpoints API passent par `db/repository.py` | `api/main.py`, `db/repository.py` |
+| P3 | SSE subprocess cleanup sur disconnect client (`proc_ref` pattern) | `api/runner.py` |
+| Tests | 10 nouveaux tests `tests/test_policies.py` + mise à jour `test_portfolio_agent.py` | 81 tests verts |
+
+**Strategy Phase 2:**
+| Item | Changement | Fichier |
+|------|-----------|---------|
+| P6 | `per_asset_threshold` dans `ThresholdStrategy` (BTC/ETH → 8%, bonds → 3%) | `strategies/threshold.py` |
+| P7 | `min_drift` guard dans `CalendarStrategy` (skip si portefeuille déjà équilibré) | `strategies/calendar.py` |
+| Boundary | `check_kill_switch`: `< -threshold` → `<= -threshold` | `engine/risk.py` |
+| min_notional | Skip trades < $10 dans `generate_rebalance_orders` | `engine/orders.py` |
+| Tests | 13 nouveaux tests dans `tests/test_engine.py` (43 total) | |
+
+**UI:**
+| Item | Changement | Fichier |
+|------|-----------|---------|
+| Performance tab | Sharpe, Sortino, Calmar, VaR 95/99, CVaR, Rolling Sharpe chart | `ui/index.html` |
+
+### ⚠️ Point critique : 23 fichiers non commités
+
+`git status` montre 23 fichiers modifiés non commités. Risque de perte si la session se ferme. **Commiter immédiatement avant toute autre action.**
+
+### Cross-Agent Dependencies
+
+- **backend → ui** (toujours ouvert) : `MarketSnapshot.research_summary` champ zombie (`""`) dans `agents/models.py`. Team-ui doit confirmer que le champ n'est pas rendu dans l'UI avant suppression.
+- **backend → models** : `run_cycle`/`run_cycle_dict` — vérifier cohérence du threading du paramètre `mcp_profile` (backend open issue #2).
+- **strategy → config** : `per_asset_threshold` dans `ThresholdStrategy` devrait être câblé depuis `profiles/*.yaml`. Actuellement hardcodé dans la classe.
+- **backend → ui** : `pf.pnl_dollars`/`pf.pnl_pct` — confirmer présence dans `portfolio.json` ou calculer dans `/api/portfolio`.
+
+### Top 3 Priorities
+
+1. **[maintenant]** — Commiter tous les changements non commités — 23 fichiers depuis plusieurs sessions. Backend Phase 2, Strategy Phase 2, UI Performance tab, tests. Risque de perte critique si la session se ferme avant commit.
+
+2. **[team-backend]** — Câbler `per_asset_threshold` depuis `profiles/*.yaml` — Les thresholds par actif (BTC 8%, bonds 3%) sont hardcodés dans `ThresholdStrategy`. Pour qu'ils soient configurables par profil, ils doivent venir de `profiles/*.yaml` via `settings.py`. Changement de config pur, aucun impact logique.
+
+3. **[team-backend ou team-ui]** — Supprimer `MarketSnapshot.research_summary` + confirmer `pnl_dollars`/`pnl_pct` — Deux items de coordination backend/ui ouverts depuis la session 17:00. Le champ `research_summary` toujours `""` trompe les développeurs. Les champs pnl font afficher `--` dans l'UI.
+
+### Identified Risks
+
+- **23 fichiers non commités** : risque immédiat et critique. Toute fermeture de session perd le travail.
+- **`per_asset_threshold` hardcodé** : thresholds BTC/ETH/bonds pas configurables par profil. Contourne le système `profiles/*.yaml`.
+- **`MarketSnapshot.research_summary` champ zombie** : confusion pour les futurs développeurs, déjà vide depuis Phase 1.
+- **`run_cycle` mcp_profile threading** : backend open issue #2 non encore vérifié.
+
+### Recommended Action Plan
+
+**Immédiatement :**
+1. `git add` + `git commit` — tous les changements backend Phase 2 + strategy Phase 2 + UI Performance tab.
+
+**Ensuite :**
+2. `/team-backend` — câbler `per_asset_threshold` dans `profiles/*.yaml` + vérifier `pnl_dollars`/`pnl_pct` + supprimer `research_summary` après confirmation UI.
+3. `/team-ui` — confirmer que `research_summary` n'est pas rendu, puis coordonner la suppression avec backend.
+
+### Stale Reports
+(aucun — tous les agents ont des sessions 2026-03-24 ou 2026-03-25)

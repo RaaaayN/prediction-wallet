@@ -13,9 +13,13 @@ from engine.portfolio import compute_drift, compute_portfolio_value, compute_wei
 from engine.risk import compute_drawdown
 from utils.time import utc_now_iso
 
+_DB_INITIALIZED: set[str] = set()
+
 
 def _connect(db_path: str = MARKET_DB) -> sqlite3.Connection:
-    init_db(db_path)
+    if db_path not in _DB_INITIALIZED:
+        init_db(db_path)
+        _DB_INITIALIZED.add(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
@@ -221,6 +225,34 @@ def get_decision_traces(limit: int = 100, cycle_id: str | None = None, db_path: 
                     "SELECT * FROM decision_traces ORDER BY created_at DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def get_snapshots(limit: int = 60, db_path: str = MARKET_DB) -> list[dict]:
+    try:
+        with _connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM portfolio_snapshots ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return list(reversed([dict(r) for r in rows]))  # ASC for timeline charts
+    except Exception:
+        return []
+
+
+def get_latest_positions(db_path: str = MARKET_DB) -> list[dict]:
+    try:
+        with _connect(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT p.* FROM positions p
+                JOIN portfolio_snapshots s ON p.snapshot_id = s.id
+                WHERE s.id = (SELECT MAX(id) FROM portfolio_snapshots)
+                ORDER BY p.ticker ASC
+                """,
+            ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []

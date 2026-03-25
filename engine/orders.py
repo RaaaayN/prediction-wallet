@@ -9,6 +9,7 @@ def generate_rebalance_orders(
     target: dict[str, float],
     min_qty: float = 0.001,
     min_drift: float = 0.0,
+    min_notional: float = 10.0,
 ) -> list[dict]:
     """Generate buy/sell orders to restore target weights.
 
@@ -18,6 +19,7 @@ def generate_rebalance_orders(
         target: ticker → target weight
         min_qty: minimum order quantity to include
         min_drift: skip order if |current_weight - target_weight| <= min_drift (tolerance band)
+        min_notional: skip order if quantity × price < min_notional in dollars (default $10)
 
     Returns:
         List of {"action", "ticker", "quantity", "reason"}
@@ -43,6 +45,8 @@ def generate_rebalance_orders(
             continue
         quantity = abs(delta_value) / price
         if quantity < min_qty:
+            continue
+        if quantity * price < min_notional:
             continue
         action = "buy" if delta_value > 0 else "sell"
         reason = (

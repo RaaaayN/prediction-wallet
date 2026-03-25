@@ -10,7 +10,7 @@ class ExecutionPolicyEngine:
     """Validate structured trade decisions before execution."""
 
     def evaluate(self, decision: TradeDecision, observation, mode: str) -> PolicyEvaluation:
-        violations: list[PolicyViolation] = []
+        hard_violations: list[PolicyViolation] = []
         allowed: list[TradeProposal] = []
         blocked: list[RejectedTrade] = []
 
@@ -19,20 +19,23 @@ class ExecutionPolicyEngine:
             for trade in observation.trade_plan
         }
 
+        # Hard violations: abort entire cycle, no trade evaluation
         if observation.risk.kill_switch_active:
-            violations.append(PolicyViolation(code="kill_switch_active", message="Kill switch is active."))
-
+            hard_violations.append(PolicyViolation(code="kill_switch_active", message="Kill switch is active."))
         if mode == "live":
-            violations.append(PolicyViolation(code="live_blocked", message="Live mode is not enabled."))
-
+            hard_violations.append(PolicyViolation(code="live_blocked", message="Live mode is not enabled."))
         if len(decision.approved_trades) > MAX_TRADES_PER_CYCLE:
-            violations.append(
+            hard_violations.append(
                 PolicyViolation(
                     code="too_many_trades",
                     message=f"Decision exceeds max trades per cycle ({MAX_TRADES_PER_CYCLE}).",
                 )
             )
 
+        if hard_violations:
+            return PolicyEvaluation(approved=False, allowed_trades=[], blocked_trades=[], violations=hard_violations)
+
+        # Soft blocks: per-trade evaluation — blocked trades do not prevent other trades from executing
         total_value = observation.portfolio.total_value
         for trade in decision.approved_trades:
             key = (trade.action, trade.ticker, round(float(trade.quantity), 6))
@@ -63,8 +66,7 @@ class ExecutionPolicyEngine:
                 continue
             allowed.append(trade)
 
-        approved = not violations and len(blocked) == 0
-        return PolicyEvaluation(approved=approved, allowed_trades=allowed, blocked_trades=blocked, violations=violations)
+        return PolicyEvaluation(approved=True, allowed_trades=allowed, blocked_trades=blocked, violations=[])
 
 
 def build_risk_status(drawdown: float, kill_switch_active: bool, execution_mode: str, mcp_required: bool) -> RiskStatus:

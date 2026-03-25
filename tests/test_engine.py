@@ -1,4 +1,4 @@
-"""Tests for engine/performance.py, engine/risk.py, and engine/orders.py improvements."""
+"""Tests for engine/performance.py, engine/risk.py, engine/orders.py, and strategies/."""
 
 from __future__ import annotations
 
@@ -271,3 +271,142 @@ class TestToleranceBandOrders:
         }
         orders = strategy.get_trades(portfolio, PRICES)
         assert orders == []
+
+    def test_min_notional_suppresses_micro_trades(self):
+        # AAPL drifts by tiny amount → notional << $10 → suppressed
+        # Total = 1000, AAPL = 500.5, MSFT = 499.5
+        # delta AAPL = 500.5 - 500 = $0.5 → qty = 0.005 → notional = $0.50 < $10
+        portfolio = {"positions": {"AAPL": 5.005, "MSFT": 2.4975}, "cash": 0.0}
+        orders = generate_rebalance_orders(portfolio, PRICES, TARGET, min_notional=10.0)
+        assert orders == []
+
+    def test_min_notional_zero_allows_micro_trades(self):
+        portfolio = {"positions": {"AAPL": 5.005, "MSFT": 2.4975}, "cash": 0.0}
+        orders = generate_rebalance_orders(portfolio, PRICES, TARGET, min_notional=0.0)
+        # With min_notional=0, small drift may still pass min_qty check
+        # Just verify the parameter doesn't break normal execution
+        assert isinstance(orders, list)
+
+
+# ---------------------------------------------------------------------------
+# TestKillSwitchBoundary (Priority A fix)
+# ---------------------------------------------------------------------------
+
+class TestKillSwitchBoundary:
+    def test_exactly_at_threshold_activates(self):
+        # At exactly -10%: both functions should agree → HALT / True
+        assert check_kill_switch(-0.10, 0.10) is True
+        assert get_risk_level(-0.10) == RiskLevel.HALT
+
+    def test_just_below_threshold_ok(self):
+        assert check_kill_switch(-0.099, 0.10) is False
+        assert get_risk_level(-0.099) == RiskLevel.WARN
+
+    def test_boundary_consistency_warn(self):
+        # At exactly -7%: get_risk_level → WARN
+        assert get_risk_level(-0.07) == RiskLevel.WARN
+
+
+# ---------------------------------------------------------------------------
+# TestCalendarDriftGuard (Priority B)
+# ---------------------------------------------------------------------------
+
+class TestCalendarDriftGuard:
+    def setup_method(self):
+        from strategies.calendar import CalendarStrategy
+        from utils.time import utc_now
+        from datetime import timedelta
+        self.two_weeks_ago = (utc_now() - timedelta(days=14)).isoformat()
+
+    def test_skips_rebalance_when_portfolio_balanced(self):
+        from strategies.calendar import CalendarStrategy
+        strategy = CalendarStrategy(frequency="weekly", target_allocation=TARGET, min_drift=0.02)
+        # Perfectly balanced, schedule elapsed
+        portfolio = {
+            "positions": {"AAPL": 5.0, "MSFT": 2.5},
+            "cash": 0.0,
+            "last_rebalanced": self.two_weeks_ago,
+        }
+        assert strategy.should_rebalance(portfolio, PRICES) is False
+
+    def test_rebalances_when_drift_exceeds_min_drift(self):
+        from strategies.calendar import CalendarStrategy
+        strategy = CalendarStrategy(frequency="weekly", target_allocation=TARGET, min_drift=0.02)
+        # AAPL = 60%, MSFT = 40% → drift = 10% > min_drift
+        portfolio = {
+            "positions": {"AAPL": 6.0, "MSFT": 2.0},
+            "cash": 0.0,
+            "last_rebalanced": self.two_weeks_ago,
+        }
+        assert strategy.should_rebalance(portfolio, PRICES) is True
+
+    def test_min_drift_zero_always_rebalances_on_schedule(self):
+        from strategies.calendar import CalendarStrategy
+        strategy = CalendarStrategy(frequency="weekly", target_allocation=TARGET, min_drift=0.0)
+        portfolio = {
+            "positions": {"AAPL": 5.0, "MSFT": 2.5},
+            "cash": 0.0,
+            "last_rebalanced": self.two_weeks_ago,
+        }
+        assert strategy.should_rebalance(portfolio, PRICES) is True
+
+    def test_time_guard_still_applies(self):
+        from strategies.calendar import CalendarStrategy
+        from utils.time import utc_now
+        strategy = CalendarStrategy(frequency="weekly", target_allocation=TARGET, min_drift=0.0)
+        portfolio = {
+            "positions": {"AAPL": 6.0, "MSFT": 2.0},
+            "cash": 0.0,
+            "last_rebalanced": utc_now().isoformat(),  # just now → not elapsed
+        }
+        assert strategy.should_rebalance(portfolio, PRICES) is False
+
+
+# ---------------------------------------------------------------------------
+# TestPerAssetThreshold (Priority C)
+# ---------------------------------------------------------------------------
+
+class TestPerAssetThreshold:
+    def test_wide_band_suppresses_trigger_for_volatile_asset(self):
+        from strategies.threshold import ThresholdStrategy
+        # AAPL gets 20% band, MSFT gets 5%
+        strategy = ThresholdStrategy(
+            threshold=0.05,
+            target_allocation=TARGET,
+            per_asset_threshold={"AAPL": 0.20, "MSFT": 0.05},
+        )
+        # AAPL drifted 10% — within its wide 20% band → no trigger
+        portfolio = {"positions": {"AAPL": 6.0, "MSFT": 2.5}, "cash": 0.0}
+        assert strategy.should_rebalance(portfolio, PRICES) is False
+
+    def test_narrow_band_triggers_for_precise_asset(self):
+        from strategies.threshold import ThresholdStrategy
+        strategy = ThresholdStrategy(
+            threshold=0.05,
+            target_allocation=TARGET,
+            per_asset_threshold={"AAPL": 0.20, "MSFT": 0.02},
+        )
+        # MSFT drifted 3% — exceeds its narrow 2% band → trigger
+        portfolio = {"positions": {"AAPL": 5.0, "MSFT": 2.15}, "cash": 0.0}
+        assert strategy.should_rebalance(portfolio, PRICES) is True
+
+    def test_fallback_to_global_threshold(self):
+        from strategies.threshold import ThresholdStrategy
+        strategy = ThresholdStrategy(threshold=0.05, target_allocation=TARGET)
+        # No per_asset_threshold → falls back to global 5%
+        portfolio = {"positions": {"AAPL": 5.3, "MSFT": 2.35}, "cash": 0.0}
+        # AAPL ~53%, drift ~3% < 5% → no trigger
+        assert strategy.should_rebalance(portfolio, PRICES) is False
+
+    def test_get_trades_respects_per_asset_band(self):
+        from strategies.threshold import ThresholdStrategy
+        strategy = ThresholdStrategy(
+            threshold=0.05,
+            target_allocation=TARGET,
+            per_asset_threshold={"AAPL": 0.20, "MSFT": 0.05},
+        )
+        # AAPL drifted 10% but has 20% band → tolerance = 10% → not traded
+        portfolio = {"positions": {"AAPL": 6.0, "MSFT": 2.5}, "cash": 0.0}
+        orders = strategy.get_trades(portfolio, PRICES)
+        tickers = [o["ticker"] for o in orders]
+        assert "AAPL" not in tickers

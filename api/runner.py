@@ -25,12 +25,15 @@ def _run_and_enqueue(
     env: dict,
     queue: asyncio.Queue,
     loop: asyncio.AbstractEventLoop,
+    proc_ref: list,
 ) -> None:
     """Blocking worker: runs the subprocess and pushes lines into the queue.
 
     Executed inside a ThreadPoolExecutor so the event loop is never blocked.
     Each item placed on the queue is either a ``str`` line or the ``_DONE``
     sentinel carrying the integer return code as a second element.
+    proc_ref is populated with the Popen handle before blocking on stdout so
+    the async generator can terminate the process on client disconnect.
     """
     proc = subprocess.Popen(
         cmd,
@@ -39,6 +42,7 @@ def _run_and_enqueue(
         cwd=str(PROJECT_ROOT),
         env=env,
     )
+    proc_ref.append(proc)  # expose handle before blocking on stdout
     assert proc.stdout is not None
     for raw in proc.stdout:
         line = raw.decode("utf-8", errors="replace").rstrip()
@@ -57,17 +61,27 @@ async def stream_command(args: list[str], env_extras: dict | None = None) -> Asy
     cmd = [sys.executable] + args
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
+    proc_ref: list[subprocess.Popen] = []
 
     # Launch the blocking subprocess reader in a thread pool so the event loop
     # is free to handle other requests while we wait for output.
-    loop.run_in_executor(None, _run_and_enqueue, cmd, env, queue, loop)
+    loop.run_in_executor(None, _run_and_enqueue, cmd, env, queue, loop, proc_ref)
 
-    while True:
-        item = await queue.get()
-        if isinstance(item, tuple) and item[0] is _DONE:
-            yield f"data: {json.dumps({'exit': item[1]})}\n\n"
-            break
-        yield f"data: {json.dumps({'line': item})}\n\n"
+    try:
+        while True:
+            item = await queue.get()
+            if isinstance(item, tuple) and item[0] is _DONE:
+                yield f"data: {json.dumps({'exit': item[1]})}\n\n"
+                break
+            yield f"data: {json.dumps({'line': item})}\n\n"
+    finally:
+        # Terminate the subprocess if the client disconnects mid-stream.
+        # proc_ref may be empty if the generator closes before the thread starts.
+        if proc_ref:
+            try:
+                proc_ref[0].terminate()
+            except OSError:
+                pass
 
 
 def build_cycle_args(

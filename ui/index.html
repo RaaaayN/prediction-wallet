@@ -94,6 +94,7 @@
   <button class="tab-btn py-3 text-sm" onclick="showTab('history', this)">History</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('traces', this)">Agent Trace</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('runs', this)">Cycles</button>
+  <button class="tab-btn py-3 text-sm" onclick="showTab('perf', this)">Performance</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('backtest', this)">Backtest</button>
 </nav>
 
@@ -260,6 +261,73 @@
   </div>
 </div>
 
+<!-- ═══════════════ PERFORMANCE TAB ═══════════════ -->
+<div id="tab-perf" class="hidden">
+  <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Performance Metrics</h2>
+      <p class="text-xs text-gray-500 mt-1">Computed from portfolio snapshots and execution history</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-gray-400">Period:</label>
+      <select id="perf-days" class="text-xs">
+        <option value="30">30d</option>
+        <option value="60">60d</option>
+        <option value="90" selected>90d</option>
+        <option value="180">180d</option>
+        <option value="365">365d</option>
+      </select>
+      <button class="btn btn-primary text-xs" onclick="loadPerf()">Refresh</button>
+    </div>
+  </div>
+
+  <div id="perf-no-data" class="hidden text-sm text-gray-500 mb-4 card p-4">
+    Not enough snapshot data for the selected period. Run more cycles first.
+  </div>
+
+  <!-- Returns -->
+  <p class="text-xs text-gray-600 uppercase tracking-wider mb-2 font-semibold">Returns</p>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+    <div class="card p-4"><div class="stat-label">Gross Return</div><div id="perf-cum-ret" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Net Return</div><div id="perf-net-ret" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Annualized</div><div id="perf-ann-ret" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Volatility (ann.)</div><div id="perf-vol" class="stat-value yellow">--</div></div>
+  </div>
+
+  <!-- Risk-Adjusted -->
+  <p class="text-xs text-gray-600 uppercase tracking-wider mb-2 font-semibold">Risk-Adjusted</p>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+    <div class="card p-4"><div class="stat-label">Sharpe Ratio</div><div id="perf-sharpe" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Sortino Ratio</div><div id="perf-sortino" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Calmar Ratio</div><div id="perf-calmar" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Max Drawdown</div><div id="perf-max-dd" class="stat-value red">--</div></div>
+  </div>
+
+  <!-- VaR -->
+  <p class="text-xs text-gray-600 uppercase tracking-wider mb-2 font-semibold">Value at Risk — 1-day, dollar-denominated</p>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+    <div class="card p-4"><div class="stat-label">Param VaR 95%</div><div id="perf-pvar95" class="stat-value yellow">--</div></div>
+    <div class="card p-4"><div class="stat-label">Hist VaR 95%</div><div id="perf-hvar95" class="stat-value yellow">--</div></div>
+    <div class="card p-4"><div class="stat-label">CVaR 95%</div><div id="perf-cvar95" class="stat-value red">--</div></div>
+    <div class="card p-4"><div class="stat-label">Hist VaR 99%</div><div id="perf-hvar99" class="stat-value red">--</div></div>
+  </div>
+
+  <!-- Trade Quality -->
+  <p class="text-xs text-gray-600 uppercase tracking-wider mb-2 font-semibold">Trade Quality</p>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+    <div class="card p-4"><div class="stat-label">Total Trades</div><div id="perf-trades" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Hit Ratio</div><div id="perf-hit" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Total Costs</div><div id="perf-costs" class="stat-value yellow">--</div></div>
+    <div class="card p-4"><div class="stat-label">Turnover (ann.)</div><div id="perf-turnover" class="stat-value">--</div></div>
+  </div>
+
+  <!-- Rolling Sharpe Chart -->
+  <div class="card p-4" style="height:260px">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Rolling 30-Day Sharpe</h2>
+    <canvas id="chart-perf-rolling"></canvas>
+  </div>
+</div>
+
 <!-- ═══════════════ BACKTEST TAB ═══════════════ -->
 <div id="tab-backtest" class="hidden">
   <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
@@ -297,6 +365,7 @@ let historyChart = null;
 let drawdownChart = null;
 let allocChart = null;
 let backtestChart = null;
+let perfChart = null;
 let allTraces = [];
 
 // ── tabs ───────────────────────────────────────────────────────────────────
@@ -309,6 +378,7 @@ function showTab(name, btn) {
   if (name === 'history') loadHistory();
   if (name === 'traces') loadTraces();
   if (name === 'runs') loadRuns();
+  if (name === 'perf') loadPerf();
   if (name === 'backtest') loadBacktest();
 }
 
@@ -1211,6 +1281,171 @@ function filterAndGoTraces(cycleId) {
     btn.classList.toggle('active', btn.textContent.trim() === 'Agent Trace');
   });
   loadTraces().then(() => filterTraces());
+}
+
+// ── performance ────────────────────────────────────────────────────────────
+async function loadPerf() {
+  const days = Number(document.getElementById('perf-days').value);
+  const noDataEl = document.getElementById('perf-no-data');
+  noDataEl.classList.add('hidden');
+
+  let snaps, execs;
+  try {
+    [snaps, execs] = await Promise.all([
+      fetch(`${API}/api/snapshots?limit=500`).then(r => r.json()),
+      fetch(`${API}/api/executions?limit=500`).then(r => r.json()),
+    ]);
+  } catch {
+    noDataEl.textContent = 'Failed to load data. Is the API server running?';
+    noDataEl.classList.remove('hidden');
+    return;
+  }
+
+  // Filter snapshots to selected period
+  const cutoff = Date.now() - days * 86_400_000;
+  const history = (Array.isArray(snaps) ? snaps : [])
+    .filter(s => new Date(s.timestamp).getTime() >= cutoff);
+
+  if (history.length < 4) {
+    noDataEl.textContent = 'Not enough snapshot data for this period. Run more cycles first.';
+    noDataEl.classList.remove('hidden');
+    return;
+  }
+
+  const values  = history.map(s => s.total_value);
+  const n       = values.length;
+  const pv      = values[n - 1];  // current portfolio value
+
+  // Daily returns
+  const rets = [];
+  for (let i = 1; i < n; i++) rets.push((values[i] - values[i - 1]) / values[i - 1]);
+
+  // Math helpers
+  const _mean = a => a.reduce((s, x) => s + x, 0) / a.length;
+  const _std  = a => {
+    if (a.length < 2) return 0;
+    const m = _mean(a);
+    return Math.sqrt(a.map(x => (x - m) ** 2).reduce((s, x) => s + x, 0) / a.length);
+  };
+
+  const RF_DAILY = 0.045 / 252;
+  const SQRT252  = Math.sqrt(252);
+
+  // Returns
+  const cum_ret  = (values[n - 1] - values[0]) / values[0];
+  const ann_ret  = Math.pow(1 + cum_ret, 252 / n) - 1;
+  const vol      = _std(rets) * SQRT252;
+  const mean_r   = _mean(rets);
+
+  // Risk-adjusted
+  const sharpe   = _std(rets) > 0 ? (mean_r - RF_DAILY) / _std(rets) * SQRT252 : 0;
+  const neg_rets = rets.filter(r => r < 0);
+  const down_std = neg_rets.length > 1 ? _std(neg_rets) : _std(rets);
+  const sortino  = down_std > 0 ? (mean_r - RF_DAILY) / down_std * SQRT252 : 0;
+
+  let peak = values[0], max_dd = 0;
+  for (const v of values) {
+    if (v > peak) peak = v;
+    const dd = (v - peak) / peak;
+    if (dd < max_dd) max_dd = dd;
+  }
+  const calmar = max_dd !== 0 ? ann_ret / Math.abs(max_dd) : 0;
+
+  // VaR / CVaR
+  const sorted_r   = [...rets].sort((a, b) => a - b);
+  const idx95      = Math.max(0, Math.floor(sorted_r.length * 0.05) - 1);
+  const idx99      = Math.max(0, Math.floor(sorted_r.length * 0.01) - 1);
+  const hvar95     = -sorted_r[idx95] * pv;
+  const hvar99     = -sorted_r[idx99] * pv;
+  const tail95     = sorted_r.slice(0, idx95 + 1);
+  const cvar95     = tail95.length > 0 ? -_mean(tail95) * pv : hvar95;
+  const pvar95     = 1.645 * _std(rets) * pv;
+
+  // Trade quality
+  const trades_all  = Array.isArray(execs) ? execs : [];
+  const n_trades    = trades_all.length;
+  const hit_count   = trades_all.filter(e => e.success === 1 || e.success === true).length;
+  const hit_ratio   = n_trades > 0 ? hit_count / n_trades : null;
+  const total_costs = trades_all.reduce((s, e) => s + Math.abs(e.slippage || e.cost || 0), 0);
+  const trade_vol   = trades_all.reduce((s, e) => s + Math.abs((e.fill_price || 0) * (e.quantity || 0)), 0);
+  const avg_pv      = _mean(values);
+  const turnover    = avg_pv > 0 ? (trade_vol / avg_pv) * (252 / n) : 0;
+  const net_ret     = cum_ret - (total_costs / (values[0] || 1));
+
+  // Populate stat cards
+  const setCard = (id, val, cls) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = val;
+    if (cls) el.className = `stat-value ${cls}`;
+  };
+
+  const retCls = v => v >= 0 ? 'green' : 'red';
+
+  setCard('perf-cum-ret',  fmtPct(cum_ret),  retCls(cum_ret));
+  setCard('perf-net-ret',  fmtPct(net_ret),  retCls(net_ret));
+  setCard('perf-ann-ret',  fmtPct(ann_ret),  retCls(ann_ret));
+  setCard('perf-vol',      fmtPct(vol),      vol > 0.3 ? 'red' : vol > 0.15 ? 'yellow' : '');
+
+  setCard('perf-sharpe',   fmt(sharpe),   sharpe >= 1 ? 'green' : sharpe >= 0 ? '' : 'red');
+  setCard('perf-sortino',  fmt(sortino),  sortino >= 1 ? 'green' : sortino >= 0 ? '' : 'red');
+  setCard('perf-calmar',   fmt(calmar),   calmar >= 1 ? 'green' : calmar >= 0 ? '' : 'red');
+  setCard('perf-max-dd',   fmtPct(max_dd), max_dd < -0.1 ? 'red' : max_dd < -0.05 ? 'yellow' : 'green');
+
+  setCard('perf-pvar95',   fmtUSD(pvar95),  'yellow');
+  setCard('perf-hvar95',   fmtUSD(hvar95),  'yellow');
+  setCard('perf-cvar95',   fmtUSD(cvar95),  'red');
+  setCard('perf-hvar99',   fmtUSD(hvar99),  'red');
+
+  setCard('perf-trades',   n_trades,                                  'blue');
+  setCard('perf-hit',      hit_ratio != null ? fmtPct(hit_ratio) : '--', hit_ratio != null ? retCls(hit_ratio - 0.5) : '');
+  setCard('perf-costs',    fmtUSD(total_costs),                       'yellow');
+  setCard('perf-turnover', fmtPct(turnover),                          '');
+
+  // Rolling 30-day Sharpe chart
+  const WIN = 30;
+  const rollingLabels = [];
+  const rollingValues = [];
+  for (let i = WIN; i < rets.length; i++) {
+    const window = rets.slice(i - WIN, i);
+    const s = _std(window) > 0 ? (_mean(window) - RF_DAILY) / _std(window) * SQRT252 : 0;
+    rollingLabels.push(history[i + 1]?.timestamp?.slice(0, 16).replace('T', ' ') || '');
+    rollingValues.push(parseFloat(s.toFixed(3)));
+  }
+
+  const ctxPerf = document.getElementById('chart-perf-rolling');
+  if (perfChart) { perfChart.destroy(); perfChart = null; }
+  if (rollingValues.length > 0) {
+    perfChart = new Chart(ctxPerf, {
+      type: 'line',
+      data: {
+        labels: rollingLabels,
+        datasets: [{
+          label: 'Rolling Sharpe (30d)',
+          data: rollingValues,
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.07)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.2,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#8b949e', maxTicksLimit: 8, font: { size: 11 } }, grid: { color: '#21262d' } },
+          y: {
+            ticks: { color: '#8b949e', font: { size: 11 } },
+            grid: { color: '#21262d' },
+            afterDataLimits: axis => { axis.min = Math.min(axis.min, -0.5); },
+          }
+        }
+      }
+    });
+  }
 }
 
 // ── backtest ───────────────────────────────────────────────────────────────

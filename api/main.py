@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -26,30 +25,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-def _db_path() -> str:
-    from config import MARKET_DB
-    return MARKET_DB
-
-
-def _connect() -> sqlite3.Connection:
-    from db.schema import init_db
-    path = _db_path()
-    init_db(path)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def _rows(query: str, params: tuple = ()) -> list[dict]:
-    try:
-        with _connect() as conn:
-            return [dict(r) for r in conn.execute(query, params).fetchall()]
-    except Exception as exc:
-        return [{"error": str(exc)}]
 
 
 # ── static UI ─────────────────────────────────────────────────────────────────
@@ -77,27 +52,21 @@ async def get_portfolio():
 
 @app.get("/api/snapshots")
 async def get_snapshots(limit: int = Query(60, ge=1, le=500)):
-    rows = _rows(
-        "SELECT * FROM portfolio_snapshots ORDER BY timestamp DESC LIMIT ?",
-        (limit,),
-    )
-    return list(reversed(rows))
+    from db.repository import get_snapshots as _get_snapshots
+    return _get_snapshots(limit=limit)
 
 
 @app.get("/api/runs")
 async def get_runs(limit: int = Query(20, ge=1, le=200)):
-    return _rows(
-        "SELECT * FROM agent_runs ORDER BY timestamp DESC LIMIT ?",
-        (limit,),
-    )
+    from db.repository import get_agent_runs
+    return get_agent_runs(limit=limit)
 
 
 @app.get("/api/executions")
 async def get_executions(limit: int = Query(50, ge=1, le=500)):
-    return _rows(
-        "SELECT * FROM executions ORDER BY timestamp DESC LIMIT ?",
-        (limit,),
-    )
+    from db.repository import get_executions as _get_executions
+    df = _get_executions(limit=limit)
+    return df.to_dict(orient="records") if not df.empty else []
 
 
 @app.get("/api/traces")
@@ -105,41 +74,24 @@ async def get_traces(
     limit: int = Query(100, ge=1, le=500),
     cycle_id: str | None = Query(None),
 ):
-    if cycle_id:
-        return _rows(
-            "SELECT * FROM decision_traces WHERE cycle_id = ? ORDER BY created_at ASC LIMIT ?",
-            (cycle_id, limit),
-        )
-    return _rows(
-        "SELECT * FROM decision_traces ORDER BY created_at DESC LIMIT ?",
-        (limit,),
-    )
+    from db.repository import get_decision_traces
+    traces = get_decision_traces(limit=limit, cycle_id=cycle_id)
+    return list(reversed(traces)) if cycle_id else traces  # cycle view: ASC; global: DESC
 
 
 @app.get("/api/positions")
 async def get_positions(cycle_id: str | None = Query(None)):
     if cycle_id:
-        return _rows(
-            """
-            SELECT p.* FROM positions p
-            JOIN portfolio_snapshots s ON p.snapshot_id = s.id
-            WHERE s.cycle_id = ? ORDER BY p.ticker ASC
-            """,
-            (cycle_id,),
-        )
-    return _rows(
-        """
-        SELECT p.* FROM positions p
-        JOIN portfolio_snapshots s ON p.snapshot_id = s.id
-        WHERE s.id = (SELECT MAX(id) FROM portfolio_snapshots)
-        ORDER BY p.ticker ASC
-        """,
-    )
+        from db.repository import get_positions_by_cycle
+        return get_positions_by_cycle(cycle_id=cycle_id)
+    from db.repository import get_latest_positions
+    return get_latest_positions()
 
 
 @app.get("/api/market-status")
 async def get_market_status():
-    return _rows("SELECT * FROM market_data_status ORDER BY ticker ASC")
+    from db.repository import get_market_data_status
+    return get_market_data_status()
 
 
 @app.get("/api/backtest")

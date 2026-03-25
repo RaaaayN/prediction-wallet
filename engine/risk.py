@@ -57,4 +57,4 @@ def check_kill_switch(drawdown: float, threshold: float) -> bool:
     Returns:
         True if abs(drawdown) > threshold (kill switch should activate)
     """
-    return drawdown < -threshold
+    return drawdown <= -threshold

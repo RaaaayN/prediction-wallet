@@ -61,3 +61,53 @@ Reports are append-only. Each session adds a dated section below.
 4. **`api/main.py` raw SQL**: Medium-priority tech debt. Recommend routing API data reads through `db/repository.py` functions. Eliminates risk of DB schema drift silently breaking API endpoints.
 
 5. **Strategy report engine improvements**: Priorities 1–5 from the strategy report are self-contained `engine/` changes. No coordination with backend needed for those — team-strategy can proceed independently.
+
+## Session: 2026-03-25 10:00 — Policy split + backend hardening (phase 2)
+**Last Updated:** 2026-03-25 10:00
+
+### What Was Done
+
+**P4 — db/repository.py init-once optimization:**
+- Added module-level `_DB_INITIALIZED: set[str]` — `init_db()` now runs exactly once per DB path per process instead of on every connection. Tests unaffected (each uses a unique temp path).
+
+**P1 — agents/policies.py hard/soft violation split (critical correctness fix):**
+- Hard violations (kill_switch_active, live_blocked, too_many_trades): return early with `approved=False`, `allowed_trades=[]`, no per-trade evaluation
+- Soft blocks (bad ticker, not in plan, missing price, notional cap): placed in `blocked_trades` only — `approved=True`, other valid trades still execute
+- No model schema changes (`PolicyEvaluation` unchanged); only semantics of `approved` corrected
+
+**P2 — agents/portfolio_agent.py — CycleAudit.errors populated:**
+- Added `errors=` to `CycleAudit(...)` constructor in `audit()`: collects hard violation messages + non-empty error strings from failed executions
+
+**P5 — SQL deduplication (api/main.py + db/repository.py):**
+- Added `get_snapshots(limit)` and `get_latest_positions()` to `db/repository.py`
+- All 6 data endpoints in `api/main.py` now delegate to repository functions
+- Removed `_connect()` and `_rows()` helpers from API layer; removed unused `sqlite3` import
+- `/api/traces` cycle-specific path returns ASC (reversed from repository DESC) to match previous behaviour
+
+**P3 — api/runner.py SSE subprocess cleanup on disconnect:**
+- Added `proc_ref: list[Popen]` pattern: worker thread populates it before blocking on stdout
+- `stream_command` wrapped in `try/finally`: calls `proc_ref[0].terminate()` when async generator closes (client disconnect or normal completion)
+- `if proc_ref:` guard handles the race where disconnect occurs before thread starts
+
+**Tests:**
+- Updated `test_policy_blocks_trade_outside_plan` in `test_portfolio_agent.py`: soft block now correctly asserts `approved is True`
+- Added `tests/test_policies.py` with 10 tests covering all hard/soft violation paths
+- **All 81 tests pass**
+
+### Open Issues
+
+1. **`MarketSnapshot.research_summary`** — field present in `agents/models.py`, always `""`. Remove after team-ui confirms it is not rendered in the HTML/JS UI.
+2. **`run_cycle` and `run_cycle_dict` still pass `mcp_profile`** — the MCP profile parameter was removed from `run_cycle`/`run_cycle_dict` signatures in a previous session but the internal `audit()` call still references `mcp_profile`. Verify parameter threading is consistent.
+3. **`db/repository._connect()` thread safety** — `_DB_INITIALIZED.add()` is GIL-protected but not explicitly thread-safe. Acceptable under CPython; document as assumption.
+4. **No test for `CycleAudit.errors` population** — test added in plan but not yet implemented (deferred to next session or team-lead discretion).
+
+### Blockers / Dependencies
+
+- (none) — All changes are self-contained within backend scope.
+
+### Recommendations for the Leader
+
+1. **Policy fix is ready to merge** — critical correctness bug resolved. A missing price for one asset (e.g. ETH-USD weekend gap) no longer silently halts all 8 other valid trades.
+2. **Coordinate `research_summary` removal with team-ui** before removing the field from `agents/models.py`.
+3. **Next backend priority**: add test coverage for `CycleAudit.errors`, then verify `run_cycle`/`run_cycle_dict` mcp_profile parameter threading.
+4. **No engine/ changes this session** — strategy report P6/P7 remain open for team-strategy.

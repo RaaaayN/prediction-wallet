@@ -89,6 +89,6 @@ def test_policy_blocks_trade_outside_plan():
         risk_flags=[],
     )
     policy, executions = service.execute(observation, decision)
-    assert policy.approved is False
+    assert policy.approved is True  # soft block: other valid trades still allowed
     assert executions == []
     assert policy.blocked_trades[0].ticker == "TSLA"

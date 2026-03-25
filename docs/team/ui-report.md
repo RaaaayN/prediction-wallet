@@ -38,6 +38,53 @@ All changes applied to `ui/index.html`:
 2. **Confirm PnL fields in `/api/portfolio`** — if `portfolio.json` doesn't include `pnl_dollars`/`pnl_pct`, the backend could compute them from `(total_value - initial_capital)` and add them to the API response.
 
 3. **Future UI improvements** (not implemented, YAGNI for now):
-   - Performance metrics tab (Sharpe, VaR, CVaR, Sortino, Calmar) — would need `/api/performance` endpoint
    - Auto-refresh toggle (30s interval for portfolio and history tabs)
    - Dark/light theme toggle
+
+---
+
+## Session: 2026-03-24 17:00 — Performance metrics tab
+**Last Updated:** 2026-03-24 17:00
+
+### What Was Done
+
+Added a new **Performance** tab to `ui/index.html` (7th tab, between Cycles and Backtest). All metrics are computed **client-side in JavaScript** from existing endpoints — no backend changes required.
+
+**Data sources used:**
+- `GET /api/snapshots?limit=500` — portfolio value timeseries
+- `GET /api/executions?limit=500` — trade history
+
+**Metrics computed:**
+
+| Section | Metrics |
+|---------|---------|
+| Returns | Gross Return %, Net Return % (after costs), Annualized %, Volatility (ann.) |
+| Risk-Adjusted | Sharpe Ratio (4.5% rf), Sortino Ratio, Calmar Ratio, Max Drawdown |
+| Value at Risk | Parametric VaR 95%, Historical VaR 95%, CVaR 95% (Expected Shortfall), Historical VaR 99% |
+| Trade Quality | Total Trades, Hit Ratio %, Total Costs $, Annualized Turnover % |
+
+**Additional feature:** Rolling 30-day Sharpe chart (Chart.js line) at the bottom of the tab.
+
+**UX details:**
+- Period selector: 30d / 60d / 90d / 180d / 365d with Refresh button
+- All stat cards are dynamically color-coded (green/yellow/red) based on magnitude thresholds
+- Graceful empty state: shows "Not enough data" message if < 4 snapshots in period
+- Connection error handled gracefully
+
+### Open Issues
+
+- `pf.pnl_dollars` / `pf.pnl_pct` — still unconfirmed in `portfolio.json` schema (from previous session).
+- VaR metrics require sufficient snapshot history to be meaningful (> 20 snapshots). With sparse data, VaR estimates will be imprecise — this is a data availability issue, not a code bug.
+- `hit_ratio` correctness depends on `success` field in executions being set by the simulator (confirmed by strategy report: set by simulator, not by actual outcome — limitation noted).
+
+### Blockers / Dependencies
+
+- (none) — Performance tab is fully functional using only existing endpoints.
+
+### Recommendations for the Leader
+
+1. **Backtest tab is now unblocked**: team-backend added `/api/backtest` endpoint (confirmed by Explore agent). The Backtest tab should now render equity curves and strategy comparison stats. Streamlit retirement is now feasible.
+
+2. **`/api/performance` endpoint is no longer needed**: All performance metrics are now computed client-side. Backend effort saved.
+
+3. **Next UI priority**: With Performance + Backtest + all core tabs implemented, the main remaining work is Streamlit retirement (delete `dashboard/`, `dashboard_main.py`, remove `streamlit` dep). This is a straightforward deletion — no new UI code needed.
