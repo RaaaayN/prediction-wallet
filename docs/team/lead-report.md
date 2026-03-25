@@ -548,3 +548,153 @@ Backend Phase 2 + Strategy Phase 2 complétés. UI Performance tab ajoutée. Bil
 
 ### Stale Reports
 (aucun — tous les agents ont des sessions 2026-03-24 ou 2026-03-25)
+
+---
+
+## Lead Report: 2026-03-25 11:30
+**Last Updated:** 2026-03-25 11:30
+
+### Context
+
+Bilan après le commit `3968db2` (per_asset_threshold + pnl fix + research_summary cleanup + CLAUDE.md). État de santé général du projet.
+
+### Team Status
+
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-25 10:00 — Policy split + backend hardening (phase 2) | 2026-03-25 10:00 | Current |
+| ui | 2026-03-24 17:00 — Performance metrics tab | 2026-03-24 17:00 | Current |
+| strategy | 2026-03-25 — Phase 2 implementation (P-A à P-E) | 2026-03-25 | Current |
+| usecases | 2026-03-24 — Full Feature Audit | 2026-03-24 | **Stale** ⚠️ |
+
+### Résolution des items ouverts depuis le dernier rapport
+
+| Item | Statut |
+|------|--------|
+| `per_asset_threshold` hardcodé dans `ThresholdStrategy` | ✅ Résolu — câblé depuis `profiles/*.yaml` |
+| `pnl_dollars`/`pnl_pct` absents de `/api/portfolio` | ✅ Résolu — calculés depuis `history[-1]` dans l'endpoint |
+| `research_summary` dead code dans `ui/index.html` | ✅ Résolu — bloc `researchHtml` supprimé |
+| `mcp_profile` threading dans `run_cycle`/`run_cycle_dict` | ✅ Résolu (fausse alarme) — aucune trace de `mcp_profile` dans `portfolio_agent.py` |
+| `CLAUDE.md` obsolète (MCP, Streamlit, LangGraph) | ✅ Résolu — sections supprimées, architecture à jour |
+
+### Open Issues restants (cross-agents)
+
+1. **Backend** — Pas de test pour `CycleAudit.errors` — le champ est maintenant peuplé mais aucun test ne couvre ce path. Faible urgence, faible risque.
+2. **Backend** — `_DB_INITIALIZED` thread safety : GIL-protégé sous CPython, mais non documenté comme hypothèse. Très faible urgence.
+3. **Strategy** — Stress testing / régimes / corrélation : 3 items de complexité moyenne/haute. Aucun n'est un bug — ce sont des améliorations de recherche. Hors scope actuel.
+4. **UI** — `hit_ratio` basé sur `success` (simulateur, pas résultat réel) : limitation connue, documentée dans le rapport UI.
+5. **README.md** — Toujours obsolète : mentionne MCP, LangGraph, `--use-mcp local`, `dashboard/`, Streamlit. Ne reflète plus l'architecture réelle. Risque onboarding.
+
+### Cross-Agent Dependencies
+
+- (aucune dépendance bloquante) — tous les items ouverts sont auto-contenus.
+
+### Top 3 Priorities
+
+1. **[team-usecases]** — Re-run pour valider les nouvelles fonctionnalités — Depuis le dernier audit (2026-03-24), le projet a reçu : Performance tab, Backtest endpoint fonctionnel, policy hard/soft split, per-asset thresholds, VaR/Sortino/Calmar. Usecases n'a pas évalué ces ajouts. Un audit frais peut identifier des redondances ou des features sans valeur avant qu'elles s'accumulent.
+
+2. **[README.md]** — Mettre à jour le README — Il mentionne encore MCP, LangGraph, `--use-mcp local`, `dashboard/`, Streamlit. Un nouveau développeur lisant le README aurait une image fausse du projet. Correction rapide (< 30 min), aucun risque, impact onboarding direct.
+
+3. **[team-backend]** — Ajouter test pour `CycleAudit.errors` — Le seul item de correctness non couvert par des tests. Un test simple sur le path `audit()` avec une exécution échouée suffit. Complète la couverture de la feature et ferme définitivement l'open issue backend.
+
+### Identified Risks
+
+- **README obsolète** : risque d'onboarding si un nouveau développeur suit les instructions CLI du README (commandes inexistantes, profils MCP supprimés).
+- **team-usecases stale** : 3 sessions d'implémentation depuis le dernier audit. Les features ajoutées (Performance tab côté client, Backtest, per-asset thresholds) n'ont pas été évaluées pour leur valeur réelle. Risque de maintenance sur des features peut-être superflues.
+- **Stress testing absent** : la stratégie est calibrée sur des conditions normales (yfinance 3mo). En conditions de crise (2020 COVID, 2022 crypto bear), les thresholds et le kill switch à 10% n'ont pas été testés. Risque faible en simulation, critique en paper mode.
+
+### Recommended Action Plan
+
+**État actuel : projet sain, aucun blocker.**
+
+**Court terme (maintenant) :**
+1. Mettre à jour `README.md` — suppression références MCP/LangGraph/Streamlit, CLI à jour, architecture réelle.
+2. Lancer `/team-usecases` — audit des nouvelles features (Performance tab, Backtest, policy split, per-asset thresholds).
+
+**Moyen terme (après usecases) :**
+3. Lancer `/team-backend` — ajouter test `CycleAudit.errors` + documenter hypothèse thread safety.
+4. Évaluer les 3 items strategy (stress testing, régimes, corrélation) comme initiative séparée si l'usage paper mode est envisagé.
+
+### Stale Reports
+- **usecases** : last updated 2026-03-24 — 3 sessions d'implémentation depuis l'audit. Recommande re-run `/team-usecases`.
+
+---
+
+## Lead Report: 2026-03-25 12:00
+**Last Updated:** 2026-03-25 12:00
+
+### Context
+
+Post-usecases re-run (2026-03-25) + backend session 10:30 (CycleAudit.errors tests). README mis à jour. Bilan de clôture du sprint.
+
+### Team Status
+
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-25 10:30 — Tests CycleAudit.errors (98 tests) | 2026-03-25 10:30 | Current |
+| ui | 2026-03-24 17:00 — Performance metrics tab | 2026-03-24 17:00 | Current |
+| strategy | 2026-03-25 — Phase 2 implementation (P-A à P-E) | 2026-03-25 | Current |
+| usecases | 2026-03-25 — Post-cleanup audit + dead deps | 2026-03-25 | Current |
+
+### Résolution depuis le dernier rapport (11:30)
+
+| Item | Statut |
+|------|--------|
+| README obsolète (MCP, LangGraph, Streamlit) | ✅ Résolu — `fec4068` |
+| `CycleAudit.errors` non testé | ✅ Résolu — 4 tests ajoutés, 98 tests verts |
+| `research_summary` ghost dans backend report | ✅ Fermé — usecases confirme field removed entirely; backend report est stale sur ce point uniquement |
+| `/team-usecases` stale | ✅ Résolu — session 2026-03-25 complète |
+
+### Nouveau finding usecases : 8 dépendances mortes
+
+Usecases a identifié 8 packages dans `pyproject.toml` avec **zéro imports** dans le codebase :
+
+| Package | Raison originale | Verdict |
+|---------|-----------------|---------|
+| `streamlit>=1.40.0` | Dashboard supprimé | **Supprimer** |
+| `plotly>=5.18.0` | Charts Streamlit | **Supprimer** |
+| `langgraph>=0.2.0` | agent/ supprimé | **Supprimer** |
+| `langchain-anthropic>=0.3.0` | agent/ supprimé | **Supprimer** |
+| `langchain-core>=0.3.0` | agent/ supprimé | **Supprimer** |
+| `mcp[cli]>=1.14.1` | integrations/mcp/ supprimé | **Supprimer** |
+| `PyPortfolioOpt>=1.5.5` | Jamais utilisé | **Supprimer** |
+| `cvxpy>=1.4.0` | Jamais utilisé | **Supprimer** |
+
+Note : `google-genai` est **à conserver** — utilisé en interne par `pydantic_ai.models.google.GoogleModel`.
+
+### Open Issues restants (cross-agents)
+
+1. **8 dead deps dans `pyproject.toml`** — seul item actionnable immédiatement. Effort : < 5 min. Impact : installation plus rapide, surface de dépendances réduite.
+2. **`hit_ratio` basé sur `success` boolean** (strategy P10, deferred) — calcule la proportion d'exécutions réussies, pas le gain réel. Métrique trompeuse dans le rapport PDF. Faible urgence, correctif nécessite du tracking P&L par exécution.
+3. **`portfolio_loader.py` absent de CLAUDE.md** — fichier utilisé par `settings.py` et `portfolio_agent.py`, non listé dans la section architecture. Très mineur.
+4. **`db/repository._connect()` thread safety** — GIL-protégé, acceptable sous CPython, non documenté. Très faible urgence.
+5. **Stress testing absent** — stratégies calibrées sur conditions normales. Critique uniquement si paper mode envisagé.
+
+### Cross-Agent Dependencies
+
+- (aucune) — tous les items restants sont auto-contenus ou de la recherche.
+
+### Top 3 Priorities
+
+1. **[direct, 5 min]** — Supprimer 8 dead deps de `pyproject.toml` + `uv sync` — Usecases l'identifie comme le meilleur rapport valeur/effort actuellement ouvert. 8 lignes supprimées, zéro risque fonctionnel, installation significativement allégée (streamlit + langgraph + plotly + cvxpy sont des packages lourds).
+
+2. **[CLAUDE.md, 2 min]** — Ajouter `portfolio_loader.py` dans la section architecture — Mineur mais le fichier est activement utilisé (`get_active_profile()` appelé par `_get_strategy()`). Complète la documentation d'architecture.
+
+3. **[team-strategy, futur]** — Fixer `hit_ratio` (P10) — Métrique trompeuse dans les rapports PDF : compte les exécutions sans erreur, pas les trades gagnants. Fix nécessite un tracking post-exécution (comparer prix de fill vs prix ultérieur). À planifier si usage paper mode envisagé.
+
+### Identified Risks
+
+- **Dead deps** : `streamlit`, `langgraph`, `cvxpy` sont des packages lourds. Leur présence dans `pyproject.toml` signale à tort qu'ils sont utilisés et allonge le temps d'installation.
+- **`hit_ratio` trompeur** : le rapport PDF affiche un "hit ratio" qui mesure les exécutions sans erreur simulateur, pas les trades profitables. Peut induire en erreur si le rapport est partagé.
+- **Stress testing** : risque acceptable en simulation. Devient critique avant tout passage en paper mode réel.
+
+### Recommended Action Plan
+
+**État : projet propre. Un seul item à traiter immédiatement.**
+
+1. **Maintenant** : supprimer les 8 dead deps de `pyproject.toml`, lancer `uv sync`, commiter.
+2. **Maintenant** : ajouter `portfolio_loader.py` dans CLAUDE.md.
+3. **Futur** : `hit_ratio` fix + stress testing comme initiative séparée avant paper mode.
+
+### Stale Reports
+(aucun — tous les agents à jour sur 2026-03-25)

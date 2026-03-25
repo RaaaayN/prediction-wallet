@@ -25,6 +25,8 @@ services/
   reporting_service.py — ReportingService (PDF)
   gateways.py          — interfaces communes
 
+portfolio_loader.py    — load_profile() / get_active_profile() — charge profiles/*.yaml
+
 db/
   schema.py            — DDL: portfolio_snapshots, executions, agent_runs, decision_traces
   repository.py        — save_snapshot, save_execution, save_agent_run, save_decision_trace
