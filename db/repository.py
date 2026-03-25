@@ -73,8 +73,9 @@ def save_execution(trade_result, cycle_id: str, db_path: str = MARKET_DB) -> int
         cur = conn.execute(
             """
             INSERT INTO executions
-                (cycle_id, trade_id, timestamp, ticker, action, quantity, market_price, fill_price, cost, slippage, reason, success, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (cycle_id, trade_id, timestamp, ticker, action, quantity, market_price, fill_price, cost, slippage,
+                 reason, success, error, weight_before, target_weight, drift_before, slippage_pct, notional)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cycle_id,
@@ -90,6 +91,11 @@ def save_execution(trade_result, cycle_id: str, db_path: str = MARKET_DB) -> int
                 trade.get("reason", ""),
                 int(bool(trade.get("success", False))),
                 trade.get("error", ""),
+                trade.get("weight_before", 0.0),
+                trade.get("target_weight", 0.0),
+                trade.get("drift_before", 0.0),
+                trade.get("slippage_pct", 0.0),
+                trade.get("notional", 0.0),
             ),
         )
         conn.commit()
@@ -193,8 +199,8 @@ def save_decision_trace(trace: dict, db_path: str = MARKET_DB) -> int:
         cur = conn.execute(
             """
             INSERT INTO decision_traces
-                (cycle_id, stage, payload_json, validation_json, mcp_tools_json, provider, agent_backend, execution_mode, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (cycle_id, stage, payload_json, validation_json, mcp_tools_json, provider, agent_backend, execution_mode, created_at, event_type, tags)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trace.get("cycle_id", ""),
@@ -206,6 +212,8 @@ def save_decision_trace(trace: dict, db_path: str = MARKET_DB) -> int:
                 trace.get("agent_backend"),
                 trace.get("execution_mode"),
                 utc_now_iso(),
+                trace.get("event_type"),
+                trace.get("tags"),
             ),
         )
         conn.commit()

@@ -17,7 +17,7 @@ from engine.performance import (
     sortino_ratio,
 )
 from engine.risk import RiskLevel, check_kill_switch, get_risk_level
-from engine.orders import generate_rebalance_orders
+from engine.orders import apply_slippage, estimate_transaction_cost, generate_rebalance_orders
 
 
 # ---------------------------------------------------------------------------
@@ -458,3 +458,115 @@ class TestPerAssetThreshold:
         orders = strategy.get_trades(portfolio, PRICES)
         tickers = [o["ticker"] for o in orders]
         assert "AAPL" not in tickers
+
+
+# ---------------------------------------------------------------------------
+# TestVolAdjustedSlippage (feature #8)
+# ---------------------------------------------------------------------------
+
+_CRYPTO = {"BTC-USD"}
+_EQ_RATE = 0.001   # 0.1% base
+_CR_RATE = 0.005   # 0.5% base
+
+
+class TestVolAdjustedSlippage:
+    # --- backward compatibility: no vol/notional → identical to old model ---
+
+    def test_flat_rate_equity_buy_unchanged(self):
+        fill = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE)
+        assert abs(fill - 100.1) < 1e-9
+
+    def test_flat_rate_equity_sell_unchanged(self):
+        fill = apply_slippage(100.0, "sell", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE)
+        assert abs(fill - 99.9) < 1e-9
+
+    def test_flat_rate_crypto_buy_unchanged(self):
+        fill = apply_slippage(100.0, "buy", "BTC-USD", _CRYPTO, _EQ_RATE, _CR_RATE)
+        assert abs(fill - 100.5) < 1e-9
+
+    # --- vol adjustment ---
+
+    def test_high_vol_equity_increases_slippage(self):
+        # vol = 0.40 vs ref = 0.20 → scalar = 2.0 → rate = 0.002
+        fill_high = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE, volatility=0.40)
+        fill_flat = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE)
+        assert fill_high > fill_flat
+
+    def test_low_vol_equity_decreases_slippage(self):
+        # vol = 0.05 vs ref = 0.20 → scalar = 0.25 → clamped to 0.5 → rate = 0.0005
+        fill_low = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE, volatility=0.05)
+        fill_flat = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE)
+        assert fill_low < fill_flat
+
+    def test_vol_scalar_clamped_upper(self):
+        # Extreme vol: 4× ref → scalar = 4.0 → clamped to 3.0
+        fill_extreme = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE, volatility=0.80)
+        fill_max = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE, volatility=0.60)
+        # Both hit 3× ceiling → same fill
+        assert abs(fill_extreme - fill_max) < 1e-9
+
+    def test_vol_scalar_clamped_lower(self):
+        # Near-zero vol → scalar clamped at 0.5
+        fill_zero_vol = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE, volatility=0.001)
+        expected_fill = 100.0 * (1.0 + _EQ_RATE * 0.5)
+        assert abs(fill_zero_vol - expected_fill) < 1e-9
+
+    def test_at_reference_vol_equals_base_rate(self):
+        # vol exactly at reference → scalar = 1.0 → same as flat
+        fill_at_ref = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE, volatility=0.20)
+        fill_flat = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE)
+        assert abs(fill_at_ref - fill_flat) < 1e-9
+
+    def test_crypto_uses_crypto_reference_vol(self):
+        # BTC at 0.65 ref vol → scalar = 1.0 → same as flat
+        fill_at_ref = apply_slippage(100.0, "buy", "BTC-USD", _CRYPTO, _EQ_RATE, _CR_RATE, volatility=0.65)
+        fill_flat = apply_slippage(100.0, "buy", "BTC-USD", _CRYPTO, _EQ_RATE, _CR_RATE)
+        assert abs(fill_at_ref - fill_flat) < 1e-9
+
+    # --- size adjustment ---
+
+    def test_larger_order_higher_slippage(self):
+        fill_small = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE, order_notional=5_000)
+        fill_large = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE, order_notional=50_000)
+        assert fill_large > fill_small
+
+    def test_size_impact_known_value(self):
+        # order_notional = $10_000 → impact = 1bp → rate = 0.001 + 0.0001 = 0.0011
+        fill = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE, order_notional=10_000)
+        expected = 100.0 * (1.0 + _EQ_RATE + 0.0001)
+        assert abs(fill - expected) < 1e-9
+
+    def test_vol_and_size_combined(self):
+        # 2× vol (scalar=2.0) + $10k notional (1bp)
+        fill = apply_slippage(100.0, "buy", "AAPL", _CRYPTO, _EQ_RATE, _CR_RATE,
+                              volatility=0.40, order_notional=10_000)
+        expected = 100.0 * (1.0 + _EQ_RATE * 2.0 + 0.0001)
+        assert abs(fill - expected) < 1e-9
+
+    # --- estimate_transaction_cost ---
+
+    def test_estimate_cost_without_vol_unchanged(self):
+        # notional = $1 000; size impact = (1000/10000)*0.0001 = 0.00001
+        orders = [{"ticker": "AAPL", "action": "buy", "quantity": 10.0}]
+        prices = {"AAPL": 100.0}
+        notional = 100.0 * 10.0
+        expected_rate = _EQ_RATE + (notional / 10_000) * 0.0001
+        cost = estimate_transaction_cost(orders, prices, _CRYPTO, _EQ_RATE, _CR_RATE)
+        assert abs(cost - notional * expected_rate) < 1e-9
+
+    def test_estimate_cost_with_vol_higher_in_stress(self):
+        orders = [{"ticker": "AAPL", "action": "buy", "quantity": 10.0}]
+        prices = {"AAPL": 100.0}
+        cost_flat = estimate_transaction_cost(orders, prices, _CRYPTO, _EQ_RATE, _CR_RATE)
+        cost_stress = estimate_transaction_cost(orders, prices, _CRYPTO, _EQ_RATE, _CR_RATE,
+                                                volatilities={"AAPL": 0.40})
+        assert cost_stress > cost_flat
+
+    def test_estimate_cost_multiple_assets(self):
+        orders = [
+            {"ticker": "AAPL", "action": "buy", "quantity": 5.0},
+            {"ticker": "BTC-USD", "action": "sell", "quantity": 0.1},
+        ]
+        prices = {"AAPL": 100.0, "BTC-USD": 50_000.0}
+        cost = estimate_transaction_cost(orders, prices, _CRYPTO, _EQ_RATE, _CR_RATE)
+        assert cost > 0.0

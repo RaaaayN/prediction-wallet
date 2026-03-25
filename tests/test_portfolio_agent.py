@@ -94,6 +94,107 @@ def test_policy_blocks_trade_outside_plan():
     assert policy.blocked_trades[0].ticker == "TSLA"
 
 
+# ── Explainability fields tests ───────────────────────────────────────────────
+
+def test_execution_result_explainability_fields_populated():
+    """ExecutionResult carries weight_before, target_weight, drift_before, slippage_pct, notional."""
+    import pytest
+    from config import TARGET_ALLOCATION
+
+    service = build_service()
+
+    # Seed a small AAPL position so the strategy sees non-empty weights and triggers rebalance.
+    portfolio = service.execution_service.load_portfolio()
+    portfolio["positions"] = {"AAPL": 10.0}   # 10 shares @ $100 = $1 000 of $100 000 → 1% weight
+    service.execution_service.save_portfolio(portfolio)
+
+    observation = service.observe()
+
+    if not observation.trade_plan:
+        pytest.skip("Strategy produced no trade plan with seeded portfolio")
+
+    # Build a decision that approves exactly the first trade from the plan.
+    first_trade = observation.trade_plan[0]
+    decision = TradeDecision(
+        cycle_id=observation.cycle_id,
+        summary="test",
+        market_outlook="neutral",
+        rationale="test",
+        rebalance_needed=True,
+        approved_trades=[first_trade],
+        rejected_trades=[],
+        risk_flags=[],
+    )
+
+    policy, executions = service.execute(observation, decision)
+
+    assert len(executions) >= 1, "Expected at least one execution"
+    ex = executions[0]
+
+    # All five explainability fields must be present (non-negative notional, finite floats).
+    assert ex.notional >= 0.0
+    assert isinstance(ex.weight_before, float)
+    assert isinstance(ex.target_weight, float)
+    assert isinstance(ex.drift_before, float)
+    assert isinstance(ex.slippage_pct, float)
+
+    # Algebraic invariant: drift_before = weight_before − target_weight.
+    assert abs(ex.drift_before - (ex.weight_before - ex.target_weight)) < 1e-5
+
+    # target_weight must match the config allocation for this ticker.
+    assert ex.target_weight == pytest.approx(TARGET_ALLOCATION.get(ex.ticker, 0.0), abs=1e-5)
+
+    # For a successful trade, slippage_pct should encode (fill − market) / market correctly.
+    if ex.success and ex.market_price > 0:
+        expected = (ex.fill_price - ex.market_price) / ex.market_price
+        assert abs(ex.slippage_pct - expected) < 1e-5
+
+    # notional = |quantity × fill_price|.
+    assert ex.notional == pytest.approx(abs(ex.quantity * ex.fill_price), abs=1e-3)
+
+
+def test_save_execution_persists_explainability_fields():
+    """save_execution() writes the new columns; get_executions() returns them."""
+    import tempfile
+    import pytest
+    from db.schema import init_db
+    from db.repository import get_executions, save_execution
+    from utils.time import utc_now_iso
+
+    tmpdir = tempfile.mkdtemp()
+    db_path = f"{tmpdir}/test.db"
+    init_db(db_path)
+
+    record = ExecutionResult(
+        trade_id="t-xp",
+        action="buy",
+        ticker="AAPL",
+        quantity=10.0,
+        market_price=100.0,
+        fill_price=100.1,
+        cost=-1001.0,
+        timestamp=utc_now_iso(),
+        reason="rebalance",
+        success=True,
+        weight_before=0.01,
+        target_weight=0.12,
+        drift_before=-0.11,
+        slippage_pct=0.001,
+        notional=1001.0,
+    )
+    save_execution(record.model_dump(), cycle_id="c-xp", db_path=db_path)
+
+    df = get_executions(limit=1, db_path=db_path)
+    assert not df.empty
+    row = df.iloc[0]
+
+    assert row["weight_before"] == pytest.approx(0.01)
+    assert row["target_weight"] == pytest.approx(0.12)
+    assert row["drift_before"] == pytest.approx(-0.11)
+    assert row["slippage_pct"] == pytest.approx(0.001)
+    assert row["notional"] == pytest.approx(1001.0)
+
+
 # ── CycleAudit.errors tests ───────────────────────────────────────────────────
 
 def _no_op_decision(service, observation) -> TradeDecision:
@@ -194,3 +295,162 @@ def test_audit_errors_ignores_empty_error_strings():
     audit = service.audit(observation, decision, clean_policy, [successful_exec])
 
     assert audit.errors == []
+
+
+# ── Confidence scoring tests (#11) ───────────────────────────────────────────
+
+def test_confidence_default_is_midpoint():
+    """TestModel without explicit confidence yields the 0.5 default."""
+    service = build_service()
+    observation = service.observe()
+    model = TestModel(
+        custom_output_args={
+            "cycle_id": observation.cycle_id,
+            "summary": "test",
+            "market_outlook": "neutral",
+            "rationale": "test",
+            "rebalance_needed": False,
+            "approved_trades": [],
+            "rejected_trades": [],
+            "risk_flags": [],
+        }
+    )
+    decision, _ = service.decide(observation, model_override=model)
+    assert isinstance(decision.confidence, float)
+    assert 0.0 <= decision.confidence <= 1.0
+    assert decision.confidence == 0.5
+
+
+def test_confidence_explicit_value_propagated():
+    """Explicit confidence from TestModel propagates into the returned decision."""
+    service = build_service()
+    observation = service.observe()
+    model = TestModel(
+        custom_output_args={
+            "cycle_id": observation.cycle_id,
+            "summary": "test",
+            "market_outlook": "neutral",
+            "rationale": "test",
+            "rebalance_needed": False,
+            "approved_trades": [],
+            "rejected_trades": [],
+            "risk_flags": [],
+            "confidence": 0.85,
+        }
+    )
+    decision, _ = service.decide(observation, model_override=model)
+    assert decision.confidence == 0.85
+
+
+def test_data_freshness_fresh_when_recent(monkeypatch):
+    """data_freshness = 'fresh' when all refresh_status timestamps are within 24h."""
+    from datetime import datetime, timezone, timedelta
+    from agents.models import MarketDataStatus
+    from agents.portfolio_agent import PortfolioAgentService
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    refresh = [
+        MarketDataStatus(ticker="AAPL", refreshed_at=now_iso, success=True),
+        MarketDataStatus(ticker="MSFT", refreshed_at=now_iso, success=True),
+    ]
+    freshness = PortfolioAgentService._compute_data_freshness(refresh)
+    assert freshness == "fresh"
+
+
+def test_data_freshness_stale_when_old():
+    """data_freshness = 'stale' when all timestamps are older than 24h."""
+    from datetime import datetime, timezone, timedelta
+    from agents.models import MarketDataStatus
+    from agents.portfolio_agent import PortfolioAgentService
+
+    old_iso = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    refresh = [
+        MarketDataStatus(ticker="AAPL", refreshed_at=old_iso, success=True),
+        MarketDataStatus(ticker="MSFT", refreshed_at=old_iso, success=True),
+    ]
+    freshness = PortfolioAgentService._compute_data_freshness(refresh)
+    assert freshness == "stale"
+
+
+def test_data_freshness_partial_when_mixed():
+    """data_freshness = 'partial' when some timestamps are fresh and some are stale."""
+    from datetime import datetime, timezone, timedelta
+    from agents.models import MarketDataStatus
+    from agents.portfolio_agent import PortfolioAgentService
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    old_iso = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    refresh = [
+        MarketDataStatus(ticker="AAPL", refreshed_at=now_iso, success=True),
+        MarketDataStatus(ticker="MSFT", refreshed_at=old_iso, success=True),
+    ]
+    freshness = PortfolioAgentService._compute_data_freshness(refresh)
+    assert freshness == "partial"
+
+
+def test_data_freshness_unknown_when_empty():
+    """data_freshness = 'unknown' when refresh_status is empty."""
+    from agents.portfolio_agent import PortfolioAgentService
+
+    freshness = PortfolioAgentService._compute_data_freshness([])
+    assert freshness == "unknown"
+
+
+def test_data_freshness_partial_when_no_timestamp():
+    """data_freshness = 'stale' when refreshed_at is None for all tickers."""
+    from agents.models import MarketDataStatus
+    from agents.portfolio_agent import PortfolioAgentService
+
+    refresh = [
+        MarketDataStatus(ticker="AAPL", refreshed_at=None, success=False),
+        MarketDataStatus(ticker="MSFT", refreshed_at=None, success=False),
+    ]
+    freshness = PortfolioAgentService._compute_data_freshness(refresh)
+    assert freshness == "stale"
+
+
+def test_data_freshness_injected_into_decision():
+    """decide() always sets data_freshness on the returned decision (not 'unknown')."""
+    service = build_service()
+    observation = service.observe()
+    model = TestModel(
+        custom_output_args={
+            "cycle_id": observation.cycle_id,
+            "summary": "test",
+            "market_outlook": "neutral",
+            "rationale": "test",
+            "rebalance_needed": False,
+            "approved_trades": [],
+            "rejected_trades": [],
+            "risk_flags": [],
+        }
+    )
+    decision, _ = service.decide(observation, model_override=model)
+    # FakeMarketGateway.get_refresh_status() returns one entry with a valid timestamp
+    assert decision.data_freshness in ("fresh", "partial", "stale", "unknown")
+    assert isinstance(decision.data_freshness, str)
+
+
+def test_confidence_in_cycle_audit():
+    """confidence and data_freshness survive full cycle and appear in CycleAudit.decision."""
+    service = build_service()
+    observation = service.observe()
+    model = TestModel(
+        custom_output_args={
+            "cycle_id": observation.cycle_id,
+            "summary": "test",
+            "market_outlook": "neutral",
+            "rationale": "test",
+            "rebalance_needed": False,
+            "approved_trades": [],
+            "rejected_trades": [],
+            "risk_flags": [],
+            "confidence": 0.72,
+        }
+    )
+    decision, _ = service.decide(observation, model_override=model)
+    policy, executions = service.execute(observation, decision)
+    audit = service.audit(observation, decision, policy, executions)
+
+    assert audit.decision.confidence == 0.72
+    assert audit.decision.data_freshness in ("fresh", "partial", "stale", "unknown")

@@ -56,7 +56,11 @@ def build_portfolio_agent(model=None) -> Agent[AgentDependencies, TradeDecision]
         name="portfolio-agent",
         instructions=(
             "You are a governed portfolio agent. Review the current portfolio, market context, risk status, "
-            "and the deterministic trade plan. Approve only trades from that plan. Return a structured TradeDecision."
+            "and the deterministic trade plan. Approve only trades from that plan. Return a structured TradeDecision. "
+            "Always set the 'confidence' field (0.0–1.0) to reflect your certainty in the decision: "
+            "1.0 for clear signals with stable market data, 0.5 for uncertain or mixed signals, "
+            "0.0 for very conflicting signals or high uncertainty. "
+            "The 'data_freshness' field is set automatically — do not override it."
         ),
         defer_model_check=True,
     )
@@ -194,6 +198,12 @@ class PortfolioAgentService:
             "provider": AI_PROVIDER,
             "agent_backend": AGENT_BACKEND,
             "execution_mode": execution_mode,
+            "event_type": "cycle_step",
+            "tags": json.dumps([
+                f"strategy:{strategy_name}",
+                f"mode:{execution_mode}",
+                f"signal:{strategy_signal}",
+            ]),
         })
         return observation
 
@@ -219,6 +229,10 @@ class PortfolioAgentService:
         )
         result = agent.run_sync(prompt, deps=deps, model=model_override)
         decision = result.output
+        # Inject deterministic data_freshness (LLM cannot reliably assess timestamp staleness)
+        decision = decision.model_copy(
+            update={"data_freshness": self._compute_data_freshness(observation.market.refresh_status)}
+        )
         tool_names = self._extract_tool_names(result.all_messages_json())
         trace = {
             "cycle_id": observation.cycle_id,
@@ -229,6 +243,15 @@ class PortfolioAgentService:
             "provider": AI_PROVIDER,
             "agent_backend": AGENT_BACKEND,
             "execution_mode": execution_mode,
+            "event_type": "cycle_step",
+            "tags": json.dumps([
+                f"strategy:{observation.strategy_name}",
+                f"mode:{execution_mode}",
+                f"rebalance:{decision.rebalance_needed}",
+                f"approved_trades:{len(decision.approved_trades)}",
+                f"confidence:{decision.confidence:.2f}",
+                f"data_freshness:{decision.data_freshness}",
+            ]),
         }
         self.audit_repository.save_decision_trace(trace)
         return decision, {"tool_calls": len(tool_names), "tool_names": tool_names, "message_count": len(result.all_messages())}
@@ -236,6 +259,10 @@ class PortfolioAgentService:
     def execute(self, observation: CycleObservation, decision: TradeDecision, execution_mode: str = "simulate"):
         policy = self.policy_engine.evaluate(decision, observation, execution_mode)
         executions: list[ExecutionResult] = []
+        hard_violation_codes = [v.code for v in policy.violations]
+        validate_event_type = "kill_switch" if "kill_switch_active" in hard_violation_codes else (
+            "policy_violation" if not policy.approved else "cycle_step"
+        )
         trace = {
             "cycle_id": observation.cycle_id,
             "stage": "validate",
@@ -245,6 +272,13 @@ class PortfolioAgentService:
             "provider": AI_PROVIDER,
             "agent_backend": AGENT_BACKEND,
             "execution_mode": execution_mode,
+            "event_type": validate_event_type,
+            "tags": json.dumps([
+                f"approved:{policy.approved}",
+                f"allowed:{len(policy.allowed_trades)}",
+                f"blocked:{len(policy.blocked_trades)}",
+                f"violations:{len(policy.violations)}",
+            ]),
         }
         self.audit_repository.save_decision_trace(trace)
 
@@ -257,8 +291,21 @@ class PortfolioAgentService:
                     cycle_id=observation.cycle_id,
                     trades_this_cycle=idx,
                 )
-                executions.append(ExecutionResult(**asdict(result)))
+                w_before = observation.portfolio.current_weights.get(trade.ticker, 0.0)
+                t_weight = observation.portfolio.target_weights.get(trade.ticker, 0.0)
+                executions.append(ExecutionResult(
+                    **asdict(result),
+                    weight_before=round(w_before, 6),
+                    target_weight=round(t_weight, 6),
+                    drift_before=round(w_before - t_weight, 6),
+                    slippage_pct=round(
+                        (result.fill_price - result.market_price) / result.market_price, 6
+                    ) if result.market_price > 0 else 0.0,
+                    notional=round(abs(result.quantity * result.fill_price), 4),
+                ))
 
+        failed_count = sum(1 for e in executions if not e.success)
+        execute_event_type = "execution_failure" if failed_count > 0 else "cycle_step"
         execution_trace = {
             "cycle_id": observation.cycle_id,
             "stage": "execute",
@@ -268,6 +315,12 @@ class PortfolioAgentService:
             "provider": AI_PROVIDER,
             "agent_backend": AGENT_BACKEND,
             "execution_mode": execution_mode,
+            "event_type": execute_event_type,
+            "tags": json.dumps([
+                f"mode:{execution_mode}",
+                f"executed:{len(executions)}",
+                f"failed:{failed_count}",
+            ]),
         }
         self.audit_repository.save_decision_trace(execution_trace)
         return policy, executions
@@ -294,6 +347,7 @@ class PortfolioAgentService:
                    + [e.error for e in executions if not e.success and e.error],
         )
         self.audit_repository.save_cycle_audit(self._audit_to_legacy_dict(audit))
+        audit_event_type = "policy_violation" if audit.errors else "cycle_step"
         self.audit_repository.save_decision_trace(
             {
                 "cycle_id": observation.cycle_id,
@@ -304,6 +358,13 @@ class PortfolioAgentService:
                 "provider": AI_PROVIDER,
                 "agent_backend": AGENT_BACKEND,
                 "execution_mode": execution_mode,
+                "event_type": audit_event_type,
+                "tags": json.dumps([
+                    f"strategy:{observation.strategy_name}",
+                    f"mode:{execution_mode}",
+                    f"errors:{len(audit.errors)}",
+                    f"executions:{len(executions)}",
+                ]),
             }
         )
         return audit
@@ -334,6 +395,38 @@ class PortfolioAgentService:
             "decision": audit.decision.model_dump(),
             "policy": audit.policy.model_dump(),
         }
+
+    @staticmethod
+    def _compute_data_freshness(refresh_status) -> str:
+        """Compute a data freshness label from MarketDataStatus timestamps.
+
+        Returns 'fresh' (all < 24h), 'partial' (some stale), 'stale' (all > 24h),
+        or 'unknown' (no refresh data available).
+        """
+        from datetime import datetime, timezone, timedelta
+
+        if not refresh_status:
+            return "unknown"
+
+        threshold = datetime.now(timezone.utc) - timedelta(hours=24)
+        fresh_flags: list[bool] = []
+        for s in refresh_status:
+            if not s.refreshed_at:
+                fresh_flags.append(False)
+                continue
+            try:
+                ts = datetime.fromisoformat(s.refreshed_at)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                fresh_flags.append(ts > threshold)
+            except (ValueError, AttributeError):
+                fresh_flags.append(False)
+
+        if all(fresh_flags):
+            return "fresh"
+        if any(fresh_flags):
+            return "partial"
+        return "stale"
 
     @staticmethod
     def _extract_tool_names(messages_json: bytes) -> list[str]:

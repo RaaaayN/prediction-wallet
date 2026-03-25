@@ -139,3 +139,89 @@ Reports are append-only. Each session adds a dated section below.
 
 - Open issues from prior sessions are now fully tested and closed. Backend is in a stable, well-tested state.
 - Next meaningful backend work is the `research_summary` field removal (coordinate with team-ui first).
+
+## Session: 2026-03-25 11:00 — #15 Explainability — per-trade audit fields in ExecutionResult
+**Last Updated:** 2026-03-25 11:00
+
+### What Was Done
+
+Added 5 per-trade explainability fields to `ExecutionResult` (agents/models.py):
+- `weight_before: float` — portfolio weight of this ticker at the time of execution
+- `target_weight: float` — target allocation for this ticker
+- `drift_before: float` — `weight_before − target_weight` (justification for the trade)
+- `slippage_pct: float` — `(fill_price − market_price) / market_price`, signed
+- `notional: float` — `abs(quantity × fill_price)` in portfolio currency
+
+All fields default to `0.0` for backwards compatibility with existing code that constructs `ExecutionResult` without them.
+
+**`agents/portfolio_agent.py`** — `execute()` now populates all 5 fields from `observation.portfolio.current_weights`, `target_weights`, and the execution result.
+
+**`db/schema.py`** — Added `_EXECUTIONS_MIGRATIONS` list (5 `ALTER TABLE executions ADD COLUMN` statements). These run alongside `_AGENT_RUNS_MIGRATIONS` in `init_db()`. Existing DBs are migrated transparently; new rows carry the new values.
+
+**`db/repository.py`** — `save_execution()` updated to write all 5 new columns.
+
+**Tests added to `tests/test_portfolio_agent.py`:**
+- `test_execution_result_explainability_fields_populated` — seeds portfolio with an AAPL position to trigger the threshold strategy, executes, asserts all 5 fields are present and internally consistent (drift invariant, slippage formula, notional formula, target from config)
+- `test_save_execution_persists_explainability_fields` — writes an `ExecutionResult` with known values to a temp DB, reads back via `get_executions()`, asserts all 5 columns round-trip correctly
+
+### Open Issues
+
+- `test_engine.py::TestVolAdjustedSlippage::test_estimate_cost_without_vol_unchanged` fails with a floating-point tolerance of `~0.01` vs `1e-9`. Pre-existing; not caused by this session. Scope: strategy team (`engine/orders.py`).
+- `MarketSnapshot.research_summary` field still present in `agents/models.py`, always `""`. Pending team-ui coordination.
+
+### Blockers / Dependencies
+
+- (none)
+
+### Recommendations for the Leader
+
+1. **Schema migration is live** — the 5 new columns will be added to any DB on next startup (idempotent). No manual migration needed.
+2. **UI can now surface explainability fields** — `weight_before`, `drift_before`, `slippage_pct` and `notional` are available in `/api/executions` rows. The trade history panel in the HTML/JS UI can be enhanced to show drift context and slippage quality per trade.
+3. **Pre-existing test failure** in `test_engine.py` should be picked up by team-strategy — it's a tolerance issue in `estimate_transaction_cost`, unrelated to this feature.
+
+---
+
+## Session: 2026-03-25 — #12 Event semantics — event_type + tags in decision_traces
+**Last Updated:** 2026-03-25
+
+### What Was Done
+
+Added `event_type` (TEXT) and `tags` (JSON TEXT) semantic columns to the `decision_traces` table:
+
+**`db/schema.py`** — Added `_DECISION_TRACES_MIGRATIONS` list:
+```python
+_DECISION_TRACES_MIGRATIONS = [
+    "ALTER TABLE decision_traces ADD COLUMN event_type TEXT",
+    "ALTER TABLE decision_traces ADD COLUMN tags TEXT",
+]
+```
+`init_db()` now runs this migration (idempotent — existing DBs are upgraded on next startup).
+
+**`db/repository.py`** — `save_decision_trace()` updated to write `event_type` and `tags` from the trace dict. Both default to `None` (NULL) if omitted, ensuring backward compatibility.
+
+**`agents/portfolio_agent.py`** — All 5 trace call sites populated:
+- `observe` → `event_type="cycle_step"`, tags: `strategy`, `mode`, `signal`
+- `decide` → `event_type="cycle_step"`, tags: `strategy`, `mode`, `rebalance`, `approved_trades`
+- `validate` → `event_type` is `"kill_switch"` if kill switch fired, `"policy_violation"` if any hard violation, else `"cycle_step"`; tags: `approved`, `allowed`, `blocked`, `violations`
+- `execute` → `event_type="execution_failure"` if any trade failed, else `"cycle_step"`; tags: `mode`, `executed`, `failed`
+- `audit` → `event_type="policy_violation"` if `audit.errors` non-empty, else `"cycle_step"`; tags: `strategy`, `mode`, `errors`, `executions`
+
+**Tests added to `tests/test_trace_and_cli.py`** (4 new, 5 total):
+- `test_event_type_and_tags_saved` — full round-trip: save trace with event_type + tags, assert both fields are returned correctly
+- `test_event_type_defaults_to_none_when_omitted` — traces saved without the new fields have `event_type=None` and `tags=None`
+- `test_kill_switch_event_type_roundtrip` — round-trip save/retrieve of a `"kill_switch"` event_type trace with tags
+
+### Open Issues
+
+- `test_engine.py::TestVolAdjustedSlippage::test_estimate_cost_without_vol_unchanged` — pre-existing floating-point tolerance failure. Strategy team scope.
+- `MarketSnapshot.research_summary` field still present in `agents/models.py`. Pending team-ui coordination.
+
+### Blockers / Dependencies
+
+- (none)
+
+### Recommendations for the Leader
+
+1. **Schema migration is live** — `event_type` and `tags` columns added to any DB on next startup (idempotent). No manual migration needed.
+2. **UI can now filter traces** — the `/api/traces` endpoint returns `event_type` and `tags` for each row. The HTML/JS UI can add a filter dropdown (e.g. show only `kill_switch` or `execution_failure` events) to speed up debugging.
+3. **Event taxonomy** — current event types are: `cycle_step`, `kill_switch`, `policy_violation`, `execution_failure`. Document these in CLAUDE.md if the team wants to query by type.

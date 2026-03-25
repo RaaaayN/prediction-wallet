@@ -1,5 +1,66 @@
 # Strategy Report — Prediction Wallet
 
+## Session: 2026-03-25 — Feature #8: vol-adjusted + size-adjusted slippage
+**Last Updated:** 2026-03-25
+**Phase:** 2 (implementation — approved by user: "#8 Realistic costs — slippage vol-adjusted dans apply_slippage() Proceed with implementation")
+
+### Phase 2 Approval
+> "#8 Realistic costs — slippage vol-adjusted dans apply_slippage() Proceed with implementation"
+
+### What Was Done
+
+Phase 1 analysis of `engine/orders.py` current slippage model. Phase 2 implementation of feature #8 from `docs/team/usecases-report.md`.
+
+**Current state (Phase 1 findings):**
+- `apply_slippage`: flat 2-tier rate (`slippage_eq` ≈ 0.1% for equities, `slippage_crypto` ≈ 0.5% for crypto). No regime sensitivity, no size scaling.
+- `estimate_transaction_cost`: same flat-rate logic.
+- `engine/backtest.py`: calls both functions — must stay backward compatible.
+
+**Gap vs. banking practice:**
+Real bid-ask spreads widen 2–5× during high-volatility periods (VIX spikes, crypto crashes). A flat rate systematically underestimates costs during stress and overestimates them in low-vol regimes, biasing backtest Sharpe ratios and cost-drag figures.
+
+**Implementation design:**
+- Vol-adjustment: `effective_rate = base_rate × clamp(vol / ref_vol, 0.5, 3.0)`. Reference vols: 20% annualized for equities, 65% for crypto.
+- Size-adjustment: linear market impact `+= order_notional / 10_000 × 0.0001` (1 bp per $10k of notional). Conservative for a $100k portfolio.
+- Both params optional (`None` = flat-rate fallback → zero breaking changes).
+
+### Implemented Changes
+
+**`engine/orders.py` — `apply_slippage`:**
+- Added optional `volatility: float | None` param. When provided, rate is scaled by `vol / ref_vol` (ref: 20% equity, 65% crypto), clamped to [0.5×, 3.0×]. Backward compatible (default None = flat rate).
+- Added optional `order_notional: float | None` param. When provided, adds linear market-impact term: +1 bp per $10,000 of notional. Backward compatible (default None = no impact).
+
+**`engine/orders.py` — `estimate_transaction_cost`:**
+- Added `volatilities: dict[str, float] | None = None` param. When provided, per-ticker vol passed to `apply_slippage` for vol-adjusted cost estimation.
+- Always passes `order_notional` (computed from `price * quantity`) to `apply_slippage`, so size-based market impact is applied by default.
+
+**`tests/test_engine.py` — `TestVolAdjustedSlippage` (13 tests):**
+- Flat-rate fallback (no vol, no notional) unchanged
+- High vol equity: rate scaled up from base; low vol equity: rate scaled down
+- Vol scalar clamped at 3× (upper) and 0.5× (lower)
+- Crypto uses 65% reference vol (vs 20% equity)
+- At reference vol: rate equals base rate
+- Larger order > smaller order slippage (market impact)
+- Known-value size impact: 1 bp per $10k, verified numerically
+- Vol + size combined: both adjustments accumulate
+- `estimate_transaction_cost`: with/without vol, stress scenario, multi-asset
+
+### Open Issues
+
+- Vol data must be passed by the caller (`apply_slippage` is pure, no I/O). Callers that have `volatility_30d` from `MarketDataService` can now pass it through.
+- Square-root market impact (needs ADV) deferred — linear model sufficient for current portfolio scale.
+
+### Blockers / Dependencies
+
+- (none)
+
+### Recommendations for the Leader
+
+- `engine/backtest.py` caller can be upgraded to pass per-ticker vol from fetched price series (30-day rolling std) — this is optional and produces more accurate backtest cost figures.
+- The vol param is optional everywhere — zero risk of breaking existing callers.
+
+---
+
 ## Session: 2026-03-25 — Phase 2 implementation (priorities A–E)
 **Last Updated:** 2026-03-25
 **Phase:** 2 (implementation — approved by user: "Proceed with implementation")

@@ -698,3 +698,154 @@ Note : `google-genai` est **à conserver** — utilisé en interne par `pydantic
 
 ### Stale Reports
 (aucun — tous les agents à jour sur 2026-03-25)
+
+---
+
+## Lead Report: 2026-03-25 13:00
+**Last Updated:** 2026-03-25 13:00
+
+### Context
+
+Usecases a évalué 15 nouvelles idées de features. 8 acceptées, 7 différées. Une roadmap claire avec un ordre d'implémentation recommandé est désormais disponible.
+
+### Team Status
+
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-25 10:30 — Tests CycleAudit.errors (98 tests) | 2026-03-25 10:30 | Current |
+| ui | 2026-03-24 17:00 — Performance metrics tab | 2026-03-24 17:00 | Current |
+| strategy | 2026-03-25 — Phase 2 implementation (P-A à P-E) | 2026-03-25 | Current |
+| usecases | 2026-03-25 — Évaluation 15 nouvelles features | 2026-03-25 | Current |
+
+### Résultats usecases : 8 Accept, 7 Defer, 0 Reject
+
+**Acceptées (à implémenter dans cet ordre) :**
+
+| Étape | Feature | Scope | Raison de l'ordre |
+|-------|---------|-------|-------------------|
+| 1 | **#15 Explainability** | `ExecutionResult` fields | Fondation : chaque trade aura un audit trail structuré |
+| 2 | **#12 Event semantics** | `decision_traces` schema | Migration DB légère, améliore la traçabilité de tout ce qui suit |
+| 3 | **#11 Confidence scoring** | `TradeDecision` model | Pydantic seulement, alimente #1 (règles policy sur la confiance) |
+| 4 | **#8 Realistic costs** | `engine/orders.py` | Quick win, améliore la précision backtest — #5 en dépend |
+| 5 | **#6 Correlation/concentration** | `engine/` + `policies.py` | Résout le risque documenté : 50% concentration tech sans policy check |
+| 6 | **#5 Stress testing** | `engine/backtest.py` | Valide le portefeuille sur scénarios de crise (2008, 2020, 2022) |
+| 7 | **#1 Policy-as-code** | `agents/policies.py` + YAML | Maintenant outillé : concentration (#6), confiance (#11), coûts (#8) |
+| 8 | **#3 Dynamic sizing** | `engine/orders.py` | En dernier — modifie le calcul des quantités cibles |
+
+**Différées (pas maintenant) :** #2 régimes HMM, #4 risk parity, #7 constraint optimization, #9 multi-agent committee, #10 skill registry, #13 adaptive thresholds, #14 walk-forward.
+
+### Cross-Agent Dependencies
+
+- **#1 policy-as-code** dépend de #6 (données corrélation) + #11 (confiance) + #8 (coûts) — ne pas commencer avant les trois.
+- **#3 dynamic sizing** est le changement le plus profond (`engine/orders.py`) — en dernier pour ne pas déstabiliser la logique de rebalancement pendant que les autres features se construisent.
+- **team-ui** : aucune dépendance bloquante. Les nouvelles features (#15, #12, #11) produiront de nouveaux champs dans les traces — team-ui pourra les afficher une fois stables, sans bloquer l'implémentation.
+- **team-strategy** a scope naturel sur #8 (costs), #5 (stress testing), #3 (sizing) — tous dans `engine/`.
+- **team-backend** a scope naturel sur #15, #12, #11 (models, persistence), #6 (policy), #1 (policy engine).
+
+### Top 3 Priorities
+
+1. **[team-backend]** — #15 Explainability — Ajouter `policy_checks_passed`, `policy_checks_failed`, `sizing_rationale` dans `ExecutionResult` — C'est la fondation de la roadmap. Chaque trade aura un audit trail structuré dès maintenant. Scope contenu : `agents/models.py` (champs) + `agents/policies.py` (peuplement) + `db/repository.py` (persistance). Usecases le classe comme 1er de la séquence.
+
+2. **[team-strategy]** — #8 Realistic transaction costs — Rendre `apply_slippage()` vol-adjusted et size-adjusted dans `engine/orders.py` — Quick win (< 1h), zéro risque production, améliore immédiatement la précision des backtests. Prérequis pour #5 (stress testing) qui dépend de coûts réalistes.
+
+3. **[team-backend]** — #12 Event semantics — Ajouter `event_type` enum + `tags` JSON dans `decision_traces` (migration schema) — Petite migration DB, améliore la traçabilité analytique. Prépare le terrain pour #11 (confidence) et #1 (policy-as-code).
+
+### Identified Risks
+
+- **Ordre de la roadmap doit être respecté** : commencer #1 policy-as-code avant #6 (corrélation) et #11 (confiance) produira des règles policy sans données réelles pour les alimenter.
+- **#3 dynamic sizing en dernier** : modifier les quantités cibles avant que les autres features soient stabilisées risque de rendre les tests des features précédentes invalides.
+- **#9 multi-agent trop tôt** : la tentation de sauter à une architecture multi-agent avant que #11 + #15 soient solides est un risque architectural majeur. Usecases est explicite : ne pas commencer #9 avant ces deux prérequis.
+
+### Recommended Action Plan
+
+**Démarrer maintenant (ordre recommandé par usecases) :**
+1. `/team-backend` — implémenter #15 (explainability fields in ExecutionResult)
+2. `/team-strategy` — implémenter #8 (realistic costs in apply_slippage)
+3. `/team-backend` — implémenter #12 (event semantics in decision_traces)
+
+**Ensuite (après 1–3 stables) :**
+4. `/team-backend` — #11 confidence scoring (TradeDecision.confidence + data_freshness)
+5. `/team-strategy` — #6 correlation/concentration + #5 stress testing
+6. `/team-backend` — #1 policy-as-code (hierarchical policy engine)
+7. `/team-strategy` — #3 dynamic sizing (inverse-vol weighting)
+
+### Stale Reports
+(aucun)
+
+---
+
+## Lead Report: 2026-03-25 14:00
+**Last Updated:** 2026-03-25 14:00
+
+### Context
+
+Features #15 (Explainability), #8 (Realistic costs), #12 (Event semantics) implémentées. 124 tests verts. Plan d'action complet pour finir la roadmap usecases.
+
+### Team Status
+
+| Agent | Last Session | Last Updated | Status |
+|-------|-------------|-------------|--------|
+| backend | 2026-03-25 11:00 — #15 + #12 (explainability + event semantics) | 2026-03-25 | Current |
+| ui | 2026-03-24 17:00 — Performance metrics tab | 2026-03-24 17:00 | Current |
+| strategy | 2026-03-25 — #8 vol-adjusted slippage | 2026-03-25 | Current |
+| usecases | 2026-03-25 — Évaluation 15 features | 2026-03-25 | Current |
+
+### Ce qui a été accompli (#15, #8, #12)
+
+| Feature | Ce qui a changé |
+|---------|----------------|
+| **#15 Explainability** | `ExecutionResult` +5 champs (`weight_before`, `target_weight`, `drift_before`, `slippage_pct`, `notional`). DB migration + `portfolio_agent.execute()` peuple tout. |
+| **#12 Event semantics** | `decision_traces` +2 colonnes (`event_type`, `tags`). Tous les 5 call sites peuplés. Taxonomie : `cycle_step`, `kill_switch`, `policy_violation`, `execution_failure`. |
+| **#8 Realistic costs** | `apply_slippage()` vol-adjusted et size-adjusted dans `engine/orders.py`. |
+
+**124 tests verts. 12 fichiers non commités.**
+
+### Plan d'action complet — dans l'ordre
+
+**Étape 0 — Commit maintenant** ⚠️
+12 fichiers modifiés non commités. Risque de perte si session fermée.
+
+**Étape 1 — `/team-backend` : #11 Confidence scoring**
+- `confidence: float` + `data_freshness: str` dans `TradeDecision`
+- `data_freshness` calculable depuis `MarketDataStatus.refreshed_at`
+- Signal soft uniquement (réduire taille, pas bloquer)
+- Prérequis pour #1 policy-as-code
+
+**Étape 2 — `/team-strategy` : #6 Correlation/concentration**
+- Rolling correlation matrix (pandas) + score de concentration sectorielle
+- Soft block dans `policies.py` si concentration tech > seuil
+- Prérequis pour #1 (données corrélation disponibles)
+
+**Étape 3 — `/team-strategy` : #5 Stress testing**
+- Scénarios de crise dans `engine/backtest.py` (2008, 2020 COVID, 2022 crypto bear)
+- Returns choqués par actif (config dict), zero risque production
+
+**Étape 4 — `/team-backend` : #1 Policy-as-code hiérarchique**
+- Ne démarrer qu'après #6 ET #11 — ces deux features alimentent les règles policy
+- Hiérarchie global → asset class → ticker → market context
+- Config YAML pour les règles
+
+**Étape 5 — `/team-strategy` : #3 Dynamic sizing** (en dernier)
+- Inverse-vol weighting dans `engine/orders.py` — opt-in par profil
+- ⚠️ Changement le plus profond, stabiliser tout le reste avant
+
+**Étape P1 — `/team-ui` (parallèle, n'importe quand après étape 0)**
+- Traces tab : badge `event_type` coloré (kill_switch=rouge, execution_failure=orange)
+- Executions tab : colonnes `drift_before`, `slippage_pct`, `notional`
+
+**Étape P2 — Merge feat/agent-team-skills → main**
+- Après #11 + #6 + #5 stables, ou dès maintenant si le scope actuel suffit
+
+### Cross-Agent Dependencies
+
+- **#1 policy-as-code** : bloqué par #6 + #11 — ne pas commencer avant les deux
+- **#3 dynamic sizing** : en dernier — utilise les mêmes volatilités que #6, évite la duplication
+- **#9 multi-agent** (différé) : ne pas commencer avant #11 + #15 stables
+
+### Identified Risks
+
+- **12 fichiers non commités** : risque immédiat — commit étape 0 en priorité absolue
+- **`event_type` taxonomy** non documentée dans CLAUDE.md — à ajouter après commit
+
+### Stale Reports
+(aucun)

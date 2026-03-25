@@ -102,12 +102,25 @@ _AGENT_RUNS_MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN errors_json TEXT",
 ]
 
+_EXECUTIONS_MIGRATIONS = [
+    "ALTER TABLE executions ADD COLUMN weight_before REAL DEFAULT 0.0",
+    "ALTER TABLE executions ADD COLUMN target_weight REAL DEFAULT 0.0",
+    "ALTER TABLE executions ADD COLUMN drift_before REAL DEFAULT 0.0",
+    "ALTER TABLE executions ADD COLUMN slippage_pct REAL DEFAULT 0.0",
+    "ALTER TABLE executions ADD COLUMN notional REAL DEFAULT 0.0",
+]
+
+_DECISION_TRACES_MIGRATIONS = [
+    "ALTER TABLE decision_traces ADD COLUMN event_type TEXT",
+    "ALTER TABLE decision_traces ADD COLUMN tags TEXT",
+]
+
 
 def init_db(db_path: str) -> None:
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(DDL)
-        for stmt in _AGENT_RUNS_MIGRATIONS:
+        for stmt in _AGENT_RUNS_MIGRATIONS + _EXECUTIONS_MIGRATIONS + _DECISION_TRACES_MIGRATIONS:
             try:
                 conn.execute(stmt)
             except sqlite3.OperationalError:
