@@ -123,3 +123,41 @@ Updated the executions table in the History tab (`ui/index.html` — `loadHistor
 
 1. Streamlit retirement is the next clean win — `dashboard/`, `dashboard_main.py`, and the `streamlit` dependency can be deleted without any UI rework now that the HTML/JS UI covers all views including Backtest.
 2. Consider adding `event_type` to the `executions` table directly (team-backend) to avoid the extra `/api/traces` fetch in `loadHistory()` and make the join simpler.
+
+---
+
+## Session: 2026-03-26 — Correlation Heatmap tab
+**Last Updated:** 2026-03-26
+
+### What Was Done
+
+Added a new **Correlation** tab (8th tab) to `ui/index.html` and a supporting `/api/correlation` endpoint to `api/main.py`.
+
+**Backend (`api/main.py`):**
+- New `GET /api/correlation?days=N` endpoint (default 90d, range 10–365).
+- Reads portfolio positions from `portfolio.json`, fetches per-ticker `Close` prices via `MarketService.get_historical()`, computes `pct_change()` returns, then calls `engine.performance.rolling_correlation()`.
+- Returns `{ tickers, matrix, days, n_obs }` — matrix is a 2D list of rounded float values.
+
+**Frontend (`ui/index.html`):**
+- New tab button: "Correlation" in the nav.
+- CSS: `.heatmap-table`, `.heatmap-row-label` styles for the grid layout.
+- HTML: tab div with window selector (30/60/90/180/365d), Refresh button, error/loading states, summary stats row, heatmap container, and a color-scale legend bar.
+- JS `loadCorrelation()`:
+  - Fetches `/api/correlation?days=N`
+  - Renders 4 summary stat cards: Avg Pairwise Correlation (color-coded: green < 0.3, yellow 0.3–0.6, red > 0.6), Obs count, Highest pair, Lowest pair.
+  - Renders an NxN heatmap table: negative → red (#f85149), zero → dark (#21262d), positive → blue (#58a6ff) with linear RGB interpolation. Diagonal cells are blue-tinted "1.000". Each cell has a tooltip showing ticker pair and value.
+  - Linear gradient color-scale legend at bottom.
+
+### Open Issues
+
+- Heatmap is wide for large N (9 assets). On small screens, horizontal scroll on the card container handles this.
+- Avg pairwise correlation thresholds (0.3 / 0.6) are reasonable heuristics, not portfolio-theory-backed. Adjustable if needed.
+
+### Blockers / Dependencies
+
+- (none) — tab is fully functional using only existing `MarketService` and `engine.performance.rolling_correlation`.
+
+### Recommendations for the Leader
+
+1. Correlation heatmap is a natural complement to the backtest tab for portfolio quality assessment. No further action needed from other agents.
+2. If the market DB is empty (no price history loaded), the endpoint returns 503 with a clear message. Users should run `python main.py observe` to populate it first.

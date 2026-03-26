@@ -111,6 +111,46 @@ async def get_backtest(days: int = Query(90, ge=10, le=365)):
     return results
 
 
+@app.get("/api/correlation")
+async def get_correlation(days: int = Query(90, ge=10, le=365)):
+    import json
+    import pandas as pd
+    from config import PORTFOLIO_FILE
+    from engine.performance import rolling_correlation
+    from services.market_service import MarketService
+    try:
+        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
+            portfolio = json.load(f)
+    except FileNotFoundError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Portfolio not initialized. Run: python main.py init")
+    tickers = list(portfolio.get("positions", {}).keys())
+    if not tickers:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Portfolio has no positions.")
+    svc = MarketService()
+    price_series: dict[str, "pd.Series"] = {}
+    for ticker in tickers:
+        hist = svc.get_historical(ticker, days=days)
+        if not hist.empty and "Close" in hist.columns:
+            price_series[ticker] = hist["Close"]
+    if len(price_series) < 2:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Insufficient market data for correlation.")
+    prices_df = pd.DataFrame(price_series).dropna()
+    returns_df = prices_df.pct_change().dropna()
+    corr = rolling_correlation(returns_df, window=min(days, len(returns_df)))
+    if corr.empty:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Not enough return data to compute correlation.")
+    return {
+        "tickers": list(corr.columns),
+        "matrix": [[round(v, 4) for v in row] for row in corr.values.tolist()],
+        "days": days,
+        "n_obs": len(returns_df),
+    }
+
+
 @app.get("/api/stress")
 async def get_stress():
     import json

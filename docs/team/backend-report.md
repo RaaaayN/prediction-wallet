@@ -331,3 +331,24 @@ Three evaluation layers:
 2. **Conservative profile now blocks on stale data** (`stale_data_blocks: true`). Users running conservative mode should ensure market data is refreshed before each cycle, or they'll see all trades soft-blocked with a clear reason in `policy.blocked_trades`.
 3. **Layer 1 is the integration point for #6**: once correlation/concentration data is available, add `max_sector_fraction` and `max_concentration_score` to `PolicyConfig` and evaluate them in layer 1 before the per-trade loop.
 4. **Per-ticker caps are now the safety net for large crypto single-trade exposure**. The global 35% cap was too permissive for BTC/ETH; all profiles now enforce 10–20% per-trade maximums for crypto.
+
+## Session: 2026-03-26 — vol_blend dynamic sizing + stress test PDF + /api/stress
+**Last Updated:** 2026-03-26
+
+### What Was Done
+- **profiles/*.yaml** — Added `vol_blend: 0.3` to all 4 profiles (balanced, conservative, growth, crypto_heavy). This is a top-level field read at observe-time to control the blend between fixed and inverse-vol weighted targets.
+- **agents/portfolio_agent.py::observe()** — Wired `volatilities` (extracted from `TickerMetrics.volatility_30d`) and `vol_blend` (from active profile, default 0.3) into `strategy.get_trades()`. Both `ThresholdStrategy` and `CalendarStrategy` already accepted these parameters. Also recorded `vol_blend` and `vol_assets_used` in the observability dict for traceability. Eliminated duplicate `load_portfolio()` call (now reuses `portfolio_for_strategy`).
+- **reporting/pdf_report.py** — Added `_build_stress_test(stress_results)` method (section 7). Renders a table with scenario / P&L$ / P&L% / value-after / kill-switch columns; kill-switch-triggered rows are highlighted red. Scenario descriptions are listed below the table. Updated `generate()` to accept optional `stress_results: list[dict] | None = None`.
+- **services/reporting_service.py** — Imported `run_stress_test` from `engine.backtest`. Added call to `run_stress_test(portfolio, prices)` in `generate_cycle_report()` with a try/except so PDF generation is never blocked by a stress-test failure. Passes results to `reporter.generate()`.
+- **api/main.py** — Added `GET /api/stress` endpoint. Loads portfolio from disk, resolves current prices via `MarketService`, calls `run_stress_test`, returns the 4-scenario list as JSON. Returns 503 if portfolio not initialized or has no positions.
+
+### Open Issues
+- None.
+
+### Blockers / Dependencies
+- (none)
+
+### Recommendations for the Leader
+- UI team can now surface `/api/stress` in a new "Stress Test" tab — the response shape is `[{scenario, description, portfolio_value_before, portfolio_value_after, pnl_dollars, pnl_pct, kill_switch_triggered, weights_after}]`.
+- `vol_blend` is now per-profile configurable; each profile defaults to 0.3. Operators can set it to 0.0 to disable inverse-vol sizing entirely (pure fixed targets), or to 1.0 for pure inverse-vol sizing.
+- Consider exposing `vol_blend` as an overridable API parameter in `/api/run/run-cycle` for experimentation.
