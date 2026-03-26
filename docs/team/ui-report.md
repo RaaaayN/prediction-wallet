@@ -161,3 +161,51 @@ Added a new **Correlation** tab (8th tab) to `ui/index.html` and a supporting `/
 
 1. Correlation heatmap is a natural complement to the backtest tab for portfolio quality assessment. No further action needed from other agents.
 2. If the market DB is empty (no price history loaded), the endpoint returns 503 with a clear message. Users should run `python main.py observe` to populate it first.
+
+---
+
+## Session: 2026-03-26 — Stress Test tab
+**Last Updated:** 2026-03-26
+
+### What Was Done
+
+Added a new **Stress Test** tab (9th tab) to `ui/index.html`.
+
+**Frontend only** — the `/api/stress` endpoint was already implemented by team-backend.
+
+**Changes to `ui/index.html`:**
+
+1. **Nav button**: Added `<button onclick="showTab('stress', this)">Stress Test</button>` after the Correlation button.
+
+2. **Tab HTML** (`id="tab-stress"`): Header + description, Refresh button, error/loading states, a 2-col grid of scenario cards (`id="stress-cards"`), and a P&L bar chart canvas (`id="chart-stress"`).
+
+3. **State**: Added `let stressChart = null;` alongside other chart state vars.
+
+4. **`showTab` hook**: Added `if (name === 'stress') loadStress();` so the tab auto-loads on first visit.
+
+5. **`loadStress()` function**: Fetches `GET /api/stress`, then:
+   - Maps each scenario result to a card showing: human-readable label, description, kill switch badge (red "⚠ Kill Switch" / green "✓ Safe"), 4 stat cards (Before, After, P&L $, P&L %), and a mini "Weights After Shock (Top 4)" bar visualization.
+   - Renders a Chart.js horizontal bar chart comparing P&L % across all 4 scenarios; kill-switch scenarios render in red, safe ones in blue.
+   - Handles 4xx/5xx HTTP errors, network failures, and empty result sets gracefully with visible error messages.
+
+**API response format consumed** (`list[dict]`):
+- `scenario`, `description`, `portfolio_value_before`, `portfolio_value_after`, `pnl_dollars`, `pnl_pct`, `kill_switch_triggered`, `weights_after`
+
+**Scenario label mapping** (hardcoded, matches backend `STRESS_SCENARIOS` names):
+- `covid_march_2020` → "COVID-19 Crash"
+- `gfc_2008` → "GFC 2008"
+- `rate_shock_2022` → "Rate Shock 2022"
+- `tech_selloff` → "Tech Selloff"
+
+### Open Issues
+
+- (none)
+
+### Blockers / Dependencies
+
+- (none) — tab is fully functional using the existing `/api/stress` endpoint.
+
+### Recommendations for the Leader
+
+1. **All user-facing tabs are now implemented**: Control, Portfolio, History, Agent Trace, Cycles, Performance, Backtest, Correlation, Stress Test. The HTML/JS UI is feature-complete relative to the Streamlit dashboard.
+2. Streamlit retirement (`dashboard/`, `dashboard_main.py`, `streamlit` dep) is the natural next step if not already done.
