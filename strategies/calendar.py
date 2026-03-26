@@ -8,15 +8,22 @@ from utils.time import utc_now
 
 
 class CalendarStrategy(BaseStrategy):
-    """Rebalance on a fixed calendar schedule, ignoring drift."""
+    """Rebalance on a fixed calendar schedule with an optional drift guard."""
 
-    def __init__(self, frequency: str = CALENDAR_FREQUENCY, target_allocation=None):
+    def __init__(self, frequency: str = CALENDAR_FREQUENCY, target_allocation=None, min_drift: float = 0.01):
         super().__init__(target_allocation)
         if frequency not in ("weekly", "monthly"):
             raise ValueError("frequency must be 'weekly' or 'monthly'")
         self.frequency = frequency
+        self.min_drift = min_drift
 
     def should_rebalance(self, portfolio: dict, prices: dict) -> bool:
+        """Return True if schedule elapsed AND at least one asset exceeds min_drift from target.
+
+        The drift guard prevents unnecessary cycles when the portfolio is already
+        well-balanced on the scheduled day (e.g. markets moved it back to target).
+        Set min_drift=0.0 to disable the guard and restore pure calendar behaviour.
+        """
         last_str = portfolio.get("last_rebalanced")
         if not last_str:
             return True
@@ -27,8 +34,36 @@ class CalendarStrategy(BaseStrategy):
             last = last.replace(tzinfo=now.tzinfo)
 
         if self.frequency == "weekly":
-            return (now - last) >= timedelta(weeks=1)
-        return (now - last) >= timedelta(days=30)
+            time_elapsed = (now - last) >= timedelta(weeks=1)
+        else:
+            time_elapsed = (now - last) >= timedelta(days=30)
 
-    def get_trades(self, portfolio: dict, prices: dict) -> list[dict]:
-        return self._compute_trade_orders(portfolio, prices)
+        if not time_elapsed:
+            return False
+
+        if self.min_drift > 0.0:
+            current_weights = self._compute_current_weights(portfolio, prices)
+            if current_weights:
+                max_drift = max(
+                    abs(current_weights.get(ticker, 0.0) - target_w)
+                    for ticker, target_w in self.target.items()
+                )
+                if max_drift <= self.min_drift:
+                    return False
+
+        return True
+
+    def get_trades(
+        self,
+        portfolio: dict,
+        prices: dict,
+        volatilities: dict[str, float] | None = None,
+        vol_blend: float = 1.0,
+    ) -> list[dict]:
+        """Return rebalancing orders, optionally using inverse-vol weighted targets.
+
+        Args:
+            volatilities: optional ticker → annualised 30-day vol for inverse-vol sizing.
+            vol_blend: blend between fixed (0.0) and pure inverse-vol (1.0) targets.
+        """
+        return self._compute_trade_orders(portfolio, prices, volatilities=volatilities, vol_blend=vol_blend)

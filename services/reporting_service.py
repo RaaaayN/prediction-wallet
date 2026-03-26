@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from config import TARGET_ALLOCATION
+from engine.backtest import run_stress_test
 from market.metrics import PortfolioMetrics
 from reporting.pdf_report import PDFReporter
 
@@ -23,10 +24,15 @@ class ReportingService:
             df = self.market_service.get_historical(ticker, days=90)
             if df is not None and not df.empty:
                 market_data[ticker] = self.metrics.ticker_metrics(df)
+        try:
+            stress_results = run_stress_test(portfolio, prices)
+        except Exception:
+            stress_results = []
         return self.reporter.generate(
             portfolio=portfolio,
             prices=prices,
             trades=trades,
             market_data=market_data,
             cycle_id=cycle_id,
+            stress_results=stress_results,
         )

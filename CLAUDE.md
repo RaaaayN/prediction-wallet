@@ -20,31 +20,26 @@ agents/
   deps.py              — AgentDependencies (injection de dépendances)
 
 services/
-  agent_runtime.py     — AgentCycleService (couche LangGraph, maintenue en compat)
   execution_service.py — ExecutionService (portefeuille + ordres)
   market_service.py    — MarketService (yfinance → SQLite)
   reporting_service.py — ReportingService (PDF)
-  research_service.py  — LocalResearchGateway
   gateways.py          — interfaces communes
 
-integrations/mcp/
-  registry.py          — ToolCapabilityRegistry (profils MCP)
-  server.py            — serveur MCP local (local_market_snapshot, local_research_summary)
+portfolio_loader.py    — load_profile() / get_active_profile() — charge profiles/*.yaml
 
 db/
   schema.py            — DDL: portfolio_snapshots, executions, agent_runs, decision_traces
   repository.py        — save_snapshot, save_execution, save_agent_run, save_decision_trace
 
-dashboard/
-  ui.py                — assembleur Streamlit
-  data.py              — loaders DB
-  backtest.py          — helpers backtest
-
 engine/
   portfolio.py         — compute_weights, compute_drift, compute_portfolio_value
-  orders.py            — generate_rebalance_orders, apply_slippage
-  risk.py              — compute_drawdown, check_kill_switch
-  performance.py       — performance_report, parametric_var, conditional_var
+  orders.py            — generate_rebalance_orders, apply_slippage, min_drift/min_notional
+  risk.py              — compute_drawdown, check_kill_switch, RiskLevel (OK/WARN/HALT)
+  performance.py       — performance_report, VaR (parametric + historical), CVaR, Sortino, Calmar
+  backtest.py          — run_strategy_comparison (threshold / calendar / buy-and-hold)
+
+ui/
+  index.html           — HTML/JS single-page UI (SSE streaming, all tabs)
 ```
 
 ## CLI
@@ -52,26 +47,25 @@ engine/
 ```bash
 python main.py init
 python main.py observe
-python main.py decide --use-mcp local
+python main.py decide
 python main.py execute
 python main.py audit
-python main.py run-cycle --mode simulate --use-mcp local
+python main.py run-cycle --mode simulate
 python main.py report
-streamlit run dashboard_main.py
 pytest tests/ -v
 ```
 
 ## Config & providers
 
 - `AI_PROVIDER=gemini` (défaut) ou `anthropic` — switché via `.env`
-- `MCP_PROFILE=local` ou `none`
 - `EXECUTION_MODE=simulate` ou `paper`
+- `PORTFOLIO_PROFILE=balanced` (défaut) — switché via `.env` ou `--profile` CLI arg
 - `settings.py` + `profiles/*.yaml` sont la source de vérité pour les profils portefeuille
+- `profiles/*.yaml` supporte `per_asset_threshold` pour des bandes de drift par actif
 
 ## Important behavior
 
-- l'agent principal est **Pydantic AI** (`PortfolioAgentService`), pas LangGraph
-- LangGraph (`AgentCycleService`) reste maintenu pour compatibilité mais n'est plus le chemin critique
+- l'agent principal est **Pydantic AI** (`PortfolioAgentService`) — seul chemin critique
 - seule une décision structurée (`TradeDecision`) peut être exécutée
 - chaque étape observe/decide/validate/execute/audit est tracée dans `decision_traces`
 - le kill switch (drawdown > 10%) est déterministe et bloque toute exécution

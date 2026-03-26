@@ -54,6 +54,14 @@ SLIPPAGE_CRYPTO: float = _profile["slippage_crypto"]
 
 CRYPTO_TICKERS: set[str] = {t for t in TARGET_ALLOCATION if "USD" in t and "-" in t}
 
+SECTOR_MAP: dict[str, str] = {
+    "AAPL": "tech", "MSFT": "tech", "GOOGL": "tech", "AMZN": "tech", "NVDA": "tech",
+    "TLT": "bonds", "BND": "bonds",
+    "BTC-USD": "crypto", "ETH-USD": "crypto",
+}
+
+MAX_SECTOR_CONCENTRATION: float = 0.55  # soft block: 5pp above the 50% tech target
+
 CALENDAR_FREQUENCY: str = "weekly"  # "weekly" or "monthly" for CalendarStrategy
 
 assert abs(sum(TARGET_ALLOCATION.values()) - 1.0) < 1e-6, (

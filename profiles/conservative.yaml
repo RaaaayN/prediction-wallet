@@ -6,6 +6,12 @@ drift_threshold: 0.04
 kill_switch_drawdown: 0.07
 slippage_equities: 0.001
 slippage_crypto: 0.005
+vol_blend: 0.3              # blend between fixed (0.0) and pure inverse-vol (1.0) sizing
+
+# Per-asset drift thresholds: tighter bands for bonds in conservative portfolio
+per_asset_threshold:
+  TLT: 0.02
+  BND: 0.02
 
 target_allocation:
   AAPL: 0.10
@@ -14,3 +20,9 @@ target_allocation:
   AMZN: 0.10
   TLT: 0.30
   BND: 0.30
+
+# Hierarchical policy rules (#1 policy-as-code)
+policy:
+  min_confidence: 0.35         # conservative profile requires higher decision confidence
+  stale_data_blocks: true      # stale market data blocks all trades in conservative mode
+  per_ticker_max_fraction: {}  # no crypto positions; no extra per-ticker caps needed

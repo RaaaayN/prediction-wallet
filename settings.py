@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     reports_dir: str = "data/reports"
 
     benchmark_ticker: str = "^GSPC"
-    risk_free_rate: float = 0.02
+    risk_free_rate: float = 0.045
     volatility_window: int = 30
     max_trades_per_cycle: int = Field(default=8)
     max_order_fraction_of_portfolio: float = Field(default=0.35)

@@ -8,7 +8,7 @@ import os
 import sys
 
 from agents.portfolio_agent import PortfolioAgentService
-from config import AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE, MCP_PROFILE
+from config import AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE
 
 
 def check_api_key():
@@ -72,7 +72,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strategy", choices=["threshold", "calendar"], default="threshold")
     parser.add_argument("--mode", choices=["simulate", "paper", "live"], default=EXECUTION_MODE)
     parser.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
-    parser.add_argument("--use-mcp", default=MCP_PROFILE, help="MCP profile to use (none, local)")
     parser.add_argument("--simulate-days", type=int, default=0, metavar="N")
 
     subparsers = parser.add_subparsers(dest="command")
@@ -81,7 +80,6 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--strategy", choices=["threshold", "calendar"], default="threshold")
         sub.add_argument("--mode", choices=["simulate", "paper", "live"], default=EXECUTION_MODE)
         sub.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
-        sub.add_argument("--use-mcp", default=MCP_PROFILE, help="MCP profile to use (none, local)")
         sub.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy"], default=None)
     subparsers.add_parser("report")
     subparsers.add_parser("init")
@@ -102,10 +100,10 @@ def generate_report_only():
     print(path)
 
 
-def run_days(service: PortfolioAgentService, days: int, strategy: str, mode: str, mcp_profile: str):
+def run_days(service: PortfolioAgentService, days: int, strategy: str, mode: str):
     audits = []
     for _ in range(days):
-        audits.append(service.run_cycle(strategy_name=strategy, execution_mode=mode, mcp_profile=mcp_profile))
+        audits.append(service.run_cycle(strategy_name=strategy, execution_mode=mode))
     print_json([audit.model_dump() for audit in audits])
 
 
@@ -129,16 +127,16 @@ def main():
 
     if args.simulate_days > 0:
         check_api_key()
-        run_days(service, args.simulate_days, args.strategy, args.mode, args.use_mcp)
+        run_days(service, args.simulate_days, args.strategy, args.mode)
         return
 
-    observation = service.observe(strategy_name=args.strategy, execution_mode=args.mode, mcp_profile=args.use_mcp)
+    observation = service.observe(strategy_name=args.strategy, execution_mode=args.mode)
     if command == "observe":
         print_json(observation)
         return
 
     check_api_key()
-    decision, stats = service.decide(observation, execution_mode=args.mode, mcp_profile=args.use_mcp)
+    decision, stats = service.decide(observation, execution_mode=args.mode)
     if command == "decide":
         print_json({"observation": observation.model_dump(), "decision": decision.model_dump(), "observability": stats})
         return
@@ -155,7 +153,7 @@ def main():
         )
         return
 
-    audit = service.audit(observation, decision, policy, executions, execution_mode=args.mode, mcp_profile=args.use_mcp)
+    audit = service.audit(observation, decision, policy, executions, execution_mode=args.mode)
     print_json(audit)
 
 

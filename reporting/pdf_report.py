@@ -27,7 +27,15 @@ class PDFReporter:
         self.styles.add(ParagraphStyle(name="Body", fontSize=9, fontName="Helvetica", leading=14))
         self.styles.add(ParagraphStyle(name="Alert", fontSize=9, fontName="Helvetica-Bold", textColor=colors.HexColor("#c53030")))
 
-    def generate(self, portfolio: dict, prices: dict, trades: list[dict], market_data: dict, cycle_id: str) -> str:
+    def generate(
+        self,
+        portfolio: dict,
+        prices: dict,
+        trades: list[dict],
+        market_data: dict,
+        cycle_id: str,
+        stress_results: list[dict] | None = None,
+    ) -> str:
         filename = os.path.join(self.reports_dir, f"report_{cycle_id}.pdf")
         doc = SimpleDocTemplate(filename, pagesize=A4, rightMargin=2 * cm, leftMargin=2 * cm, topMargin=2 * cm, bottomMargin=2 * cm)
         story = []
@@ -38,6 +46,7 @@ class PDFReporter:
         story.extend(self._build_risk_metrics(market_data))
         story.extend(self._build_performance_attribution(portfolio, trades))
         story.extend(self._build_anomaly_flags(trades, market_data))
+        story.extend(self._build_stress_test(stress_results or []))
         doc.build(story)
         return filename
 
@@ -124,7 +133,7 @@ class PDFReporter:
             return [Paragraph("5. Performance Attribution", self.styles["SectionHeader"]), Paragraph("Insufficient history for performance attribution.", self.styles["Body"]), Spacer(1, 0.3 * cm)]
         try:
             import pandas as pd
-            from engine.performance import annualized_return, cumulative_return, max_drawdown, sharpe_ratio, transaction_costs_total, turnover
+            from engine.performance import annualized_return, avg_slippage_bps, cumulative_return, max_drawdown, sharpe_ratio, sortino_ratio, transaction_costs_total, turnover
 
             hist_list = [{"date": h.get("date", ""), "total_value": h["total_value"]} for h in history]
             values = pd.Series([h["total_value"] for h in history])
@@ -134,15 +143,18 @@ class PDFReporter:
             net_final = history[-1]["total_value"] - costs
             net_start = history[0]["total_value"]
             cum_ret_net = (net_final - net_start) / net_start if net_start > 0 else 0.0
+            slippage_bps = avg_slippage_bps(trades)
             table = Table(
                 [
                     ["Metric", "Gross", "Net"],
                     ["Cumulative Return", f"{cum_ret_gross:+.2%}", f"{cum_ret_net:+.2%}"],
                     ["Annualized Return", f"{annualized_return(hist_list):+.2%}", "-"],
                     ["Sharpe Ratio", f"{sharpe_ratio(daily_returns):.2f}", "-"],
+                    ["Sortino Ratio", f"{sortino_ratio(daily_returns):.2f}", "-"],
                     ["Max Drawdown", f"{max_drawdown(hist_list):.2%}", "-"],
                     ["Annualized Turnover", f"{turnover(trades, float(values.mean())):.2%}", "-"],
                     ["Transaction Costs", "-", f"${costs:,.2f}"],
+                    ["Avg Slippage", "-", f"{slippage_bps:.1f} bps"],
                     ["Cost Drag", "-", f"{cum_ret_gross - cum_ret_net:.2%}"],
                 ],
                 colWidths=[7 * cm, 4 * cm, 4 * cm],
@@ -168,6 +180,41 @@ class PDFReporter:
                 elements.append(Spacer(1, 0.15 * cm))
         else:
             elements.append(Paragraph("No anomalies detected.", self.styles["Body"]))
+        elements.append(Spacer(1, 0.3 * cm))
+        return elements
+
+    def _build_stress_test(self, stress_results: list[dict]) -> list:
+        elements = [Paragraph("7. Stress Test Scenarios", self.styles["SectionHeader"])]
+        if not stress_results:
+            elements.append(Paragraph("No stress test results available.", self.styles["Body"]))
+            elements.append(Spacer(1, 0.3 * cm))
+            return elements
+        data = [["Scenario", "P&L ($)", "P&L (%)", "Value After", "Kill Switch"]]
+        for r in stress_results:
+            triggered = r.get("kill_switch_triggered", False)
+            data.append([
+                r.get("scenario", ""),
+                f"${r.get('pnl_dollars', 0):+,.0f}",
+                f"{r.get('pnl_pct', 0):+.1%}",
+                f"${r.get('portfolio_value_after', 0):,.0f}",
+                "YES" if triggered else "no",
+            ])
+        col_widths = [5 * cm, 3 * cm, 2.5 * cm, 3.5 * cm, 3 * cm]
+        table = Table(data, colWidths=col_widths)
+        base_style = self._data_table_style()
+        # Highlight kill-switch rows in red
+        for row_idx, r in enumerate(stress_results, start=1):
+            if r.get("kill_switch_triggered"):
+                base_style.add("BACKGROUND", (0, row_idx), (-1, row_idx), colors.HexColor("#fed7d7"))
+                base_style.add("TEXTCOLOR", (4, row_idx), (4, row_idx), colors.HexColor("#c53030"))
+        table.setStyle(base_style)
+        # Add scenario descriptions as body text below the table
+        elements.append(table)
+        elements.append(Spacer(1, 0.3 * cm))
+        for r in stress_results:
+            desc = r.get("description", "")
+            if desc:
+                elements.append(Paragraph(f"<b>{r.get('scenario', '')}</b>: {desc}", self.styles["Body"]))
         elements.append(Spacer(1, 0.3 * cm))
         return elements
 

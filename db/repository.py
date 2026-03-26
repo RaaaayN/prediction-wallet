@@ -13,9 +13,13 @@ from engine.portfolio import compute_drift, compute_portfolio_value, compute_wei
 from engine.risk import compute_drawdown
 from utils.time import utc_now_iso
 
+_DB_INITIALIZED: set[str] = set()
+
 
 def _connect(db_path: str = MARKET_DB) -> sqlite3.Connection:
-    init_db(db_path)
+    if db_path not in _DB_INITIALIZED:
+        init_db(db_path)
+        _DB_INITIALIZED.add(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
@@ -69,8 +73,9 @@ def save_execution(trade_result, cycle_id: str, db_path: str = MARKET_DB) -> int
         cur = conn.execute(
             """
             INSERT INTO executions
-                (cycle_id, trade_id, timestamp, ticker, action, quantity, market_price, fill_price, cost, slippage, reason, success, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (cycle_id, trade_id, timestamp, ticker, action, quantity, market_price, fill_price, cost, slippage,
+                 reason, success, error, weight_before, target_weight, drift_before, slippage_pct, notional)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cycle_id,
@@ -86,6 +91,11 @@ def save_execution(trade_result, cycle_id: str, db_path: str = MARKET_DB) -> int
                 trade.get("reason", ""),
                 int(bool(trade.get("success", False))),
                 trade.get("error", ""),
+                trade.get("weight_before", 0.0),
+                trade.get("target_weight", 0.0),
+                trade.get("drift_before", 0.0),
+                trade.get("slippage_pct", 0.0),
+                trade.get("notional", 0.0),
             ),
         )
         conn.commit()
@@ -189,8 +199,8 @@ def save_decision_trace(trace: dict, db_path: str = MARKET_DB) -> int:
         cur = conn.execute(
             """
             INSERT INTO decision_traces
-                (cycle_id, stage, payload_json, validation_json, mcp_tools_json, provider, agent_backend, execution_mode, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (cycle_id, stage, payload_json, validation_json, mcp_tools_json, provider, agent_backend, execution_mode, created_at, event_type, tags)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trace.get("cycle_id", ""),
@@ -202,6 +212,8 @@ def save_decision_trace(trace: dict, db_path: str = MARKET_DB) -> int:
                 trace.get("agent_backend"),
                 trace.get("execution_mode"),
                 utc_now_iso(),
+                trace.get("event_type"),
+                trace.get("tags"),
             ),
         )
         conn.commit()
@@ -221,6 +233,34 @@ def get_decision_traces(limit: int = 100, cycle_id: str | None = None, db_path: 
                     "SELECT * FROM decision_traces ORDER BY created_at DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def get_snapshots(limit: int = 60, db_path: str = MARKET_DB) -> list[dict]:
+    try:
+        with _connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM portfolio_snapshots ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return list(reversed([dict(r) for r in rows]))  # ASC for timeline charts
+    except Exception:
+        return []
+
+
+def get_latest_positions(db_path: str = MARKET_DB) -> list[dict]:
+    try:
+        with _connect(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT p.* FROM positions p
+                JOIN portfolio_snapshots s ON p.snapshot_id = s.id
+                WHERE s.id = (SELECT MAX(id) FROM portfolio_snapshots)
+                ORDER BY p.ticker ASC
+                """,
+            ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []

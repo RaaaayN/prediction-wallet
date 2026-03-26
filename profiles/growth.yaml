@@ -6,6 +6,14 @@ drift_threshold: 0.06
 kill_switch_drawdown: 0.15
 slippage_equities: 0.001
 slippage_crypto: 0.005
+vol_blend: 0.3              # blend between fixed (0.0) and pure inverse-vol (1.0) sizing
+
+# Per-asset drift thresholds: wider for crypto, tighter for bonds
+per_asset_threshold:
+  BTC-USD: 0.09
+  ETH-USD: 0.09
+  TLT: 0.03
+  BND: 0.03
 
 target_allocation:
   AAPL: 0.16
@@ -17,3 +25,11 @@ target_allocation:
   BND: 0.10
   BTC-USD: 0.06
   ETH-USD: 0.04
+
+# Hierarchical policy rules (#1 policy-as-code)
+policy:
+  min_confidence: 0.15         # growth profile tolerates more uncertainty
+  stale_data_blocks: false
+  per_ticker_max_fraction:
+    BTC-USD: 0.10              # small crypto allocation — keep individual trades tight
+    ETH-USD: 0.06

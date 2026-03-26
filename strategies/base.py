@@ -42,9 +42,28 @@ class BaseStrategy(ABC):
         weights = {ticker: mv / total for ticker, mv in market_values.items()}
         return weights
 
-    def _compute_trade_orders(self, portfolio: dict, prices: dict) -> list[dict]:
+    def _compute_trade_orders(
+        self,
+        portfolio: dict,
+        prices: dict,
+        min_drift: float = 0.0,
+        volatilities: dict[str, float] | None = None,
+        vol_blend: float = 1.0,
+    ) -> list[dict]:
         """
         Compute buy/sell orders needed to go from current weights to target weights.
+
+        Args:
+            min_drift: skip assets whose |current_weight - target_weight| <= min_drift (tolerance band)
+            volatilities: optional ticker → annualised 30-day vol. When provided, target weights
+                are adjusted via inverse-volatility weighting (higher-vol assets get less capital).
+            vol_blend: 0.0 = pure fixed target, 1.0 = pure inverse-vol, values in between blend.
+                       Only used when volatilities is provided.
+
         Returns: list of {"action", "ticker", "quantity", "reason"}
         """
-        return _generate_orders(portfolio, prices, self.target, min_qty=0.001)
+        target = self.target
+        if volatilities:
+            from engine.portfolio import compute_inverse_vol_weights
+            target = compute_inverse_vol_weights(volatilities, self.target, blend=vol_blend)
+        return _generate_orders(portfolio, prices, target, min_qty=0.001, min_drift=min_drift)

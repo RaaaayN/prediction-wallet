@@ -81,7 +81,8 @@ class TestCalendarStrategy:
 
     def test_rebalance_after_one_week(self):
         old = (utc_now() - timedelta(weeks=2)).isoformat()
-        portfolio = _make_portfolio(last_rebalanced=old)
+        # Use a drifted portfolio (AAPL=60%, MSFT=40%) so the drift guard passes
+        portfolio = _make_portfolio(aapl_qty=6.0, msft_qty=2.0, last_rebalanced=old)
         assert self.strategy.should_rebalance(portfolio, PRICES) is True
 
     def test_monthly_not_triggered_after_two_weeks(self):

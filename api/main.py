@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -28,27 +27,6 @@ app.add_middleware(
 )
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-def _db_path() -> str:
-    from config import MARKET_DB
-    return MARKET_DB
-
-
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path())
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def _rows(query: str, params: tuple = ()) -> list[dict]:
-    try:
-        with _connect() as conn:
-            return [dict(r) for r in conn.execute(query, params).fetchall()]
-    except Exception as exc:
-        return [{"error": str(exc)}]
-
-
 # ── static UI ─────────────────────────────────────────────────────────────────
 
 UI_DIR = PROJECT_ROOT / "ui"
@@ -64,37 +42,38 @@ async def root():
 
 @app.get("/api/portfolio")
 async def get_portfolio():
-    from config import PORTFOLIO_FILE
+    from config import INITIAL_CAPITAL, PORTFOLIO_FILE
     try:
         with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        # Compute pnl from last history entry (raw JSON doesn't store these fields)
+        history = data.get("history", [])
+        total_value = history[-1]["total_value"] if history else data.get("cash", INITIAL_CAPITAL)
+        pnl_dollars = total_value - INITIAL_CAPITAL
+        data.setdefault("pnl_dollars", pnl_dollars)
+        data.setdefault("pnl_pct", pnl_dollars / INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else 0.0)
+        return data
     except FileNotFoundError:
         return {"error": "Portfolio not initialized. Run: python main.py init"}
 
 
 @app.get("/api/snapshots")
 async def get_snapshots(limit: int = Query(60, ge=1, le=500)):
-    rows = _rows(
-        "SELECT * FROM portfolio_snapshots ORDER BY timestamp DESC LIMIT ?",
-        (limit,),
-    )
-    return list(reversed(rows))
+    from db.repository import get_snapshots as _get_snapshots
+    return _get_snapshots(limit=limit)
 
 
 @app.get("/api/runs")
 async def get_runs(limit: int = Query(20, ge=1, le=200)):
-    return _rows(
-        "SELECT * FROM agent_runs ORDER BY timestamp DESC LIMIT ?",
-        (limit,),
-    )
+    from db.repository import get_agent_runs
+    return get_agent_runs(limit=limit)
 
 
 @app.get("/api/executions")
 async def get_executions(limit: int = Query(50, ge=1, le=500)):
-    return _rows(
-        "SELECT * FROM executions ORDER BY timestamp DESC LIMIT ?",
-        (limit,),
-    )
+    from db.repository import get_executions as _get_executions
+    df = _get_executions(limit=limit)
+    return df.to_dict(orient="records") if not df.empty else []
 
 
 @app.get("/api/traces")
@@ -102,55 +81,66 @@ async def get_traces(
     limit: int = Query(100, ge=1, le=500),
     cycle_id: str | None = Query(None),
 ):
-    if cycle_id:
-        return _rows(
-            "SELECT * FROM decision_traces WHERE cycle_id = ? ORDER BY created_at ASC LIMIT ?",
-            (cycle_id, limit),
-        )
-    return _rows(
-        "SELECT * FROM decision_traces ORDER BY created_at DESC LIMIT ?",
-        (limit,),
-    )
+    from db.repository import get_decision_traces
+    traces = get_decision_traces(limit=limit, cycle_id=cycle_id)
+    return list(reversed(traces)) if cycle_id else traces  # cycle view: ASC; global: DESC
 
 
 @app.get("/api/positions")
 async def get_positions(cycle_id: str | None = Query(None)):
     if cycle_id:
-        return _rows(
-            """
-            SELECT p.* FROM positions p
-            JOIN portfolio_snapshots s ON p.snapshot_id = s.id
-            WHERE s.cycle_id = ? ORDER BY p.ticker ASC
-            """,
-            (cycle_id,),
-        )
-    return _rows(
-        """
-        SELECT p.* FROM positions p
-        JOIN portfolio_snapshots s ON p.snapshot_id = s.id
-        WHERE s.id = (SELECT MAX(id) FROM portfolio_snapshots)
-        ORDER BY p.ticker ASC
-        """,
-    )
+        from db.repository import get_positions_by_cycle
+        return get_positions_by_cycle(cycle_id=cycle_id)
+    from db.repository import get_latest_positions
+    return get_latest_positions()
 
 
 @app.get("/api/market-status")
 async def get_market_status():
-    return _rows("SELECT * FROM market_data_status ORDER BY ticker ASC")
+    from db.repository import get_market_data_status
+    return get_market_data_status()
+
+
+@app.get("/api/backtest")
+async def get_backtest(days: int = Query(90, ge=10, le=365)):
+    from engine.backtest import run_strategy_comparison
+    results = run_strategy_comparison(days=days)
+    if results is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Insufficient market data for backtest.")
+    return results
+
+
+@app.get("/api/stress")
+async def get_stress():
+    import json
+    from config import PORTFOLIO_FILE
+    from engine.backtest import run_stress_test
+    from services.market_service import MarketService
+    try:
+        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
+            portfolio = json.load(f)
+    except FileNotFoundError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Portfolio not initialized. Run: python main.py init")
+    tickers = list(portfolio.get("positions", {}).keys())
+    if not tickers:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Portfolio has no positions.")
+    prices = MarketService().get_latest_prices(tickers)
+    return run_stress_test(portfolio, prices)
 
 
 @app.get("/api/config")
 async def get_config():
     try:
         from config import (
-            AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE,
-            MCP_PROFILE, TARGET_ALLOCATION,
+            AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE, TARGET_ALLOCATION,
         )
         return {
             "ai_provider": AI_PROVIDER,
             "agent_backend": AGENT_BACKEND,
             "execution_mode": EXECUTION_MODE,
-            "mcp_profile": MCP_PROFILE,
             "target_allocation": TARGET_ALLOCATION,
         }
     except Exception as exc:
@@ -162,7 +152,6 @@ async def get_config():
 class RunRequest(BaseModel):
     strategy: str = "threshold"
     mode: str = "simulate"
-    mcp: str = "none"
     profile: str | None = None
 
 
@@ -178,7 +167,7 @@ async def run_step(step: str, req: RunRequest = RunRequest()):
     if step in ("report", "init"):
         args = ["main.py", step]
     else:
-        args = build_cycle_args(step, req.strategy, req.mode, req.mcp, req.profile)
+        args = build_cycle_args(step, req.strategy, req.mode, req.profile)
 
     return StreamingResponse(
         stream_command(args),
