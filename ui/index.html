@@ -64,6 +64,13 @@
     .collapsible-raw summary:hover { color:#58a6ff; }
     .collapsible-raw pre { margin-top:6px; }
 
+    /* Correlation heatmap */
+    .heatmap-table { border-collapse: separate; border-spacing: 2px; }
+    .heatmap-table th { color: #8b949e; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 4px 6px; border: none; background: transparent; }
+    .heatmap-table td { width: 64px; height: 48px; text-align: center; font-size: 12px; font-weight: 600; border-radius: 4px; border: none; cursor: default; transition: opacity .1s; }
+    .heatmap-table td:hover { opacity: .8; }
+    .heatmap-row-label { color: #8b949e; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; text-align: right !important; padding-right: 8px !important; background: transparent !important; width: auto; height: auto; cursor: default; }
+
     /* Result panel below terminal */
     #result-panel { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; }
     #result-panel h3 { font-size:13px; font-weight:600; color:#8b949e; text-transform:uppercase; letter-spacing:.05em; margin-bottom:12px; }
@@ -96,6 +103,7 @@
   <button class="tab-btn py-3 text-sm" onclick="showTab('runs', this)">Cycles</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('perf', this)">Performance</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('backtest', this)">Backtest</button>
+  <button class="tab-btn py-3 text-sm" onclick="showTab('correlation', this)">Correlation</button>
 </nav>
 
 <main class="p-6 max-w-7xl mx-auto">
@@ -356,6 +364,51 @@
   <p class="text-xs text-gray-600 mt-4">Requires <code class="font-mono text-gray-500">/api/backtest</code> endpoint — team-backend task.</p>
 </div>
 
+<!-- ═══════════════ CORRELATION TAB ═══════════════ -->
+<div id="tab-correlation" class="hidden">
+  <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Correlation Heatmap</h2>
+      <p class="text-xs text-gray-500 mt-1">Pearson correlation of daily returns — computed from market price history</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-gray-400">Window:</label>
+      <select id="corr-days" class="text-xs">
+        <option value="30">30d</option>
+        <option value="60">60d</option>
+        <option value="90" selected>90d</option>
+        <option value="180">180d</option>
+        <option value="365">365d</option>
+      </select>
+      <button class="btn btn-primary text-xs" onclick="loadCorrelation()">Refresh</button>
+    </div>
+  </div>
+  <div id="corr-error" class="hidden text-sm p-3 rounded mb-4" style="background:#3d1a1a;border:1px solid #f85149;color:#f85149"></div>
+  <div id="corr-loading" class="hidden text-sm text-gray-500 mb-4">Loading correlation data...</div>
+
+  <div id="corr-content" class="hidden">
+    <!-- Summary stat -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5" id="corr-stats"></div>
+
+    <!-- Heatmap -->
+    <div class="card p-5 overflow-x-auto mb-4">
+      <div id="corr-heatmap"></div>
+    </div>
+
+    <!-- Scale legend -->
+    <div class="card p-4 flex items-center gap-4">
+      <span class="text-xs text-gray-500">Scale:</span>
+      <div style="display:flex;align-items:center;gap:6px;flex:1">
+        <span class="text-xs" style="color:#f85149">−1.0</span>
+        <div style="flex:1;height:10px;border-radius:5px;background:linear-gradient(to right,#f85149,#21262d 50%,#58a6ff);"></div>
+        <span class="text-xs" style="color:#8b949e">0.0</span>
+        <div style="width:1px;height:14px;background:#30363d;"></div>
+        <span class="text-xs" style="color:#58a6ff">+1.0</span>
+      </div>
+    </div>
+  </div>
+</div>
+
 </main>
 
 <script>
@@ -380,6 +433,7 @@ function showTab(name, btn) {
   if (name === 'runs') loadRuns();
   if (name === 'perf') loadPerf();
   if (name === 'backtest') loadBacktest();
+  if (name === 'correlation') loadCorrelation();
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -1541,6 +1595,102 @@ async function loadBacktest() {
   } catch (e) {
     loadEl.classList.add('hidden');
     errEl.textContent = 'Backtest endpoint not available. Requires /api/backtest — team-backend task.';
+    errEl.classList.remove('hidden');
+  }
+}
+
+// ── correlation heatmap ────────────────────────────────────────────────────
+async function loadCorrelation() {
+  const days = document.getElementById('corr-days').value;
+  const errEl     = document.getElementById('corr-error');
+  const loadEl    = document.getElementById('corr-loading');
+  const contentEl = document.getElementById('corr-content');
+  errEl.classList.add('hidden');
+  loadEl.classList.remove('hidden');
+  contentEl.classList.add('hidden');
+
+  try {
+    const resp = await fetch(`${API}/api/correlation?days=${days}`);
+    loadEl.classList.add('hidden');
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+      errEl.textContent = detail.detail || 'Failed to load correlation data.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const data = await resp.json();
+    const { tickers, matrix, n_obs } = data;
+
+    // ── summary stats ───────────────────────────────────────────────────────
+    // avg pairwise correlation (off-diagonal mean)
+    let sum = 0, count = 0;
+    let maxPair = { a: '', b: '', v: -2 };
+    let minPair = { a: '', b: '', v: 2 };
+    for (let i = 0; i < tickers.length; i++) {
+      for (let j = 0; j < tickers.length; j++) {
+        if (i === j) continue;
+        const v = matrix[i][j];
+        sum += v; count++;
+        if (v > maxPair.v) maxPair = { a: tickers[i], b: tickers[j], v };
+        if (v < minPair.v) minPair = { a: tickers[i], b: tickers[j], v };
+      }
+    }
+    const avgCorr = count > 0 ? sum / count : 0;
+    const statsEl = document.getElementById('corr-stats');
+    statsEl.innerHTML = `
+      ${statCard('Avg Pairwise', fmt(avgCorr, 3), avgCorr > 0.6 ? 'red' : avgCorr > 0.3 ? 'yellow' : 'green')}
+      ${statCard('Obs (days)', n_obs, 'blue')}
+      ${statCard('Highest', esc(maxPair.a)+'/'+esc(maxPair.b), 'red')}
+      ${statCard('Lowest', esc(minPair.a)+'/'+esc(minPair.b), 'green')}
+    `;
+
+    // ── heatmap table ───────────────────────────────────────────────────────
+    function corrColor(v) {
+      // v in [-1, 1]: negative → red, zero → dark, positive → blue
+      // Diagonal cells get a special neutral style
+      const clamp = Math.max(-1, Math.min(1, v));
+      if (clamp >= 0) {
+        // 0 → #21262d, 1 → #58a6ff
+        const t = clamp;
+        const r = Math.round(33  + t * (88  - 33));
+        const g = Math.round(38  + t * (166 - 38));
+        const b = Math.round(45  + t * (255 - 45));
+        return `rgb(${r},${g},${b})`;
+      } else {
+        // -1 → #f85149, 0 → #21262d
+        const t = -clamp;
+        const r = Math.round(33  + t * (248 - 33));
+        const g = Math.round(38  + t * (81  - 38));
+        const b = Math.round(45  + t * (73  - 45));
+        return `rgb(${r},${g},${b})`;
+      }
+    }
+    function textColor(v) {
+      return Math.abs(v) > 0.4 ? '#e6edf3' : '#8b949e';
+    }
+
+    let tbl = '<table class="heatmap-table"><thead><tr><th></th>';
+    for (const t of tickers) tbl += `<th>${esc(t)}</th>`;
+    tbl += '</tr></thead><tbody>';
+    for (let i = 0; i < tickers.length; i++) {
+      tbl += `<tr><td class="heatmap-row-label">${esc(tickers[i])}</td>`;
+      for (let j = 0; j < tickers.length; j++) {
+        const v = matrix[i][j];
+        const isDiag = i === j;
+        const bg = isDiag ? '#2d2f36' : corrColor(v);
+        const fg = isDiag ? '#58a6ff' : textColor(v);
+        const title = isDiag ? `${tickers[i]}` : `${tickers[i]} / ${tickers[j]}: ${v.toFixed(3)}`;
+        tbl += `<td style="background:${bg};color:${fg}" title="${esc(title)}">${isDiag ? '1.000' : v.toFixed(3)}</td>`;
+      }
+      tbl += '</tr>';
+    }
+    tbl += '</tbody></table>';
+    document.getElementById('corr-heatmap').innerHTML = tbl;
+
+    contentEl.classList.remove('hidden');
+  } catch (e) {
+    loadEl.classList.add('hidden');
+    errEl.textContent = 'Correlation endpoint unavailable: ' + String(e);
     errEl.classList.remove('hidden');
   }
 }
