@@ -6,6 +6,7 @@ drift_threshold: 0.04
 kill_switch_drawdown: 0.07
 slippage_equities: 0.001
 slippage_crypto: 0.005
+vol_blend: 0.3              # blend between fixed (0.0) and pure inverse-vol (1.0) sizing
 
 # Per-asset drift thresholds: tighter bands for bonds in conservative portfolio
 per_asset_threshold:

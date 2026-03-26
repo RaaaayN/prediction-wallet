@@ -111,6 +111,26 @@ async def get_backtest(days: int = Query(90, ge=10, le=365)):
     return results
 
 
+@app.get("/api/stress")
+async def get_stress():
+    import json
+    from config import PORTFOLIO_FILE
+    from engine.backtest import run_stress_test
+    from services.market_service import MarketService
+    try:
+        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
+            portfolio = json.load(f)
+    except FileNotFoundError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Portfolio not initialized. Run: python main.py init")
+    tickers = list(portfolio.get("positions", {}).keys())
+    if not tickers:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Portfolio has no positions.")
+    prices = MarketService().get_latest_prices(tickers)
+    return run_stress_test(portfolio, prices)
+
+
 @app.get("/api/config")
 async def get_config():
     try:

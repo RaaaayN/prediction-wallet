@@ -168,9 +168,17 @@ class PortfolioAgentService:
         portfolio = PortfolioSnapshot(**portfolio_dict)
         kill_switch = KillSwitch().check_with_prices(self.execution_service.load_portfolio(), prices)
         drawdown = (portfolio.total_value - portfolio.peak_value) / portfolio.peak_value if portfolio.peak_value > 0 else 0.0
+        vols = {ticker: m.volatility_30d for ticker, m in metrics.items() if m.volatility_30d > 0}
+        from portfolio_loader import get_active_profile
+        vol_blend = float(get_active_profile().get("vol_blend", 0.3))
         strategy = self._get_strategy(strategy_name)
-        strategy_signal = strategy.should_rebalance(self.execution_service.load_portfolio(), prices) and not kill_switch
-        trade_plan = [TradeProposal(**trade) for trade in (strategy.get_trades(self.execution_service.load_portfolio(), prices) if strategy_signal else [])]
+        portfolio_for_strategy = self.execution_service.load_portfolio()
+        strategy_signal = strategy.should_rebalance(portfolio_for_strategy, prices) and not kill_switch
+        trade_plan = [TradeProposal(**trade) for trade in (strategy.get_trades(
+            portfolio_for_strategy, prices,
+            volatilities=vols if vols else None,
+            vol_blend=vol_blend,
+        ) if strategy_signal else [])]
         market = MarketSnapshot(
             prices=prices,
             metrics=metrics,
@@ -189,6 +197,8 @@ class PortfolioAgentService:
                 "agent_backend": AGENT_BACKEND,
                 "fetch_latency_ms": fetch_latency_ms,
                 "strategy_signal": strategy_signal,
+                "vol_blend": vol_blend,
+                "vol_assets_used": len(vols),
             },
         )
         self.audit_repository.save_decision_trace({
