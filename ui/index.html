@@ -104,6 +104,7 @@
   <button class="tab-btn py-3 text-sm" onclick="showTab('perf', this)">Performance</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('backtest', this)">Backtest</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('correlation', this)">Correlation</button>
+  <button class="tab-btn py-3 text-sm" onclick="showTab('stress', this)">Stress Test</button>
 </nav>
 
 <main class="p-6 max-w-7xl mx-auto">
@@ -409,6 +410,32 @@
   </div>
 </div>
 
+<!-- ═══════════════ STRESS TEST TAB ═══════════════ -->
+<div id="tab-stress" class="hidden">
+  <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Stress Test</h2>
+      <p class="text-xs text-gray-500 mt-1">Historical shock scenarios applied to current portfolio — kill switch triggers at −10% drawdown</p>
+    </div>
+    <button class="btn btn-primary text-xs" onclick="loadStress()">Refresh</button>
+  </div>
+  <div id="stress-error" class="hidden text-sm p-3 rounded mb-4" style="background:#3d1a1a;border:1px solid #f85149;color:#f85149"></div>
+  <div id="stress-loading" class="hidden text-sm text-gray-500 mb-4">Running stress scenarios...</div>
+
+  <div id="stress-content" class="hidden">
+    <!-- Scenario cards -->
+    <div id="stress-cards" class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5"></div>
+
+    <!-- P&L bar chart -->
+    <div class="card p-4">
+      <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-4">P&L Impact by Scenario</h3>
+      <div style="height:180px">
+        <canvas id="chart-stress"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
 </main>
 
 <script>
@@ -419,6 +446,7 @@ let drawdownChart = null;
 let allocChart = null;
 let backtestChart = null;
 let perfChart = null;
+let stressChart = null;
 let allTraces = [];
 
 // ── tabs ───────────────────────────────────────────────────────────────────
@@ -434,6 +462,7 @@ function showTab(name, btn) {
   if (name === 'perf') loadPerf();
   if (name === 'backtest') loadBacktest();
   if (name === 'correlation') loadCorrelation();
+  if (name === 'stress') loadStress();
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -1691,6 +1720,114 @@ async function loadCorrelation() {
   } catch (e) {
     loadEl.classList.add('hidden');
     errEl.textContent = 'Correlation endpoint unavailable: ' + String(e);
+    errEl.classList.remove('hidden');
+  }
+}
+
+// ── stress test ────────────────────────────────────────────────────────────
+async function loadStress() {
+  const errEl     = document.getElementById('stress-error');
+  const loadEl    = document.getElementById('stress-loading');
+  const contentEl = document.getElementById('stress-content');
+  errEl.classList.add('hidden');
+  loadEl.classList.remove('hidden');
+  contentEl.classList.add('hidden');
+
+  const scenarioLabels = {
+    covid_march_2020: 'COVID-19 Crash',
+    gfc_2008: 'GFC 2008',
+    rate_shock_2022: 'Rate Shock 2022',
+    tech_selloff: 'Tech Selloff',
+  };
+
+  try {
+    const resp = await fetch(`${API}/api/stress`);
+    loadEl.classList.add('hidden');
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+      errEl.textContent = detail.detail || 'Failed to load stress test data.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const results = await resp.json();
+
+    if (!results || results.length === 0) {
+      errEl.textContent = 'No stress test results returned. Portfolio may not be initialized.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+
+    // ── scenario cards ──────────────────────────────────────────────────────
+    const cardsEl = document.getElementById('stress-cards');
+    cardsEl.innerHTML = results.map(r => {
+      const label = scenarioLabels[r.scenario] || r.scenario.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const ks = r.kill_switch_triggered;
+      const pctColor = r.pnl_pct < 0 ? 'red' : 'green';
+      const pct = (r.pnl_pct * 100).toFixed(1);
+      const pnlSign = r.pnl_dollars >= 0 ? '+' : '';
+
+      // Top 4 weights after shock
+      const weightEntries = Object.entries(r.weights_after || {})
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4);
+      const weightBars = weightEntries.map(([ticker, w]) => `
+        <div class="flex items-center gap-2 text-xs">
+          <span class="text-gray-400 w-14 truncate">${esc(ticker)}</span>
+          <div class="alloc-bar-bg flex-1"><div class="alloc-bar-fill" style="width:${(w*100).toFixed(1)}%"></div></div>
+          <span class="text-gray-300 w-10 text-right">${(w*100).toFixed(1)}%</span>
+        </div>`).join('');
+
+      return `<div class="card p-4">
+        <div class="flex items-start justify-between mb-3 gap-2">
+          <div>
+            <div class="text-sm font-semibold text-white">${esc(label)}</div>
+            <div class="text-xs text-gray-500 mt-0.5 leading-snug">${esc(r.description)}</div>
+          </div>
+          ${ks
+            ? `<span class="stage-badge" style="background:#3d1a1a;color:#f85149;white-space:nowrap">&#x26A0; Kill Switch</span>`
+            : `<span class="stage-badge" style="background:#1a4731;color:#3fb950;white-space:nowrap">&#x2713; Safe</span>`}
+        </div>
+        <div class="stat-grid mb-3">
+          ${statCard('Before', fmtUSD(r.portfolio_value_before), 'blue')}
+          ${statCard('After', fmtUSD(r.portfolio_value_after), ks ? 'red' : 'green')}
+          ${statCard('P&L $', pnlSign + fmtUSD(r.pnl_dollars), pctColor)}
+          ${statCard('P&L %', pct + '%', pctColor)}
+        </div>
+        ${weightBars ? `<div class="trace-section"><h4>Weights After Shock (Top 4)</h4><div class="flex flex-col gap-1">${weightBars}</div></div>` : ''}
+      </div>`;
+    }).join('');
+
+    // ── P&L bar chart ───────────────────────────────────────────────────────
+    const ctxSt = document.getElementById('chart-stress').getContext('2d');
+    if (stressChart) { stressChart.destroy(); stressChart = null; }
+    stressChart = new Chart(ctxSt, {
+      type: 'bar',
+      data: {
+        labels: results.map(r => scenarioLabels[r.scenario] || r.scenario),
+        datasets: [{
+          label: 'P&L %',
+          data: results.map(r => +(r.pnl_pct * 100).toFixed(2)),
+          backgroundColor: results.map(r => r.kill_switch_triggered ? 'rgba(248,81,73,0.65)' : 'rgba(88,166,255,0.45)'),
+          borderColor: results.map(r => r.kill_switch_triggered ? '#f85149' : '#58a6ff'),
+          borderWidth: 1,
+          borderRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: '#21262d' } },
+          y: { ticks: { color: '#8b949e', font: { size: 11 }, callback: v => v + '%' }, grid: { color: '#21262d' } }
+        }
+      }
+    });
+
+    contentEl.classList.remove('hidden');
+  } catch (e) {
+    loadEl.classList.add('hidden');
+    errEl.textContent = 'Stress test endpoint unavailable: ' + String(e);
     errEl.classList.remove('hidden');
   }
 }
