@@ -1,4 +1,4 @@
-"""DB package - structured SQLite persistence layer."""
+"""DB package — structured persistence (SQLite or PostgreSQL via ``DATABASE_URL``)."""
 
 from db.repository import (
     get_agent_runs,

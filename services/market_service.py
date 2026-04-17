@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import time
 
 import pandas as pd
 
-from config import BENCHMARK_TICKER, MARKET_DB
+from config import BENCHMARK_TICKER, MARKET_DB, USE_POSTGRES
+from db.connection import excluded_qualifier, get_connection, get_sqlalchemy_engine, q
 from db.schema import init_db
 from utils.time import utc_now_iso
 
@@ -78,7 +78,7 @@ class MarketService:
     def __init__(self, db_path: str = MARKET_DB, min_refresh_interval_seconds: int = 900):
         self.db_path = db_path
         self.min_refresh_interval_seconds = min_refresh_interval_seconds
-        init_db(self.db_path)
+        init_db(self.db_path if not USE_POSTGRES else None)
 
     def fetch_and_store(self, tickers: list[str], period: str = "1y", force: bool = False) -> dict[str, pd.DataFrame]:
         results = {}
@@ -177,8 +177,7 @@ class MarketService:
 
     def get_refresh_status(self) -> list[dict]:
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
+            with get_connection(self.db_path) as conn:
                 rows = conn.execute(
                     "SELECT ticker, refreshed_at, success, error FROM market_data_status ORDER BY ticker"
                 ).fetchall()
@@ -192,11 +191,27 @@ class MarketService:
         return _normalize_ohlcv_columns(df)
 
     def _save_to_db(self, df: pd.DataFrame, ticker: str) -> None:
+        if USE_POSTGRES:
+            eng = get_sqlalchemy_engine()
+            df.to_sql(f"prices__{ticker}", eng, if_exists="replace", index=True)
+            return
+        import sqlite3
+
         with sqlite3.connect(self.db_path) as conn:
             df.to_sql(f"prices__{ticker}", conn, if_exists="replace", index=True)
 
     def _load_from_db(self, ticker: str) -> pd.DataFrame | None:
         try:
+            if USE_POSTGRES:
+                eng = get_sqlalchemy_engine()
+                return pd.read_sql(
+                    f'SELECT * FROM "prices__{ticker}"',
+                    eng,
+                    index_col="Date",
+                    parse_dates=["Date"],
+                )
+            import sqlite3
+
             with sqlite3.connect(self.db_path) as conn:
                 return pd.read_sql(
                     f'SELECT * FROM "prices__{ticker}"',
@@ -206,6 +221,16 @@ class MarketService:
                 )
         except Exception:
             try:
+                if USE_POSTGRES:
+                    eng = get_sqlalchemy_engine()
+                    return pd.read_sql(
+                        f'SELECT * FROM "{ticker}"',
+                        eng,
+                        index_col="Date",
+                        parse_dates=["Date"],
+                    )
+                import sqlite3
+
                 with sqlite3.connect(self.db_path) as conn:
                     return pd.read_sql(
                         f'SELECT * FROM "{ticker}"',
@@ -218,27 +243,26 @@ class MarketService:
 
     def _needs_refresh(self, ticker: str) -> bool:
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                row = conn.execute("SELECT refreshed_at FROM market_data_status WHERE ticker = ?", (ticker,)).fetchone()
-            if row is None or not row[0]:
+            with get_connection(self.db_path) as conn:
+                row = conn.execute(q("SELECT refreshed_at FROM market_data_status WHERE ticker = ?"), (ticker,)).fetchone()
+            if row is None or not row["refreshed_at"]:
                 return True
-            refreshed_at = pd.to_datetime(row[0], utc=True)
+            refreshed_at = pd.to_datetime(row["refreshed_at"], utc=True)
             age = (pd.Timestamp.utcnow() - refreshed_at).total_seconds()
             return age >= self.min_refresh_interval_seconds
         except Exception:
             return True
 
     def _record_refresh(self, ticker: str, success: bool, error: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
+        ex = excluded_qualifier()
+        sql = f"""
                 INSERT INTO market_data_status (ticker, refreshed_at, success, error)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(ticker) DO UPDATE SET
-                    refreshed_at = excluded.refreshed_at,
-                    success = excluded.success,
-                    error = excluded.error
-                """,
-                (ticker, utc_now_iso(), int(success), error),
-            )
+                ON CONFLICT (ticker) DO UPDATE SET
+                    refreshed_at = {ex}.refreshed_at,
+                    success = {ex}.success,
+                    error = {ex}.error
+                """
+        with get_connection(self.db_path) as conn:
+            conn.execute(q(sql), (ticker, utc_now_iso(), int(success), error))
             conn.commit()

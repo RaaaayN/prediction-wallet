@@ -1,4 +1,5 @@
 # Python
+*.egg-info/
 __pycache__/
 */__pycache__/
 *.py[cod]
@@ -26,3 +27,7 @@ data/reports/
 
 # Claude memory (local only)
 .claude/
+
+# React UI
+ui-react/node_modules/
+ui-react/dist/

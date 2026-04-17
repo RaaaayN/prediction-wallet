@@ -1,3 +1,15 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agents*", "api*", "db*", "engine*", "execution*", "market*", "reporting*", "services*", "strategies*", "utils*"]
+exclude = ["tests*", "ui*", "ui-react*", "profiles*", "docs*", "results*"]
+
+[tool.setuptools]
+py-modules = ["main", "config", "settings", "portfolio_loader", "start_ui"]
+
 [project]
 name = "prediction-wallet"
 version = "1.0.0"
@@ -16,6 +28,7 @@ dependencies = [
     "yfinance>=0.2.36",
     "pandas>=2.0.0",
     "numpy>=1.26.0",
+    "scipy>=1.11.0",
     # Reporting
     "reportlab>=4.0.0",
     # API / UI
@@ -27,6 +40,9 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic-settings>=2.0",
     "PyYAML>=6.0",
+    # Optional PostgreSQL (activated when DATABASE_URL is set)
+    "psycopg[binary]>=3.2.0",
+    "sqlalchemy>=2.0.0",
 ]
 
 [dependency-groups]

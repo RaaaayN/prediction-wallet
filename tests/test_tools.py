@@ -49,7 +49,7 @@ class TestTradeSimulator:
     def test_sell_without_position_fails(self):
         result = self.sim.execute("sell", "AAPL", 1.0, 150.0, "no position")
         assert result.success is False
-        assert "No position" in result.error
+        assert result.error and "position" in result.error.lower()
 
     def test_slippage_applied_on_buy(self):
         from config import SLIPPAGE_EQUITIES

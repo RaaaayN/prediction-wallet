@@ -6,6 +6,9 @@ import json
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 from db.repository import get_decision_traces, save_decision_trace
 from db.schema import init_db
@@ -104,7 +107,7 @@ def test_cli_observe_runs_without_model_key():
         [sys.executable, "main.py", "observe"],
         capture_output=True,
         text=True,
-        cwd="C:\\Users\\rayan\\OneDrive\\Documents\\GitHub\\prediction-wallet-1",
+        cwd=str(PROJECT_ROOT),
     )
     assert result.returncode == 0
     assert "\"cycle_id\"" in result.stdout

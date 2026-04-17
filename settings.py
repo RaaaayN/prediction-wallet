@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     portfolio_profile: str = "balanced"
 
     data_dir: str = "data"
+    database_url: str | None = Field(
+        default=None,
+        description="PostgreSQL URL; unset keeps SQLite at market_db.",
+    )
     market_db: str = "data/market.db"
     portfolio_file: str = "data/portfolio.json"
     trades_log: str = "data/trades.log"

@@ -1,11 +1,12 @@
 """Immutable event log — audit-grade event sourcing for cycle replay."""
+
 from __future__ import annotations
 
 import json
-import sqlite3
 from typing import Literal
 
-from config import MARKET_DB
+from config import MARKET_DB, USE_POSTGRES
+from db.connection import get_connection, q
 from db.schema import init_db
 from utils.time import utc_now_iso
 
@@ -27,10 +28,10 @@ def save_event(
     db_path: str = MARKET_DB,
 ) -> None:
     """Append an event to the immutable event log."""
-    init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    init_db(db_path if not USE_POSTGRES else None)
+    with get_connection(db_path) as conn:
         conn.execute(
-            "INSERT INTO cycle_events (cycle_id, event_type, payload_json, created_at) VALUES (?,?,?,?)",
+            q("INSERT INTO cycle_events (cycle_id, event_type, payload_json, created_at) VALUES (?,?,?,?)"),
             (cycle_id, event_type, json.dumps(payload), utc_now_iso()),
         )
         conn.commit()
@@ -38,13 +39,9 @@ def save_event(
 
 def get_events(cycle_id: str, db_path: str = MARKET_DB) -> list[dict]:
     """Return all events for a cycle, ordered chronologically."""
-    init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT * FROM cycle_events WHERE cycle_id = ? ORDER BY created_at ASC",
-            (cycle_id,),
-        ).fetchall()
+    init_db(db_path if not USE_POSTGRES else None)
+    with get_connection(db_path) as conn:
+        rows = conn.execute(q("SELECT * FROM cycle_events WHERE cycle_id = ? ORDER BY created_at ASC"), (cycle_id,)).fetchall()
     return [
         {
             "id": r["id"],
@@ -59,13 +56,9 @@ def get_events(cycle_id: str, db_path: str = MARKET_DB) -> list[dict]:
 
 def get_recent_events(limit: int = 100, db_path: str = MARKET_DB) -> list[dict]:
     """Return the most recent events across all cycles."""
-    init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT * FROM cycle_events ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+    init_db(db_path if not USE_POSTGRES else None)
+    with get_connection(db_path) as conn:
+        rows = conn.execute(q("SELECT * FROM cycle_events ORDER BY created_at DESC LIMIT ?"), (limit,)).fetchall()
     return [
         {
             "id": r["id"],

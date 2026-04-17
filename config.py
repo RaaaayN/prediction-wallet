@@ -18,6 +18,8 @@ CLAUDE_MODEL: str = settings.claude_model
 GEMINI_MODEL: str = settings.gemini_model
 
 DATA_DIR: str = settings.data_dir
+DATABASE_URL: str | None = settings.database_url
+USE_POSTGRES: bool = bool(DATABASE_URL)
 MARKET_DB: str = settings.market_db
 PORTFOLIO_FILE: str = settings.portfolio_file
 TRADES_LOG: str = settings.trades_log

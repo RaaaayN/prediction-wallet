@@ -30,11 +30,19 @@ app.add_middleware(
 # ── static UI ─────────────────────────────────────────────────────────────────
 
 UI_DIR = PROJECT_ROOT / "ui"
+REACT_DIST = PROJECT_ROOT / "ui-react" / "dist"
+REACT_INDEX = REACT_DIST / "index.html"
+REACT_ASSETS = REACT_DIST / "assets"
+
 app.mount("/static", StaticFiles(directory=str(UI_DIR)), name="static")
+if REACT_ASSETS.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(REACT_ASSETS)), name="react_assets")
 
 
 @app.get("/", include_in_schema=False)
 async def root():
+    if REACT_INDEX.is_file():
+        return FileResponse(str(REACT_INDEX))
     return FileResponse(str(UI_DIR / "index.html"))
 
 
