@@ -3,16 +3,33 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from typing import Any
 
 import pandas as pd
 
-from config import HEDGE_FUND_PROFILE, MARKET_DB, SECTOR_MAP, TARGET_ALLOCATION, USE_POSTGRES
+from config import MARKET_DB, USE_POSTGRES
 from db.connection import excluded_qualifier, get_connection, get_sqlalchemy_engine, q
 from engine.hedge_fund import compute_exposures
 from engine.portfolio import compute_drift, compute_portfolio_value, compute_weights
 from engine.risk import compute_drawdown
+from runtime_context import build_runtime_context
 from utils.time import utc_now_iso
+
+
+def _resolve_context(runtime_context=None, profile_name: str | None = None):
+    if runtime_context is not None:
+        return runtime_context
+    return build_runtime_context(profile_name)
+
+
+def _resolve_db_path(db_path: str | None = None, *, runtime_context=None, profile_name: str | None = None) -> str:
+    if USE_POSTGRES:
+        return MARKET_DB
+    if db_path:
+        return db_path
+    ctx = _resolve_context(runtime_context, profile_name)
+    return ctx.market_db
 
 
 def _row_pk(row: Any, key: str = "id") -> int:
@@ -23,7 +40,17 @@ def _row_pk(row: Any, key: str = "id") -> int:
     return int(row[key])
 
 
-def save_snapshot(portfolio: dict, prices: dict, cycle_id: str, db_path: str = MARKET_DB) -> int:
+def save_snapshot(
+    portfolio: dict,
+    prices: dict,
+    cycle_id: str,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> int:
+    context = _resolve_context(runtime_context, profile_name)
+    resolved = _resolve_db_path(db_path, runtime_context=context, profile_name=profile_name)
     positions = portfolio.get("positions", {})
     position_sides = portfolio.get("position_sides", {})
     cash = portfolio.get("cash", 0.0)
@@ -31,18 +58,21 @@ def save_snapshot(portfolio: dict, prices: dict, cycle_id: str, db_path: str = M
     total = compute_portfolio_value(positions, cash, prices)
     drawdown = compute_drawdown(total, peak)
     weights = compute_weights(positions, prices, cash)
-    drifts = compute_drift(weights, TARGET_ALLOCATION)
+    drifts = compute_drift(weights, context.target_allocation)
     exposure = compute_exposures(
         positions,
         prices,
         cash,
         position_sides=position_sides,
-        sector_map=SECTOR_MAP,
-        beta_map={ticker: (HEDGE_FUND_PROFILE.get("universe", {}).get(ticker, {}) or {}).get("beta", 1.0) for ticker in positions},
+        sector_map=context.sector_map,
+        beta_map={
+            ticker: (context.hedge_fund_profile.get("universe", {}).get(ticker, {}) or {}).get("beta", 1.0)
+            for ticker in positions
+        },
     )
     ts = utc_now_iso()
 
-    with get_connection(db_path) as conn:
+    with get_connection(resolved) as conn:
         cur = conn.execute(
             q(
                 """
@@ -71,7 +101,7 @@ def save_snapshot(portfolio: dict, prices: dict, cycle_id: str, db_path: str = M
                     price,
                     qty * price,
                     weights.get(ticker, 0.0),
-                    TARGET_ALLOCATION.get(ticker, 0.0),
+                    context.target_allocation.get(ticker, 0.0),
                     drifts.get(ticker, 0.0),
                     side,
                     (portfolio.get("position_ideas") or {}).get(ticker),
@@ -83,10 +113,18 @@ def save_snapshot(portfolio: dict, prices: dict, cycle_id: str, db_path: str = M
     return snapshot_id
 
 
-def save_execution(trade_result, cycle_id: str, db_path: str = MARKET_DB) -> int:
+def save_execution(
+    trade_result,
+    cycle_id: str,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> int:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     trade = trade_result.__dict__ if hasattr(trade_result, "__dict__") else trade_result
     slippage = abs(trade.get("fill_price", 0.0) - trade.get("market_price", 0.0)) * abs(trade.get("quantity", 0.0))
-    with get_connection(db_path) as conn:
+    with get_connection(resolved) as conn:
         cur = conn.execute(
             q(
                 """
@@ -131,9 +169,16 @@ def save_execution(trade_result, cycle_id: str, db_path: str = MARKET_DB) -> int
     return rid
 
 
-def save_agent_run(state: dict, db_path: str = MARKET_DB) -> int:
+def save_agent_run(
+    state: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> int:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     obs = state.get("observability", {})
-    with get_connection(db_path) as conn:
+    with get_connection(resolved) as conn:
         cur = conn.execute(
             q(
                 """
@@ -155,7 +200,10 @@ def save_agent_run(state: dict, db_path: str = MARKET_DB) -> int:
                 obs.get("provider"),
                 obs.get("tool_calls", 0),
                 obs.get("fetch_latency_ms", 0.0),
-                json.dumps(state.get("errors", []) + [e.get("error", "") for e in obs.get("data_errors", []) if e.get("error")]),
+                json.dumps(
+                    state.get("errors", [])
+                    + [e.get("error", "") for e in obs.get("data_errors", []) if e.get("error")]
+                ),
             ),
         )
         rid = _row_pk(cur.fetchone())
@@ -163,7 +211,14 @@ def save_agent_run(state: dict, db_path: str = MARKET_DB) -> int:
     return rid
 
 
-def get_history(days: int = 90, db_path: str = MARKET_DB) -> pd.DataFrame:
+def get_history(
+    days: int = 90,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> pd.DataFrame:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     try:
         if USE_POSTGRES:
             from sqlalchemy import text
@@ -177,7 +232,7 @@ def get_history(days: int = 90, db_path: str = MARKET_DB) -> pd.DataFrame:
                 """
             )
             return pd.read_sql_query(stmt, eng, params={"d": days})
-        with get_connection(db_path) as conn:
+        with get_connection(resolved) as conn:
             return pd.read_sql_query(
                 """
                 SELECT * FROM portfolio_snapshots
@@ -191,7 +246,14 @@ def get_history(days: int = 90, db_path: str = MARKET_DB) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_executions(limit: int = 100, db_path: str = MARKET_DB) -> pd.DataFrame:
+def get_executions(
+    limit: int = 100,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> pd.DataFrame:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     try:
         if USE_POSTGRES:
             from sqlalchemy import text
@@ -199,7 +261,7 @@ def get_executions(limit: int = 100, db_path: str = MARKET_DB) -> pd.DataFrame:
             eng = get_sqlalchemy_engine()
             stmt = text("SELECT * FROM executions ORDER BY timestamp DESC LIMIT :lim")
             return pd.read_sql_query(stmt, eng, params={"lim": limit})
-        with get_connection(db_path) as conn:
+        with get_connection(resolved) as conn:
             return pd.read_sql_query(
                 "SELECT * FROM executions ORDER BY timestamp DESC LIMIT ?",
                 conn,
@@ -209,18 +271,32 @@ def get_executions(limit: int = 100, db_path: str = MARKET_DB) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_agent_runs(limit: int = 20, db_path: str = MARKET_DB) -> list[dict]:
+def get_agent_runs(
+    limit: int = 20,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     try:
-        with get_connection(db_path) as conn:
+        with get_connection(resolved) as conn:
             rows = conn.execute(q("SELECT * FROM agent_runs ORDER BY timestamp DESC LIMIT ?"), (limit,)).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
 
 
-def get_positions_by_cycle(cycle_id: str, db_path: str = MARKET_DB) -> list[dict]:
+def get_positions_by_cycle(
+    cycle_id: str,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     try:
-        with get_connection(db_path) as conn:
+        with get_connection(resolved) as conn:
             rows = conn.execute(
                 q(
                     """
@@ -238,17 +314,30 @@ def get_positions_by_cycle(cycle_id: str, db_path: str = MARKET_DB) -> list[dict
         return []
 
 
-def get_market_data_status(db_path: str = MARKET_DB) -> list[dict]:
+def get_market_data_status(
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     try:
-        with get_connection(db_path) as conn:
-            rows = conn.execute("SELECT * FROM market_data_status ORDER BY ticker ASC").fetchall()
+        with get_connection(resolved) as conn:
+            rows = conn.execute(q("SELECT * FROM market_data_status ORDER BY ticker ASC")).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
 
 
-def save_decision_trace(trace: dict, db_path: str = MARKET_DB) -> int:
-    with get_connection(db_path) as conn:
+def save_decision_trace(
+    trace: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> int:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    with get_connection(resolved) as conn:
         cur = conn.execute(
             q(
                 """
@@ -277,9 +366,17 @@ def save_decision_trace(trace: dict, db_path: str = MARKET_DB) -> int:
     return rid
 
 
-def get_decision_traces(limit: int = 100, cycle_id: str | None = None, db_path: str = MARKET_DB) -> list[dict]:
+def get_decision_traces(
+    limit: int = 100,
+    cycle_id: str | None = None,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     try:
-        with get_connection(db_path) as conn:
+        with get_connection(resolved) as conn:
             if cycle_id:
                 rows = conn.execute(
                     q("SELECT * FROM decision_traces WHERE cycle_id = ? ORDER BY created_at DESC LIMIT ?"),
@@ -292,39 +389,63 @@ def get_decision_traces(limit: int = 100, cycle_id: str | None = None, db_path: 
         return []
 
 
-def get_snapshots(limit: int = 60, db_path: str = MARKET_DB) -> list[dict]:
+def get_snapshots(
+    limit: int = 60,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     try:
-        with get_connection(db_path) as conn:
+        with get_connection(resolved) as conn:
             rows = conn.execute(q("SELECT * FROM portfolio_snapshots ORDER BY timestamp DESC LIMIT ?"), (limit,)).fetchall()
-        return list(reversed([dict(r) for r in rows]))  # ASC for timeline charts
+        return list(reversed([dict(r) for r in rows]))
     except Exception:
         return []
 
 
-def get_latest_positions(db_path: str = MARKET_DB) -> list[dict]:
+def get_latest_positions(
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     try:
-        with get_connection(db_path) as conn:
+        with get_connection(resolved) as conn:
             rows = conn.execute(
-                """
+                q(
+                    """
                 SELECT p.* FROM positions p
                 JOIN portfolio_snapshots s ON p.snapshot_id = s.id
                 WHERE s.id = (SELECT MAX(id) FROM portfolio_snapshots)
                 ORDER BY p.ticker ASC
                 """
+                ),
             ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
 
 
-def upsert_idea_book(entries: list[dict], db_path: str = MARKET_DB) -> None:
+def upsert_idea_book(
+    entries: list[dict],
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     ts = utc_now_iso()
     ex = excluded_qualifier()
     sql = f"""
                 INSERT INTO idea_book
                     (idea_id, ticker, side, thesis, catalyst, time_horizon, conviction, upside_case, downside_case,
-                     invalidation_rule, status, sleeve, source, crowded_score, short_squeeze_risk, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     invalidation_rule, status, sleeve, edge_source, why_now, key_risk, supporting_signals,
+                     evidence_quality, review_status, origin_cycle_id, llm_generated, source, crowded_score,
+                     short_squeeze_risk, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (idea_id) DO UPDATE SET
                     ticker={ex}.ticker,
                     side={ex}.side,
@@ -337,12 +458,20 @@ def upsert_idea_book(entries: list[dict], db_path: str = MARKET_DB) -> None:
                     invalidation_rule={ex}.invalidation_rule,
                     status={ex}.status,
                     sleeve={ex}.sleeve,
+                    edge_source={ex}.edge_source,
+                    why_now={ex}.why_now,
+                    key_risk={ex}.key_risk,
+                    supporting_signals={ex}.supporting_signals,
+                    evidence_quality={ex}.evidence_quality,
+                    review_status={ex}.review_status,
+                    origin_cycle_id={ex}.origin_cycle_id,
+                    llm_generated={ex}.llm_generated,
                     source={ex}.source,
                     crowded_score={ex}.crowded_score,
                     short_squeeze_risk={ex}.short_squeeze_risk,
                     updated_at={ex}.updated_at
                 """
-    with get_connection(db_path) as conn:
+    with get_connection(resolved) as conn:
         for entry in entries:
             conn.execute(
                 q(sql),
@@ -359,6 +488,14 @@ def upsert_idea_book(entries: list[dict], db_path: str = MARKET_DB) -> None:
                     entry.get("invalidation_rule", ""),
                     entry.get("status", "watchlist"),
                     entry.get("sleeve", "core_longs"),
+                    entry.get("edge_source", ""),
+                    entry.get("why_now", ""),
+                    entry.get("key_risk", ""),
+                    json.dumps(entry.get("supporting_signals", [])),
+                    entry.get("evidence_quality", "medium"),
+                    entry.get("review_status", "approved"),
+                    entry.get("origin_cycle_id"),
+                    int(bool(entry.get("llm_generated", False))),
                     entry.get("source", "profile_seed"),
                     float(entry.get("crowded_score", 0.0)),
                     int(bool(entry.get("short_squeeze_risk", False))),
@@ -369,13 +506,76 @@ def upsert_idea_book(entries: list[dict], db_path: str = MARKET_DB) -> None:
         conn.commit()
 
 
-def get_idea_book(status: str | None = None, db_path: str = MARKET_DB) -> list[dict]:
+def get_idea_book(
+    status: str | None = None,
+    review_status: str | None = None,
+    llm_generated: bool | None = None,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
     try:
-        with get_connection(db_path) as conn:
+        with get_connection(resolved) as conn:
+            where: list[str] = []
+            params: list[object] = []
             if status:
-                rows = conn.execute(q("SELECT * FROM idea_book WHERE status = ? ORDER BY conviction DESC, ticker ASC"), (status,)).fetchall()
-            else:
-                rows = conn.execute("SELECT * FROM idea_book ORDER BY conviction DESC, ticker ASC").fetchall()
-        return [dict(r) for r in rows]
+                where.append("status = ?")
+                params.append(status)
+            if review_status:
+                where.append("review_status = ?")
+                params.append(review_status)
+            if llm_generated is not None:
+                where.append("llm_generated = ?")
+                params.append(int(llm_generated))
+            query = "SELECT * FROM idea_book"
+            if where:
+                query += " WHERE " + " AND ".join(where)
+            query += " ORDER BY conviction DESC, ticker ASC"
+            rows = conn.execute(q(query), tuple(params)).fetchall()
+        payload = [dict(r) for r in rows]
+        for row in payload:
+            signals = row.get("supporting_signals")
+            if isinstance(signals, str):
+                try:
+                    row["supporting_signals"] = json.loads(signals)
+                except json.JSONDecodeError:
+                    row["supporting_signals"] = []
+            row["llm_generated"] = bool(row.get("llm_generated", 0))
+            row["short_squeeze_risk"] = bool(row.get("short_squeeze_risk", 0))
+        return payload
     except Exception:
         return []
+
+
+def update_idea_book_entry(
+    idea_id: str,
+    *,
+    review_status: str | None = None,
+    status: str | None = None,
+    db_path: str | None = None,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> bool:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    assignments: list[str] = []
+    params: list[object] = []
+    if review_status is not None:
+        assignments.append("review_status = ?")
+        params.append(review_status)
+    if status is not None:
+        assignments.append("status = ?")
+        params.append(status)
+    if not assignments:
+        return False
+    assignments.append("updated_at = ?")
+    params.append(utc_now_iso())
+    params.append(idea_id)
+    with get_connection(resolved) as conn:
+        cur = conn.execute(
+            q(f"UPDATE idea_book SET {', '.join(assignments)} WHERE idea_id = ?"),
+            tuple(params),
+        )
+        conn.commit()
+    return cur.rowcount > 0

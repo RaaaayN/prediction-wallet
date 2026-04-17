@@ -1,0 +1,120 @@
+export interface PortfolioSnapshot {
+  total_value?: number;
+  cash?: number;
+  positions?: Record<string, number>;
+  current_weights?: Record<string, number>;
+  target_weights?: Record<string, number>;
+  weight_deviation?: Record<string, number>;
+  pnl_dollars?: number;
+  pnl_pct?: number;
+  peak_value?: number;
+  error?: string;
+}
+
+export interface Position {
+  ticker: string;
+  quantity: number;
+  price: number;
+  value: number;
+  weight: number;
+  target_weight: number;
+  drift: number;
+  side: 'long' | 'short';
+  idea_id?: string;
+}
+
+export interface ExecutionResult {
+  id?: number;
+  timestamp: string;
+  cycle_id: string;
+  ticker: string;
+  action: string;
+  quantity: number;
+  market_price: number;
+  fill_price: number;
+  cost: number;
+  slippage: number;
+  slippage_pct?: number;
+  success: boolean | number;
+  error?: string;
+  reason?: string;
+  drift_before?: number;
+}
+
+export interface DecisionTrace {
+  id: number;
+  cycle_id: string;
+  stage: string;
+  payload_json: string;
+  validation_json?: string;
+  mcp_tools_json?: string;
+  provider?: string;
+  agent_backend?: string;
+  execution_mode?: string;
+  event_type?: string;
+  tags?: string;
+  created_at: string;
+}
+
+export interface AgentRun {
+  cycle_id: string;
+  timestamp: string;
+  strategy?: string;
+  signal: boolean | number;
+  trades_count: number;
+  provider?: string;
+  tool_calls?: number;
+  fetch_latency_ms?: number;
+  /** Legacy UI field name */
+  kill_switch?: boolean;
+}
+
+export interface MarketMetrics {
+  ticker: string;
+  price: number;
+  ytd_return: number;
+  volatility_30d: number;
+  sharpe: number;
+}
+
+export interface AppConfig {
+  ai_provider?: string;
+  agent_backend?: string;
+  execution_mode?: string;
+  target_allocation?: Record<string, number>;
+  hedge_fund_enabled?: boolean;
+  error?: string;
+}
+
+export interface IdeaBookRow {
+  idea_id: string;
+  ticker: string;
+  side: string;
+  thesis: string;
+  catalyst?: string;
+  time_horizon?: string;
+  conviction?: number;
+  status: string;
+  review_status?: string;
+  llm_generated?: boolean;
+  sleeve?: string;
+  source?: string;
+  origin_cycle_id?: string;
+  supporting_signals?: string[] | string;
+  evidence_quality?: string;
+  edge_source?: string;
+  why_now?: string;
+  key_risk?: string;
+}
+
+export interface SnapshotRow {
+  id?: number;
+  timestamp: string;
+  cycle_id: string;
+  total_value: number;
+  cash: number;
+  peak_value?: number;
+  drawdown?: number;
+}
+
+export type JsonRecord = Record<string, unknown>;

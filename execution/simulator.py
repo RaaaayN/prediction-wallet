@@ -1,18 +1,20 @@
 """Backward-compatible execution facade."""
 
-from config import PORTFOLIO_FILE, TRADES_LOG
 from execution.persistence import PortfolioStore, TradeLogStore
 from execution.types import TradeResult
+from runtime_context import build_runtime_context
 from services.execution_service import ExecutionService
 
 
 class TradeSimulator:
     """Compatibility wrapper over ExecutionService."""
 
-    def __init__(self, portfolio_file: str = PORTFOLIO_FILE, trades_log: str = TRADES_LOG):
+    def __init__(self, portfolio_file: str | None = None, trades_log: str | None = None, *, profile_name: str | None = None, runtime_context=None):
+        context = runtime_context or build_runtime_context(profile_name)
         self._service = ExecutionService(
-            portfolio_store=PortfolioStore(portfolio_file),
-            trade_log_store=TradeLogStore(trades_log),
+            portfolio_store=PortfolioStore(portfolio_file, runtime_context=context),
+            trade_log_store=TradeLogStore(trades_log, runtime_context=context),
+            runtime_context=context,
         )
 
     def load_portfolio(self) -> dict:

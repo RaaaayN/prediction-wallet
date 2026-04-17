@@ -718,7 +718,7 @@ class PortfolioAgentService:
             gross_exposure=exposures.get("gross_exposure", 0.0),
             net_exposure=exposures.get("net_exposure", 0.0),
             intents=[PositionIntent(**intent) for intent in intents],
-            notes=["Research and construction are deterministic from profile-seeded ideas plus market metrics."],
+            notes=["Research and construction are deterministic from approved idea-book entries plus market metrics."],
         )
 
     def _compute_exposures(self, portfolio: dict, prices: dict[str, float]) -> dict:

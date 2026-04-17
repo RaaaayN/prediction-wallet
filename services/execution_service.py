@@ -5,19 +5,16 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from config import (
-    CRYPTO_TICKERS,
-    INITIAL_CAPITAL,
     MAX_ORDER_FRACTION_OF_PORTFOLIO,
     MAX_TRADES_PER_CYCLE,
-    SLIPPAGE_CRYPTO,
-    SLIPPAGE_EQUITIES,
-    TARGET_ALLOCATION,
 )
-from engine.orders import apply_slippage
 from engine.hedge_fund import compute_exposures
+from engine.orders import apply_slippage
+from engine.projection import project_trade_state
 from engine.portfolio import compute_portfolio_value, compute_pnl, compute_weights
 from execution.persistence import PortfolioStore, TradeLogStore
 from execution.types import TradeResult
+from runtime_context import build_runtime_context
 from utils.time import utc_now_iso
 
 
@@ -32,9 +29,13 @@ class ExecutionService:
         portfolio_store: PortfolioStore | None = None,
         trade_log_store: TradeLogStore | None = None,
         execution_repo=None,
+        *,
+        profile_name: str | None = None,
+        runtime_context=None,
     ):
-        self.portfolio_store = portfolio_store or PortfolioStore()
-        self.trade_log_store = trade_log_store or TradeLogStore()
+        self.runtime_context = runtime_context or build_runtime_context(profile_name)
+        self.portfolio_store = portfolio_store or PortfolioStore(runtime_context=self.runtime_context)
+        self.trade_log_store = trade_log_store or TradeLogStore(runtime_context=self.runtime_context)
         self.execution_repo = execution_repo
 
     def load_portfolio(self) -> dict:
@@ -68,8 +69,9 @@ class ExecutionService:
         peak = portfolio.get("peak_value", cash)
         total = compute_portfolio_value(positions, cash, prices)
         weights = compute_weights(positions, prices, cash)
-        weight_diff = {t: weights.get(t, 0.0) - TARGET_ALLOCATION.get(t, 0.0) for t in TARGET_ALLOCATION}
-        pnl = compute_pnl(total, INITIAL_CAPITAL)
+        target_allocation = self.runtime_context.target_allocation
+        weight_diff = {t: weights.get(t, 0.0) - target_allocation.get(t, 0.0) for t in target_allocation}
+        pnl = compute_pnl(total, self.runtime_context.initial_capital)
         return {
             "positions": positions,
             "position_sides": position_sides,
@@ -78,7 +80,7 @@ class ExecutionService:
             "peak_value": peak,
             "total_value": total,
             "current_weights": weights,
-            "target_weights": TARGET_ALLOCATION,
+            "target_weights": target_allocation,
             "weight_deviation": weight_diff,
             "pnl_dollars": pnl["pnl_dollars"],
             "pnl_pct": pnl["pnl_pct"],
@@ -92,9 +94,10 @@ class ExecutionService:
         quantity: float,
         portfolio: dict,
         market_price: float,
+        prices: dict[str, float] | None = None,
         trades_this_cycle: int = 0,
     ) -> str | None:
-        if ticker not in TARGET_ALLOCATION:
+        if ticker not in self.runtime_context.target_allocation:
             return f"Ticker '{ticker}' is not in the active target allocation."
         if action not in {"buy", "sell"}:
             return f"Unsupported action '{action}'."
@@ -105,7 +108,9 @@ class ExecutionService:
         if trades_this_cycle >= MAX_TRADES_PER_CYCLE:
             return f"Trade limit per cycle reached ({MAX_TRADES_PER_CYCLE})."
 
-        total_value = compute_portfolio_value(portfolio.get("positions", {}), portfolio.get("cash", 0.0), {ticker: market_price})
+        price_map = dict(prices or {})
+        price_map.setdefault(ticker, market_price)
+        total_value = compute_portfolio_value(portfolio.get("positions", {}), portfolio.get("cash", 0.0), price_map)
         order_notional = quantity * market_price
         if total_value > 0 and order_notional / total_value > MAX_ORDER_FRACTION_OF_PORTFOLIO:
             return f"Order exceeds max notional limit ({MAX_ORDER_FRACTION_OF_PORTFOLIO:.0%} of portfolio)."
@@ -116,6 +121,7 @@ class ExecutionService:
         self,
         order: dict,
         market_price: float,
+        prices: dict[str, float] | None = None,
         cycle_id: str = "",
         trades_this_cycle: int = 0,
     ) -> TradeResult:
@@ -131,13 +137,29 @@ class ExecutionService:
         portfolio.setdefault("position_sides", {})
         portfolio.setdefault("average_costs", {})
         portfolio.setdefault("position_ideas", {})
-        validation_error = self.validate_order(action, ticker, quantity, portfolio, market_price, trades_this_cycle)
+        portfolio_prices = dict(prices or {})
+        portfolio_prices.setdefault(ticker, market_price)
+        validation_error = self.validate_order(
+            action,
+            ticker,
+            quantity,
+            portfolio,
+            market_price,
+            prices=portfolio_prices,
+            trades_this_cycle=trades_this_cycle,
+        )
         timestamp = utc_now_iso()
+        beta_map = {
+            name: (self.runtime_context.hedge_fund_profile.get("universe", {}).get(name, {}) or {}).get("beta", 1.0)
+            for name in set(portfolio.get("positions", {})) | {ticker}
+        }
         current_exposure = compute_exposures(
             portfolio.get("positions", {}),
-            {**{ticker: market_price}, **{t: market_price for t in portfolio.get("positions", {}) if t == ticker}},
+            portfolio_prices,
             portfolio.get("cash", 0.0),
             position_sides=portfolio.get("position_sides", {}),
+            sector_map=self.runtime_context.sector_map,
+            beta_map=beta_map,
         )
         exposure_before = current_exposure.get("single_name_concentration", {}).get(ticker, 0.0)
         if validation_error:
@@ -161,7 +183,12 @@ class ExecutionService:
             )
 
         fill_price = apply_slippage(
-            market_price, action, ticker, CRYPTO_TICKERS, SLIPPAGE_EQUITIES, SLIPPAGE_CRYPTO
+            market_price,
+            action,
+            ticker,
+            self.runtime_context.crypto_tickers,
+            self.runtime_context.slippage_equities,
+            self.runtime_context.slippage_crypto,
         )
         gross = fill_price * quantity
 
@@ -279,9 +306,11 @@ class ExecutionService:
 
         updated_exposure = compute_exposures(
             portfolio.get("positions", {}),
-            {**{ticker: market_price}, **{t: market_price for t in portfolio.get("positions", {}) if t == ticker}},
+            portfolio_prices,
             portfolio.get("cash", 0.0),
             position_sides=portfolio.get("position_sides", {}),
+            sector_map=self.runtime_context.sector_map,
+            beta_map=beta_map,
         )
         exposure_after = updated_exposure.get("single_name_concentration", {}).get(ticker, 0.0)
         trade = TradeResult.build(
@@ -300,7 +329,7 @@ class ExecutionService:
             exposure_before=exposure_before,
             exposure_after=exposure_after,
             gross_impact=exposure_after - exposure_before,
-            net_impact=(quantity * fill_price / max(portfolio.get("peak_value", INITIAL_CAPITAL), INITIAL_CAPITAL)) * (1 if action == "buy" else -1),
+            net_impact=(quantity * fill_price / max(portfolio.get("peak_value", self.runtime_context.initial_capital), self.runtime_context.initial_capital)) * (1 if action == "buy" else -1),
         )
         portfolio["last_rebalanced"] = timestamp
         self.save_portfolio(portfolio)

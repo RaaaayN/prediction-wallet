@@ -62,9 +62,15 @@ services/
   reporting_service.py — ReportingService (PDF generation)
 
 db/
-  schema.py            — DDL: portfolio_snapshots, executions, agent_runs, decision_traces, cycle_events
+  schema.py            — DDL: portfolio_snapshots, executions, agent_runs, decision_traces, cycle_events, idea_book
   events.py            — immutable event log + replay
-  repository.py        — SQLite read/write functions
+  repository.py        — SQLite / PostgreSQL read/write (see `DATABASE_URL`)
+
+runtime_context.py     — profile-scoped paths (portfolio, market DB) for multi-profile storage
+
+frontend/              — Vite + React + TypeScript UI (primary)
+ui/
+  index.html           — legacy single-page UI (still served when Vite build absent)
 
 strategies/
   threshold.py         — drift-based rebalancing (per-asset configurable bands)
@@ -98,6 +104,9 @@ python main.py init
 
 # Run a full governed cycle
 python main.py run-cycle --mode simulate
+
+# Build the React UI (required for the default SPA at `/`)
+cd frontend && npm ci && npm run build && cd ..
 
 # Launch web UI
 uvicorn api.main:app --reload
@@ -135,22 +144,20 @@ pytest tests/ -v
 ## Web UI
 
 ```bash
+cd frontend && npm ci && npm run build && cd ..
 uvicorn api.main:app --reload
 ```
 
-Open `http://localhost:8000`. Available tabs:
+Open `http://localhost:8000`. The **Vite app** under `frontend/` is the primary UI (React Router). If `frontend/dist` is missing, the API falls back to `ui/index.html` or `ui-react/dist` when present.
 
-| Tab | Description |
-|-----|-------------|
-| Portfolio | Holdings, allocations, drift visualization |
-| Monte Carlo | Forward outcome distribution and confidence intervals |
-| Regime | Volatility-percentile market classification |
-| History | Portfolio value over time |
-| Agent Trace | Per-cycle decision log with policy outcomes |
-| Performance | Sharpe, Sortino, Calmar, VaR, CVaR |
-| Backtest | Strategy comparison: threshold vs. calendar vs. buy-and-hold |
-| Correlation | Asset correlation heatmap |
-| Stress Test | Crisis scenario P&L impact (COVID, GFC, rate shock, tech selloff) |
+| Area | Routes (examples) |
+|------|-------------------|
+| Overview / command | `/`, `/control` |
+| Book & ideas | `/workspace`, `/book`, `/ideas`, `/blotter` |
+| Risk | `/riskhub`, `/risk`, `/stress`, `/regime` |
+| Analytics | `/analytics`, `/backtest`, `/correlation`, `/montecarlo` |
+| Audit | `/audit`, `/traces`, `/runs`, `/history`, `/perf` |
+| Legacy monolith | `ui/index.html` (all tabs in one page) at `/static/` assets |
 
 ---
 
@@ -163,8 +170,9 @@ Via `.env` or environment variables:
 | `AI_PROVIDER` | `gemini` | `gemini` or `anthropic` |
 | `PORTFOLIO_PROFILE` | `balanced` | Active portfolio profile |
 | `EXECUTION_MODE` | `simulate` | `simulate` or `paper` |
+| `DATABASE_URL` | _(empty)_ | Set to use PostgreSQL (see `docker-compose.yml` example in `.env.example`) |
 
-Portfolio profiles (`profiles/*.yaml`) define target allocations, drift thresholds, kill switch parameters, per-asset drift bands, and policy rules (confidence floor, sector caps, per-ticker notional limits).
+Portfolio profiles (`profiles/*.yaml`) define target allocations, drift thresholds, kill switch parameters, per-asset drift bands, and policy rules (confidence floor, sector caps, per-ticker notional limits). Hedge-fund fields live under `hedge_fund` in the profile YAML; the **Idea Book** API supports seeding, LLM candidate generation, review, and promotion (`/api/idea-book/*`).
 
 ---
 
@@ -195,7 +203,7 @@ Portfolio profiles (`profiles/*.yaml`) define target allocations, drift threshol
 |-------|-----------|
 | AI Agent | Pydantic AI + Google Gemini / Anthropic Claude |
 | API | FastAPI + Uvicorn |
-| Data | yfinance → SQLite |
+| Data | yfinance → SQLite (per profile) or PostgreSQL when `DATABASE_URL` is set |
 | Risk Engine | NumPy + Pandas (pure Python) |
 | Reporting | ReportLab (PDF) |
 | Config | Pydantic Settings + YAML profiles |

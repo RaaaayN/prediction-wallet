@@ -8,6 +8,7 @@ from typing import Literal
 from config import MARKET_DB, USE_POSTGRES
 from db.connection import get_connection, q
 from db.schema import init_db
+from runtime_context import build_runtime_context
 from utils.time import utc_now_iso
 
 EventType = Literal[
@@ -21,15 +22,30 @@ EventType = Literal[
 ]
 
 
+def _events_db_path(
+    db_path: str | None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> str:
+    if USE_POSTGRES:
+        return MARKET_DB
+    return db_path or (runtime_context or build_runtime_context(profile_name)).market_db
+
+
 def save_event(
     cycle_id: str,
     event_type: EventType,
     payload: dict,
-    db_path: str = MARKET_DB,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
 ) -> None:
     """Append an event to the immutable event log."""
-    init_db(db_path if not USE_POSTGRES else None)
-    with get_connection(db_path) as conn:
+    resolved = _events_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    init_db(None if USE_POSTGRES else resolved)
+    with get_connection(resolved) as conn:
         conn.execute(
             q("INSERT INTO cycle_events (cycle_id, event_type, payload_json, created_at) VALUES (?,?,?,?)"),
             (cycle_id, event_type, json.dumps(payload), utc_now_iso()),
@@ -37,11 +53,21 @@ def save_event(
         conn.commit()
 
 
-def get_events(cycle_id: str, db_path: str = MARKET_DB) -> list[dict]:
+def get_events(
+    cycle_id: str,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
     """Return all events for a cycle, ordered chronologically."""
-    init_db(db_path if not USE_POSTGRES else None)
-    with get_connection(db_path) as conn:
-        rows = conn.execute(q("SELECT * FROM cycle_events WHERE cycle_id = ? ORDER BY created_at ASC"), (cycle_id,)).fetchall()
+    resolved = _events_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    init_db(None if USE_POSTGRES else resolved)
+    with get_connection(resolved) as conn:
+        rows = conn.execute(
+            q("SELECT * FROM cycle_events WHERE cycle_id = ? ORDER BY created_at ASC"),
+            (cycle_id,),
+        ).fetchall()
     return [
         {
             "id": r["id"],
@@ -54,10 +80,17 @@ def get_events(cycle_id: str, db_path: str = MARKET_DB) -> list[dict]:
     ]
 
 
-def get_recent_events(limit: int = 100, db_path: str = MARKET_DB) -> list[dict]:
+def get_recent_events(
+    limit: int = 100,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
     """Return the most recent events across all cycles."""
-    init_db(db_path if not USE_POSTGRES else None)
-    with get_connection(db_path) as conn:
+    resolved = _events_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    init_db(None if USE_POSTGRES else resolved)
+    with get_connection(resolved) as conn:
         rows = conn.execute(q("SELECT * FROM cycle_events ORDER BY created_at DESC LIMIT ?"), (limit,)).fetchall()
     return [
         {
@@ -71,9 +104,16 @@ def get_recent_events(limit: int = 100, db_path: str = MARKET_DB) -> list[dict]:
     ]
 
 
-def replay_cycle(cycle_id: str, db_path: str = MARKET_DB) -> dict:
+def replay_cycle(
+    cycle_id: str,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> dict:
     """Reconstruct cycle state by replaying its event log."""
-    events = get_events(cycle_id, db_path=db_path)
+    resolved = _events_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    events = get_events(cycle_id, db_path=resolved, runtime_context=runtime_context, profile_name=profile_name)
     state: dict = {
         "cycle_id": cycle_id,
         "events": events,

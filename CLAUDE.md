@@ -27,9 +27,11 @@ services/
 
 portfolio_loader.py    — load_profile() / get_active_profile() — charge profiles/*.yaml
 
+runtime_context.py     — build_runtime_context(): chemins portfolio/market.db par profil actif
+
 db/
-  schema.py            — DDL: portfolio_snapshots, executions, agent_runs, decision_traces
-  repository.py        — save_snapshot, save_execution, save_agent_run, save_decision_trace
+  schema.py            — DDL: portfolio_snapshots, executions, agent_runs, decision_traces, idea_book…
+  repository.py        — persistance SQLite ou PostgreSQL (USE_POSTGRES / DATABASE_URL)
 
 engine/
   portfolio.py         — compute_weights, compute_drift, compute_portfolio_value
@@ -38,8 +40,10 @@ engine/
   performance.py       — performance_report, VaR (parametric + historical), CVaR, Sortino, Calmar
   backtest.py          — run_strategy_comparison (threshold / calendar / buy-and-hold)
 
+frontend/              — UI Vite + React (build → frontend/dist, servi par FastAPI)
+
 ui/
-  index.html           — HTML/JS single-page UI (SSE streaming, all tabs)
+  index.html           — UI monolithique legacy (SSE, tous les onglets)
 ```
 
 ## CLI

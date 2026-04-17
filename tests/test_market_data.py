@@ -120,13 +120,28 @@ async def test_async_market_fetch_returns_latency_metrics():
 
         def _download(self, ticker: str, period: str):
             idx = pd.date_range("2024-01-01", periods=40, freq="B")
-            return pd.DataFrame({"Close": np.linspace(100, 110, len(idx))}, index=idx)
+            n = len(idx)
+            return pd.DataFrame(
+                {
+                    "Open": np.linspace(99, 109, n),
+                    "High": np.linspace(101, 111, n),
+                    "Low": np.linspace(98, 108, n),
+                    "Close": np.linspace(100, 110, n),
+                    "Volume": np.ones(n) * 1e6,
+                },
+                index=idx,
+            )
 
         def _save_to_db(self, df: pd.DataFrame, ticker: str) -> None:
             return None
 
         def _record_refresh(self, ticker: str, success: bool, error: str) -> None:
             return None
+
+        @staticmethod
+        def _fetch_live_price(ticker: str) -> float:
+            # Avoid flaky yfinance vs synthetic OHLCV consistency checks in CI.
+            return 0.0
 
     service = AsyncFakeMarketService()
     frames, latencies = await service.fetch_and_store_async(["AAPL", "MSFT"], period="3mo")

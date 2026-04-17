@@ -49,6 +49,14 @@ class IdeaProposal(BaseModel):
     invalidation_rule: str
     status: str
     sleeve: str = "core_longs"
+    edge_source: str = ""
+    why_now: str = ""
+    key_risk: str = ""
+    supporting_signals: list[str] = Field(default_factory=list)
+    evidence_quality: str = "medium"
+    review_status: str = "approved"
+    origin_cycle_id: str | None = None
+    llm_generated: bool = False
 
 
 class IdeaBookEntry(IdeaProposal):

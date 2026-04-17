@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["agents*", "api*", "db*", "engine*", "execution*", "market*", "reporting*", "services*", "strategies*", "utils*"]
-exclude = ["tests*", "ui*", "ui-react*", "profiles*", "docs*", "results*"]
+exclude = ["tests*", "ui*", "ui-react*", "frontend*", "profiles*", "docs*", "results*"]
 
 [tool.setuptools]
-py-modules = ["main", "config", "settings", "portfolio_loader", "start_ui"]
+py-modules = ["main", "config", "settings", "portfolio_loader", "start_ui", "runtime_context"]
 
 [project]
 name = "prediction-wallet"

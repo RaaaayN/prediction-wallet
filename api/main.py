@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import Body, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,23 +27,50 @@ app.add_middleware(
 )
 
 
+class IdeaGenerationRequest(BaseModel):
+    cycle_id: str | None = None
+    max_candidates: int = 3
+
+
+class IdeaReviewRequest(BaseModel):
+    review_status: str
+
+
+class IdeaPromoteRequest(BaseModel):
+    status: str
+
+
 # ── static UI ─────────────────────────────────────────────────────────────────
 
-UI_DIR = PROJECT_ROOT / "ui"
-REACT_DIST = PROJECT_ROOT / "ui-react" / "dist"
-REACT_INDEX = REACT_DIST / "index.html"
-REACT_ASSETS = REACT_DIST / "assets"
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+FRONTEND_ASSETS = FRONTEND_DIST / "assets"
+LEGACY_UI_DIR = PROJECT_ROOT / "ui"
+UI_REACT_DIST = PROJECT_ROOT / "ui-react" / "dist"
+UI_REACT_INDEX = UI_REACT_DIST / "index.html"
+UI_REACT_ASSETS = UI_REACT_DIST / "assets"
 
-app.mount("/static", StaticFiles(directory=str(UI_DIR)), name="static")
-if REACT_ASSETS.is_dir():
-    app.mount("/assets", StaticFiles(directory=str(REACT_ASSETS)), name="react_assets")
+if LEGACY_UI_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(LEGACY_UI_DIR)), name="static")
+if FRONTEND_ASSETS.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_ASSETS)), name="vite_assets")
+elif UI_REACT_ASSETS.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(UI_REACT_ASSETS)), name="react_assets")
 
 
 @app.get("/", include_in_schema=False)
 async def root():
-    if REACT_INDEX.is_file():
-        return FileResponse(str(REACT_INDEX))
-    return FileResponse(str(UI_DIR / "index.html"))
+    if FRONTEND_INDEX.is_file():
+        return FileResponse(str(FRONTEND_INDEX))
+    if UI_REACT_INDEX.is_file():
+        return FileResponse(str(UI_REACT_INDEX))
+    legacy = LEGACY_UI_DIR / "index.html"
+    if legacy.is_file():
+        return FileResponse(str(legacy))
+    return {
+        "error": "No UI found. Build the Vite app (cd frontend && npm ci && npm run build) "
+        "or add ui/index.html / ui-react/dist."
+    }
 
 
 # ── data endpoints ────────────────────────────────────────────────────────────
@@ -252,11 +279,73 @@ async def get_config():
 
 
 @app.get("/api/idea-book")
-async def get_idea_book(status: str | None = Query(None)):
+async def get_idea_book(
+    status: str | None = Query(None),
+    review_status: str | None = Query(None),
+    llm_generated: bool | None = Query(None),
+):
     from services.idea_book_service import IdeaBookService
 
     svc = IdeaBookService()
-    return [entry.model_dump() for entry in svc.list_entries(status=status)]
+    return [
+        entry.model_dump()
+        for entry in svc.list_entries(status=status, review_status=review_status, llm_generated=llm_generated)
+    ]
+
+
+def _load_idea_metrics() -> dict[str, dict]:
+    from config import HEDGE_FUND_PROFILE
+    from market.metrics import PortfolioMetrics
+    from services.market_service import MarketService
+
+    tickers = list((HEDGE_FUND_PROFILE.get("universe") or {}).keys())
+    svc = MarketService()
+    metrics: dict[str, dict] = {}
+    for ticker in tickers:
+        hist = svc.get_historical(ticker, days=90)
+        if hist is None or getattr(hist, "empty", True):
+            continue
+        metrics[ticker] = PortfolioMetrics().ticker_metrics(hist)
+    return metrics
+
+
+@app.post("/api/idea-book/generate")
+async def generate_idea_book_candidates(req: IdeaGenerationRequest = Body(...)):
+    from services.idea_book_service import IdeaBookService
+
+    svc = IdeaBookService()
+    generated = svc.generate_candidates(
+        _load_idea_metrics(),
+        cycle_id=req.cycle_id,
+        max_candidates=req.max_candidates,
+    )
+    return [entry.model_dump() for entry in generated]
+
+
+@app.post("/api/idea-book/{idea_id}/review")
+async def review_idea_book_entry(idea_id: str, req: IdeaReviewRequest = Body(...)):
+    from fastapi import HTTPException
+    from services.idea_book_service import IdeaBookService
+
+    if req.review_status not in {"pending_review", "approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="Invalid review_status.")
+    svc = IdeaBookService()
+    if not svc.review_entry(idea_id, req.review_status):
+        raise HTTPException(status_code=404, detail="Idea not found.")
+    return {"ok": True, "idea_id": idea_id, "review_status": req.review_status}
+
+
+@app.post("/api/idea-book/{idea_id}/promote")
+async def promote_idea_book_entry(idea_id: str, req: IdeaPromoteRequest = Body(...)):
+    from fastapi import HTTPException
+    from services.idea_book_service import IdeaBookService
+
+    if req.status not in {"candidate", "watchlist", "investable", "portfolio"}:
+        raise HTTPException(status_code=400, detail="Invalid status.")
+    svc = IdeaBookService()
+    if not svc.promote_entry(idea_id, req.status):
+        raise HTTPException(status_code=404, detail="Idea not found.")
+    return {"ok": True, "idea_id": idea_id, "status": req.status, "review_status": "approved"}
 
 
 @app.get("/api/exposures")
@@ -463,3 +552,25 @@ async def get_events(cycle_id: str | None = Query(None), limit: int = Query(100,
 async def replay_cycle(cycle_id: str):
     from db.events import replay_cycle as _replay
     return _replay(cycle_id)
+
+
+# ── SPA fallback (must be registered after all /api routes) ───────────────────
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_fallback(full_path: str):
+    from fastapi import HTTPException
+
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    if FRONTEND_INDEX.is_file():
+        return FileResponse(str(FRONTEND_INDEX))
+    if UI_REACT_INDEX.is_file():
+        return FileResponse(str(UI_REACT_INDEX))
+    legacy = LEGACY_UI_DIR / "index.html"
+    if legacy.is_file():
+        return FileResponse(str(legacy))
+    raise HTTPException(
+        status_code=503,
+        detail="Frontend not built. Run: cd frontend && npm ci && npm run build",
+    )
