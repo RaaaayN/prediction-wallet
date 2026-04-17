@@ -8,23 +8,23 @@ All endpoints return JSON. The API is served by FastAPI — interactive docs ava
 
 ## Agent Cycle
 
-### `GET /api/cycle`
+### `POST /api/run/{step}`
 
-Stream a full observe → decide → validate → execute → audit cycle via Server-Sent Events (SSE).
+Stream a full or partial cycle via Server-Sent Events (SSE).
 
-**Query parameters:**
+**Path parameters:** `step` ∈ `observe | decide | execute | audit | run-cycle | report | init`
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `mode` | string | `simulate` | `simulate` or `paper` |
-| `strategy` | string | `threshold` | `threshold` or `calendar` |
-| `profile` | string | `balanced` | Portfolio profile name |
+**JSON body:**
 
-**Response:** SSE stream — each event is a JSON line from the agent cycle stdout.
-
-```bash
-curl "http://localhost:8000/api/cycle?mode=simulate&strategy=threshold"
+```json
+{
+  "strategy": "threshold",
+  "mode": "simulate",
+  "profile": "balanced"
+}
 ```
+
+**Response:** SSE stream with stdout lines and a final `{"exit": 0}` event.
 
 ---
 
@@ -40,12 +40,13 @@ Returns the current portfolio state from `data/portfolio.json`.
 {
   "cash": 12500.00,
   "positions": {
-    "AAPL": {"shares": 45.2, "cost_basis": 142.10},
-    "BTC-USD": {"shares": 0.85, "cost_basis": 38200.00}
+    "AAPL": 45.2,
+    "BTC-USD": 0.85
   },
   "history": [
     {"timestamp": "2024-01-15T14:00:00", "total_value": 103400.00}
   ],
+  "total_value": 103400.00,
   "pnl_dollars": 3400.00,
   "pnl_pct": 0.034
 }
@@ -91,6 +92,14 @@ Returns trade execution records.
 Returns decision trace records (full policy evaluation per cycle).
 
 **Query parameters:** `limit` (int, default 50)
+
+### `GET /api/events`
+
+Returns recent immutable cycle events, or all events for one `cycle_id`.
+
+### `GET /api/events/replay/{cycle_id}`
+
+Replays `cycle_started → ... → audit_complete` into a reconstructed cycle summary.
 
 ### `GET /api/runs`
 
@@ -178,6 +187,20 @@ Runs strategy comparison backtest.
   "buy_and_hold": {"total_return": 0.103, "sharpe": 0.98, "max_drawdown": -0.082, "trades": 0}
 }
 ```
+
+### `GET /api/monte-carlo`
+
+Runs a forward Monte Carlo portfolio simulation.
+
+**Query parameters:** `paths` (int, default 5000, max 20000)
+
+**Response fields:** `percentiles`, `prob_loss`, `prob_drawdown_10pct`, `expected_sharpe`, `expected_max_dd`, `confidence_intervals`, `path_sample`
+
+### `GET /api/regime`
+
+Returns the rolling market regime classification.
+
+**Query parameters:** `days` (int, default 180)
 
 ---
 

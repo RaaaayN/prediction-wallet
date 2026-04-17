@@ -2,20 +2,51 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import time
 
 import pandas as pd
-import yfinance as yf
 
 from config import BENCHMARK_TICKER, MARKET_DB
+from db.schema import init_db
 from utils.time import utc_now_iso
 
 
+def _coerce_single_series(data: pd.DataFrame, column_name: str) -> pd.Series:
+    """Return a single price series even if duplicate column labels are present."""
+    selected = data[column_name]
+    if isinstance(selected, pd.DataFrame):
+        # yfinance can occasionally return duplicated labels after flattening a
+        # MultiIndex result; keep the first non-empty column deterministically.
+        selected = selected.iloc[:, 0]
+    return pd.to_numeric(selected, errors="coerce")
+
+
+def _normalize_ohlcv_columns(data: pd.DataFrame) -> pd.DataFrame:
+    """Flatten yfinance outputs to a stable single-ticker OHLCV schema."""
+    normalized = data.copy()
+    if isinstance(normalized.columns, pd.MultiIndex):
+        columns = list(normalized.columns)
+        preferred_level = None
+        for level in range(normalized.columns.nlevels):
+            values = normalized.columns.get_level_values(level)
+            if {"Open", "High", "Low", "Close"}.issubset(set(values)):
+                preferred_level = level
+                break
+        if preferred_level is None:
+            preferred_level = 0
+        normalized.columns = normalized.columns.get_level_values(preferred_level)
+
+    normalized = normalized.loc[:, ~normalized.columns.duplicated()].copy()
+    if "Close" not in normalized.columns and "Adj Close" in normalized.columns:
+        normalized["Close"] = pd.to_numeric(normalized["Adj Close"], errors="coerce")
+    return normalized
+
+
 def add_technical_indicators(data: pd.DataFrame) -> pd.DataFrame:
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-    close = data["Close"]
+    data = _normalize_ohlcv_columns(data)
+    close = _coerce_single_series(data, "Close")
     data["SMA20"] = close.rolling(window=20).mean()
     data["EMA20"] = close.ewm(span=20, adjust=False).mean()
     delta = close.diff()
@@ -35,12 +66,19 @@ def add_technical_indicators(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
+def _require_yfinance():
+    import yfinance as yf
+
+    return yf
+
+
 class MarketService:
     """Wrap yfinance access and record refresh metadata in SQLite."""
 
     def __init__(self, db_path: str = MARKET_DB, min_refresh_interval_seconds: int = 900):
         self.db_path = db_path
         self.min_refresh_interval_seconds = min_refresh_interval_seconds
+        init_db(self.db_path)
 
     def fetch_and_store(self, tickers: list[str], period: str = "1y", force: bool = False) -> dict[str, pd.DataFrame]:
         results = {}
@@ -64,8 +102,42 @@ class MarketService:
                 self._record_refresh(ticker, False, str(exc))
         return results
 
+    async def fetch_and_store_async(
+        self,
+        tickers: list[str],
+        period: str = "1y",
+        force: bool = False,
+    ) -> tuple[dict[str, pd.DataFrame], dict[str, float]]:
+        async def _fetch_one(ticker: str) -> tuple[str, pd.DataFrame | None, float]:
+            started = time.perf_counter()
+            if not force and not self._needs_refresh(ticker):
+                cached = self._load_from_db(ticker)
+                if cached is not None and not cached.empty:
+                    return ticker, cached, round((time.perf_counter() - started) * 1000, 2)
+            try:
+                df = await asyncio.to_thread(self._download, ticker, period)
+                if df.empty:
+                    self._record_refresh(ticker, False, "No data returned")
+                    return ticker, None, round((time.perf_counter() - started) * 1000, 2)
+                df = add_technical_indicators(df)
+                self._save_to_db(df, ticker)
+                self._record_refresh(ticker, True, "")
+                return ticker, df, round((time.perf_counter() - started) * 1000, 2)
+            except Exception as exc:
+                self._record_refresh(ticker, False, str(exc))
+                return ticker, None, round((time.perf_counter() - started) * 1000, 2)
+
+        results: dict[str, pd.DataFrame] = {}
+        latencies: dict[str, float] = {}
+        for ticker, df, latency_ms in await asyncio.gather(*[_fetch_one(ticker) for ticker in tickers]):
+            latencies[ticker] = latency_ms
+            if df is not None and not df.empty:
+                results[ticker] = df
+        return results, latencies
+
     def get_latest_prices(self, tickers: list[str]) -> dict[str, float]:
         prices = {}
+        yf = _require_yfinance()
         for ticker in tickers:
             try:
                 df = self._load_from_db(ticker)
@@ -92,6 +164,7 @@ class MarketService:
 
     def refresh_prices(self, tickers: list[str]) -> dict[str, float]:
         prices = {}
+        yf = _require_yfinance()
         for ticker in tickers:
             try:
                 info = yf.Ticker(ticker).fast_info
@@ -114,10 +187,9 @@ class MarketService:
             return []
 
     def _download(self, ticker: str, period: str) -> pd.DataFrame:
+        yf = _require_yfinance()
         df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=True)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df
+        return _normalize_ohlcv_columns(df)
 
     def _save_to_db(self, df: pd.DataFrame, ticker: str) -> None:
         with sqlite3.connect(self.db_path) as conn:

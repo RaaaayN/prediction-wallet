@@ -24,7 +24,11 @@ CREATE TABLE IF NOT EXISTS positions (
     value         REAL    NOT NULL,
     weight        REAL    NOT NULL,
     target_weight REAL    NOT NULL,
-    drift         REAL    NOT NULL
+    drift         REAL    NOT NULL,
+    side          TEXT    DEFAULT 'long',
+    idea_id       TEXT,
+    gross_exposure REAL   DEFAULT 0.0,
+    net_exposure   REAL   DEFAULT 0.0
 );
 
 CREATE TABLE IF NOT EXISTS executions (
@@ -41,7 +45,14 @@ CREATE TABLE IF NOT EXISTS executions (
     slippage     REAL    NOT NULL,
     reason       TEXT,
     success      INTEGER NOT NULL,
-    error        TEXT
+    error        TEXT,
+    side         TEXT    DEFAULT 'long',
+    idea_id      TEXT,
+    sleeve       TEXT    DEFAULT 'core_longs',
+    exposure_before REAL DEFAULT 0.0,
+    exposure_after  REAL DEFAULT 0.0,
+    gross_impact REAL DEFAULT 0.0,
+    net_impact   REAL DEFAULT 0.0
 );
 
 CREATE TABLE IF NOT EXISTS agent_runs (
@@ -92,6 +103,38 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_timestamp ON agent_runs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_decision_traces_cycle_id ON decision_traces(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_decision_traces_stage ON decision_traces(stage);
 CREATE INDEX IF NOT EXISTS idx_decision_traces_created_at ON decision_traces(created_at);
+
+CREATE TABLE IF NOT EXISTS cycle_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id     TEXT    NOT NULL,
+    event_type   TEXT    NOT NULL,
+    payload_json TEXT    NOT NULL,
+    created_at   TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cycle_events_cycle_id ON cycle_events(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_cycle_events_created_at ON cycle_events(created_at);
+
+CREATE TABLE IF NOT EXISTS idea_book (
+    idea_id            TEXT PRIMARY KEY,
+    ticker             TEXT NOT NULL,
+    side               TEXT NOT NULL,
+    thesis             TEXT NOT NULL,
+    catalyst           TEXT NOT NULL,
+    time_horizon       TEXT NOT NULL,
+    conviction         REAL NOT NULL,
+    upside_case        TEXT,
+    downside_case      TEXT,
+    invalidation_rule  TEXT NOT NULL,
+    status             TEXT NOT NULL,
+    sleeve             TEXT DEFAULT 'core_longs',
+    source             TEXT DEFAULT 'profile_seed',
+    crowded_score      REAL DEFAULT 0.0,
+    short_squeeze_risk INTEGER DEFAULT 0,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_idea_book_status ON idea_book(status);
+CREATE INDEX IF NOT EXISTS idx_idea_book_ticker ON idea_book(ticker);
 """
 
 
@@ -108,6 +151,13 @@ _EXECUTIONS_MIGRATIONS = [
     "ALTER TABLE executions ADD COLUMN drift_before REAL DEFAULT 0.0",
     "ALTER TABLE executions ADD COLUMN slippage_pct REAL DEFAULT 0.0",
     "ALTER TABLE executions ADD COLUMN notional REAL DEFAULT 0.0",
+    "ALTER TABLE executions ADD COLUMN side TEXT DEFAULT 'long'",
+    "ALTER TABLE executions ADD COLUMN idea_id TEXT",
+    "ALTER TABLE executions ADD COLUMN sleeve TEXT DEFAULT 'core_longs'",
+    "ALTER TABLE executions ADD COLUMN exposure_before REAL DEFAULT 0.0",
+    "ALTER TABLE executions ADD COLUMN exposure_after REAL DEFAULT 0.0",
+    "ALTER TABLE executions ADD COLUMN gross_impact REAL DEFAULT 0.0",
+    "ALTER TABLE executions ADD COLUMN net_impact REAL DEFAULT 0.0",
 ]
 
 _DECISION_TRACES_MIGRATIONS = [
@@ -115,12 +165,19 @@ _DECISION_TRACES_MIGRATIONS = [
     "ALTER TABLE decision_traces ADD COLUMN tags TEXT",
 ]
 
+_POSITIONS_MIGRATIONS = [
+    "ALTER TABLE positions ADD COLUMN side TEXT DEFAULT 'long'",
+    "ALTER TABLE positions ADD COLUMN idea_id TEXT",
+    "ALTER TABLE positions ADD COLUMN gross_exposure REAL DEFAULT 0.0",
+    "ALTER TABLE positions ADD COLUMN net_exposure REAL DEFAULT 0.0",
+]
+
 
 def init_db(db_path: str) -> None:
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(DDL)
-        for stmt in _AGENT_RUNS_MIGRATIONS + _EXECUTIONS_MIGRATIONS + _DECISION_TRACES_MIGRATIONS:
+        for stmt in _AGENT_RUNS_MIGRATIONS + _EXECUTIONS_MIGRATIONS + _DECISION_TRACES_MIGRATIONS + _POSITIONS_MIGRATIONS:
             try:
                 conn.execute(stmt)
             except sqlite3.OperationalError:

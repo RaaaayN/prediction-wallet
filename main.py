@@ -46,6 +46,8 @@ def init_portfolio():
 
     clean = {
         "positions": {},
+        "position_sides": {},
+        "average_costs": {},
         "cash": INITIAL_CAPITAL,
         "peak_value": INITIAL_CAPITAL,
         "last_rebalanced": None,
@@ -57,18 +59,19 @@ def init_portfolio():
         json.dump(clean, f, indent=2)
 
     prices = fetcher.get_latest_prices(list(TARGET_ALLOCATION.keys()))
-    for ticker, weight in TARGET_ALLOCATION.items():
-        price = prices.get(ticker, 0)
-        if price <= 0:
-            continue
-        quantity = (INITIAL_CAPITAL * weight) / price
-        sim.execute("buy", ticker, quantity, price, reason="Initial portfolio deployment")
+    if sum(TARGET_ALLOCATION.values()) > 0:
+        for ticker, weight in TARGET_ALLOCATION.items():
+            price = prices.get(ticker, 0)
+            if price <= 0:
+                continue
+            quantity = (INITIAL_CAPITAL * weight) / price
+            sim.execute("buy", ticker, quantity, price, reason="Initial portfolio deployment")
     print("Portfolio initialized.")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Governed multi-asset portfolio agent")
-    parser.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy"], default=None)
+    parser.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy", "long_short_equity"], default=None)
     parser.add_argument("--strategy", choices=["threshold", "calendar"], default="threshold")
     parser.add_argument("--mode", choices=["simulate", "paper", "live"], default=EXECUTION_MODE)
     parser.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
@@ -80,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--strategy", choices=["threshold", "calendar"], default="threshold")
         sub.add_argument("--mode", choices=["simulate", "paper", "live"], default=EXECUTION_MODE)
         sub.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
-        sub.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy"], default=None)
+        sub.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy", "long_short_equity"], default=None)
     subparsers.add_parser("report")
     subparsers.add_parser("init")
     return parser

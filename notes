@@ -1,0 +1,124 @@
+ Guide d'utilisation de l'équipe d'agents
+
+    Vue d'ensemble
+
+    L'équipe fonctionne en mode asynchrone : tu invoques les agents quand tu veux, dans n'importe quel ordre. Chaque agent écrit son rapport dans
+    docs/team/. Quand tu veux une synthèse, tu appelles le leader.
+
+    ---
+    Les 5 agents et comment les invoquer
+
+    ┌────────────────┬────────────┬────────────────────────────────────────────────────────────┐
+    │    Commande    │    Rôle    │                       Ce qu'il fait                        │
+    ├────────────────┼────────────┼────────────────────────────────────────────────────────────┤
+    │ /team-backend  │ Backend    │ Inspecte/améliore agents/, services/, engine/, db/, api/   │
+    ├────────────────┼────────────┼────────────────────────────────────────────────────────────┤
+    │ /team-ui       │ Interface  │ Améliore ui/index.html et dashboard/                       │
+    ├────────────────┼────────────┼────────────────────────────────────────────────────────────┤
+    │ /team-strategy │ Stratégies │ Analyse et améliore selon les standards bancaires          │
+    ├────────────────┼────────────┼────────────────────────────────────────────────────────────┤
+    │ /team-usecases │ Use cases  │ Audite les features existantes, filtre les nouvelles idées │
+    ├────────────────┼────────────┼────────────────────────────────────────────────────────────┤
+    │ /team-lead     │ Leader     │ Synthétise tous les rapports et donne des priorités        │
+    └────────────────┴────────────┴────────────────────────────────────────────────────────────┘
+
+    ---
+    Workflow typique
+
+    1. Lancer un agent membre
+
+    /team-backend
+    Puis décris ta tâche dans le prompt qui suit, par exemple :
+    ▎ "Inspecte le module engine/risk.py et identifie les problèmes de robustesse."
+
+    L'agent va :
+    1. Lire docs/team/lead-report.md (s'il existe)
+    2. Lire les rapports des autres membres
+    3. Faire son travail
+    4. Écrire son rapport dans docs/team/backend-report.md
+
+    2. Enchaîner plusieurs agents
+
+    Tu peux les faire tourner dans n'importe quel ordre :
+    /team-strategy   → analyse les stratégies
+    /team-usecases   → évalue les features
+    /team-backend    → corrige les bugs trouvés
+
+    3. Demander une synthèse au leader
+
+    /team-lead
+    Le leader lit tous les rapports disponibles et produit :
+    - État de chaque agent (à jour / périmé)
+    - Top 3 priorités
+    - Dépendances critiques entre agents
+    - Plan d'action recommandé
+
+    ---
+    Cas d'usage concrets
+
+    "Je veux améliorer les stratégies de trading"
+
+    /team-strategy
+    > Analyse engine/performance.py et strategies/ selon les meilleures pratiques bancaires.
+      Propose des améliorations prioritaires.
+    L'agent reste en Phase 1 (analyse seule). Si tu veux qu'il implémente :
+    > Proceed with implementation.
+    Il cite ta phrase dans son rapport, puis code.
+
+    "Je veux savoir si une nouvelle feature vaut le coup"
+
+    /team-usecases
+    > Évalue l'idée suivante : ajouter un mode de trading live avec Alpaca API.
+    Tu recevras : Accept / Reject / Defer avec la valeur, la complexité et le risque.
+
+    "Je veux auditer ce qui est redondant dans le projet"
+
+    /team-usecases
+    > Audite toutes les features existantes et dis-moi ce qui est utile, redondant ou inutile.
+
+    "Je veux une vue d'ensemble de l'état du projet"
+
+    /team-lead
+    Fonctionne mieux après que les autres agents ont tourné au moins une fois.
+
+    ---
+    Règles importantes à retenir
+
+    Pour team-strategy :
+    - Il ne code jamais sans que tu dises explicitement "proceed with implementation" (ou équivalent clair)
+    - Cette phrase est enregistrée dans son rapport — c'est la trace d'approbation
+
+    Pour team-usecases :
+    - Il ne touche jamais au code
+    - Il évalue, il ne priorise pas — c'est team-lead qui priorise
+
+    Pour team-lead :
+    - Invoque-le après avoir fait tourner les membres, pas avant
+    - Il signale les rapports périmés (pas mis à jour depuis 3 sessions)
+
+    Agents bloqués :
+    - Si un agent est bloqué par un autre, il écrit son rapport partiel et s'arrête
+    - Tu lis le rapport, tu lances l'agent bloquant, puis tu re-lances l'agent bloqué
+
+    ---
+    Structure des fichiers générés
+
+    docs/team/
+      backend-report.md      ← ajouté à chaque session /team-backend
+      ui-report.md           ← ajouté à chaque session /team-ui
+      strategy-report.md     ← ajouté à chaque session /team-strategy
+      usecases-report.md     ← ajouté à chaque session /team-usecases
+      lead-report.md         ← ajouté à chaque /team-lead
+
+    Les rapports sont append-only — chaque session ajoute une nouvelle section datée. Tu gardes tout l'historique.
+
+    ---
+    Cycle recommandé pour une session de travail
+
+    1. /team-usecases  → "Quoi couper / quoi garder ?"
+    2. /team-backend   → "Corriger les problèmes backend"
+    3. /team-strategy  → "Améliorer les stratégies"
+    4. /team-ui        → "Améliorer l'interface"
+    5. /team-lead      → "Synthèse et priorités pour la prochaine session"
+
+    Tu n'es pas obligé de suivre cet ordre — c'est juste une logique naturelle.

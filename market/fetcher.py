@@ -5,15 +5,13 @@ from __future__ import annotations
 import pandas as pd
 
 from config import MARKET_DB, MARKET_DATA_TTL_SECONDS
-from services.market_service import MarketService
+from services.market_service import MarketService, _coerce_single_series, _normalize_ohlcv_columns
 
 
 def add_technical_indicators(data: pd.DataFrame) -> pd.DataFrame:
     """Add SMA20, EMA20, RSI14, Bollinger Bands, MACD to a price DataFrame."""
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-
-    close = data["Close"]
+    data = _normalize_ohlcv_columns(data)
+    close = _coerce_single_series(data, "Close")
     data["SMA20"] = close.rolling(window=20).mean()
     data["EMA20"] = close.ewm(span=20, adjust=False).mean()
 
