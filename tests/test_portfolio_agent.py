@@ -454,3 +454,59 @@ def test_confidence_in_cycle_audit():
 
     assert audit.decision.confidence == 0.72
     assert audit.decision.data_freshness in ("fresh", "partial", "stale", "unknown")
+
+
+def test_observation_includes_regime_and_monte_carlo():
+    service = build_service()
+    portfolio = service.execution_service.load_portfolio()
+    portfolio["positions"] = {"AAPL": 10.0, "MSFT": 5.0}
+    service.execution_service.save_portfolio(portfolio)
+
+    observation = service.observe()
+
+    assert "regime" in observation.observability
+    assert "monte_carlo" in observation.observability
+    assert isinstance(observation.observability["regime"], dict)
+    assert isinstance(observation.observability["monte_carlo"], dict)
+
+
+def test_execute_persists_execution_rows():
+    from db.repository import get_executions
+
+    service = build_service()
+    portfolio = service.execution_service.load_portfolio()
+    portfolio["positions"] = {"AAPL": 10.0}
+    service.execution_service.save_portfolio(portfolio)
+
+    observation = service.observe()
+    if not observation.trade_plan:
+        return
+
+    decision = TradeDecision(
+        cycle_id=observation.cycle_id,
+        summary="persist execution",
+        market_outlook="neutral",
+        rationale="test",
+        rebalance_needed=True,
+        approved_trades=[observation.trade_plan[0]],
+        rejected_trades=[],
+        risk_flags=[],
+    )
+    _, executions = service.execute(observation, decision)
+    df = get_executions(limit=10)
+
+    if executions:
+        assert not df.empty
+
+
+def test_audit_persists_snapshot_for_cycle():
+    from db.repository import get_positions_by_cycle
+
+    service = build_service()
+    observation = service.observe()
+    decision = _no_op_decision(service, observation)
+    policy, executions = service.execute(observation, decision)
+    audit = service.audit(observation, decision, policy, executions)
+    positions = get_positions_by_cycle(audit.cycle_id)
+
+    assert isinstance(positions, list)

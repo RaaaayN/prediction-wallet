@@ -11,7 +11,17 @@
     .terminal { background: #010409; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 12px; }
     .tab-btn.active { border-bottom: 2px solid #58a6ff; color: #58a6ff; }
     .tab-btn { color: #8b949e; border-bottom: 2px solid transparent; }
-    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+    .workspace-card { background: linear-gradient(180deg, rgba(22,27,34,0.96), rgba(13,17,23,0.96)); border: 1px solid #30363d; border-radius: 12px; padding: 18px; }
+    .workspace-title { color: #e6edf3; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+    .workspace-copy { color: #8b949e; font-size: 13px; line-height: 1.5; }
+    .utility-bar { background:#11161d; border:1px solid #21262d; border-radius:10px; padding:10px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; margin:16px 0 20px; }
+    .utility-bar .meta { color:#8b949e; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+    .detail-nav { background:#11161d; border:1px solid #21262d; border-radius:10px; padding:12px 14px; margin:16px 0 20px; }
+    .detail-nav-label { color:#8b949e; font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; }
+    .detail-nav-group { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+    .detail-chip { background:#161b22; border:1px solid #30363d; color:#c9d1d9; border-radius:999px; padding:6px 10px; font-size:12px; line-height:1; cursor:pointer; transition:all .15s ease; }
+    .detail-chip:hover { border-color:#58a6ff; color:#58a6ff; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
     .badge-ok   { background:#1a4731; color:#3fb950; }
     .badge-err  { background:#3d1a1a; color:#f85149; }
     .badge-warn { background:#3d2d0a; color:#e3b341; }
@@ -96,24 +106,48 @@
 
 <!-- TABS -->
 <nav class="border-b border-gray-800 px-6 flex gap-6 overflow-x-auto">
-  <button class="tab-btn py-3 text-sm" onclick="showTab('dashboard', this)">Dashboard</button>
-  <button class="tab-btn active py-3 text-sm" onclick="showTab('control', this)">Control</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('portfolio', this)">Portfolio</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('risk', this)">Risk</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('blotter', this)">Blotter</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('history', this)">History</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('traces', this)">Agent Trace</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('runs', this)">Cycles</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('perf', this)">Performance</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('backtest', this)">Backtest</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('correlation', this)">Correlation</button>
-  <button class="tab-btn py-3 text-sm" onclick="showTab('stress', this)">Stress Test</button>
+  <button class="tab-btn active py-3 text-sm" data-tab="dashboard" onclick="showTab('dashboard', this)">Overview</button>
+  <button class="tab-btn py-3 text-sm" data-tab="control" onclick="showTab('control', this)">Command</button>
+  <button class="tab-btn py-3 text-sm" data-tab="workspace" onclick="showTab('workspace', this)">Book</button>
+  <button class="tab-btn py-3 text-sm" data-tab="riskhub" onclick="showTab('riskhub', this)">Risk</button>
+  <button class="tab-btn py-3 text-sm" data-tab="analytics" onclick="showTab('analytics', this)">Analytics</button>
+  <button class="tab-btn py-3 text-sm" data-tab="audit" onclick="showTab('audit', this)">Audit</button>
 </nav>
 
 <main class="p-6 max-w-7xl mx-auto">
+<div class="detail-nav">
+  <div class="detail-nav-label">Detailed Views</div>
+  <div class="detail-nav-group">
+    <button class="detail-chip" onclick="showTab('portfolio')">Portfolio</button>
+    <button class="detail-chip" onclick="showTab('book')">Book Summary</button>
+    <button class="detail-chip" onclick="showTab('ideas')">Idea Book</button>
+    <button class="detail-chip" onclick="showTab('blotter')">Blotter</button>
+    <button class="detail-chip" onclick="showTab('risk')">Risk Detail</button>
+    <button class="detail-chip" onclick="showTab('regime')">Regime</button>
+    <button class="detail-chip" onclick="showTab('stress')">Stress Test</button>
+  </div>
+  <div class="detail-nav-group">
+    <button class="detail-chip" onclick="showTab('perf')">Performance</button>
+    <button class="detail-chip" onclick="showTab('history')">History</button>
+    <button class="detail-chip" onclick="showTab('montecarlo')">Monte Carlo</button>
+    <button class="detail-chip" onclick="showTab('backtest')">Backtest</button>
+    <button class="detail-chip" onclick="showTab('correlation')">Correlation</button>
+    <button class="detail-chip" onclick="showTab('traces')">Agent Trace</button>
+    <button class="detail-chip" onclick="showTab('runs')">Cycles</button>
+  </div>
+</div>
+<div id="context-bar" class="utility-bar hidden">
+  <div>
+    <div class="meta" id="context-parent">Workspace</div>
+    <div class="text-sm font-semibold text-gray-200" id="context-title">Detail View</div>
+  </div>
+  <div class="flex items-center gap-2">
+    <button id="context-back" class="btn btn-gray text-xs">Back</button>
+  </div>
+</div>
 
 <!-- ═══════════════ DASHBOARD TAB ═══════════════ -->
-<div id="tab-dashboard" class="hidden">
+<div id="tab-dashboard">
 
   <!-- Row 1: KPI cards -->
   <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
@@ -174,7 +208,7 @@
 </div>
 
 <!-- ═══════════════ CONTROL TAB ═══════════════ -->
-<div id="tab-control">
+<div id="tab-control" class="hidden">
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
     <!-- Command panel -->
@@ -204,6 +238,7 @@
             <option value="conservative">conservative</option>
             <option value="growth">growth</option>
             <option value="crypto_heavy">crypto_heavy</option>
+            <option value="long_short_equity">long_short_equity</option>
           </select>
         </label>
       </div>
@@ -298,6 +333,186 @@
   </div>
 </div>
 
+<!-- ═══════════════ WORKSPACE HUB ═══════════════ -->
+<div id="tab-workspace" class="hidden">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Book Workspace</h2>
+      <p class="text-sm text-gray-500 mt-1">Daily PM cockpit for book state, idea flow, execution activity and portfolio composition.</p>
+    </div>
+    <button class="btn btn-gray text-xs" onclick="loadWorkspaceHub()">Refresh</button>
+  </div>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+    <div class="card p-4"><div class="stat-label">NAV</div><div id="hub-nav" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Gross</div><div id="hub-gross" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Net</div><div id="hub-net" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Live Ideas</div><div id="hub-ideas-count" class="stat-value">--</div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+    <div class="workspace-card">
+      <div class="workspace-title">Portfolio Monitor</div>
+      <div class="workspace-copy mb-4">Allocation, positions, realized attribution and current exposure by name.</div>
+      <button class="btn btn-primary text-xs" onclick="showTab('portfolio')">Open Portfolio Detail</button>
+    </div>
+    <div class="workspace-card">
+      <div class="workspace-title">Book Construction</div>
+      <div class="workspace-copy mb-4">Long/short gross-net view, sleeve contribution, breaches and PM risk narrative.</div>
+      <button class="btn btn-primary text-xs" onclick="showTab('book')">Open Book Summary</button>
+    </div>
+    <div class="workspace-card">
+      <div class="workspace-title">Idea Pipeline</div>
+      <div class="workspace-copy mb-4">Watchlist, investable names, conviction and invalidation rules.</div>
+      <button class="btn btn-primary text-xs" onclick="showTab('ideas')">Open Idea Book</button>
+    </div>
+    <div class="workspace-card">
+      <div class="workspace-title">Execution Activity</div>
+      <div class="workspace-copy mb-4">Trade blotter for fills, notional and slippage review.</div>
+      <button class="btn btn-primary text-xs" onclick="showTab('blotter')">Open Blotter</button>
+    </div>
+  </div>
+  <div class="card p-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Recent Activity</h2>
+    <div id="hub-activity" class="text-sm text-gray-300">Loading...</div>
+  </div>
+</div>
+
+<!-- ═══════════════ RISK HUB ═══════════════ -->
+<div id="tab-riskhub" class="hidden">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Risk Workspace</h2>
+      <p class="text-sm text-gray-500 mt-1">Concentration, scenario losses, regime context and policy breaches in one place.</p>
+    </div>
+    <button class="btn btn-gray text-xs" onclick="loadRiskHub()">Refresh</button>
+  </div>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+    <div class="card p-4"><div class="stat-label">Breaches</div><div id="riskhub-breaches" class="stat-value red">--</div></div>
+    <div class="card p-4"><div class="stat-label">Near Breaches</div><div id="riskhub-near" class="stat-value yellow">--</div></div>
+    <div class="card p-4"><div class="stat-label">Regime</div><div id="riskhub-regime" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Worst Stress</div><div id="riskhub-stress" class="stat-value red">--</div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="workspace-card">
+      <div class="workspace-title">Risk Dashboard</div>
+      <div class="workspace-copy mb-4">Drawdown, sector concentration and kill-switch monitoring.</div>
+      <button class="btn btn-primary text-xs" onclick="showTab('risk')">Open Risk Detail</button>
+    </div>
+    <div class="workspace-card">
+      <div class="workspace-title">Scenario Review</div>
+      <div class="workspace-copy mb-4">Stress losses, regime overlays and risk-off diagnostics.</div>
+      <div class="flex gap-2">
+        <button class="btn btn-primary text-xs" onclick="showTab('stress')">Stress Test</button>
+        <button class="btn btn-gray text-xs" onclick="showTab('regime')">Regime</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ ANALYTICS HUB ═══════════════ -->
+<div id="tab-analytics" class="hidden">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Analytics Workspace</h2>
+      <p class="text-sm text-gray-500 mt-1">Performance, history, scenario analytics and research-grade diagnostics.</p>
+    </div>
+    <button class="btn btn-gray text-xs" onclick="loadAnalyticsHub()">Refresh</button>
+  </div>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+    <div class="card p-4"><div class="stat-label">Snapshots</div><div id="analytic-snapshots" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Backtest Modes</div><div id="analytic-backtests" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Corr Coverage</div><div id="analytic-corr" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Stress Scenarios</div><div id="analytic-stress-count" class="stat-value">--</div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="workspace-card">
+      <div class="workspace-title">Performance Stack</div>
+      <div class="workspace-copy mb-4">Performance metrics, NAV history and PnL evolution.</div>
+      <div class="flex gap-2">
+        <button class="btn btn-primary text-xs" onclick="showTab('perf')">Performance</button>
+        <button class="btn btn-gray text-xs" onclick="showTab('history')">History</button>
+      </div>
+    </div>
+    <div class="workspace-card">
+      <div class="workspace-title">Scenario Analytics</div>
+      <div class="workspace-copy mb-4">Monte Carlo, backtest, stress and correlation diagnostics.</div>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn btn-primary text-xs" onclick="showTab('montecarlo')">Monte Carlo</button>
+        <button class="btn btn-gray text-xs" onclick="showTab('backtest')">Backtest</button>
+        <button class="btn btn-gray text-xs" onclick="showTab('correlation')">Correlation</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ AUDIT HUB ═══════════════ -->
+<div id="tab-audit" class="hidden">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Audit Workspace</h2>
+      <p class="text-sm text-gray-500 mt-1">Operational review of runs, decision traces and execution history.</p>
+    </div>
+    <button class="btn btn-gray text-xs" onclick="loadAuditHub()">Refresh</button>
+  </div>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+    <div class="card p-4"><div class="stat-label">Recent Runs</div><div id="audit-runs-count" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Trace Events</div><div id="audit-traces-count" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Executions</div><div id="audit-execs-count" class="stat-value">--</div></div>
+    <div class="card p-4"><div class="stat-label">Last Cycle</div><div id="audit-last-cycle" class="stat-value">--</div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="workspace-card">
+      <div class="workspace-title">Decision Audit Trail</div>
+      <div class="workspace-copy mb-4">Agent reasoning stages, policy validation and cycle diagnostics.</div>
+      <div class="flex gap-2">
+        <button class="btn btn-primary text-xs" onclick="showTab('traces')">Agent Trace</button>
+        <button class="btn btn-gray text-xs" onclick="showTab('runs')">Cycles</button>
+      </div>
+    </div>
+    <div class="workspace-card">
+      <div class="workspace-title">Execution Review</div>
+      <div class="workspace-copy mb-4">Blotter inspection, slippage and operational drift checks.</div>
+      <button class="btn btn-primary text-xs" onclick="showTab('blotter')">Open Blotter</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ BOOK TAB ═══════════════ -->
+<div id="tab-book" class="hidden">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Hedge Fund Book Summary</h2>
+    <button class="btn btn-gray text-xs" onclick="loadBook()">Refresh</button>
+  </div>
+  <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
+    <div class="card p-4"><div class="stat-label">Gross</div><div id="book-gross" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Net</div><div id="book-net" class="stat-value blue">--</div></div>
+    <div class="card p-4"><div class="stat-label">Long</div><div id="book-long" class="stat-value green">--</div></div>
+    <div class="card p-4"><div class="stat-label">Short</div><div id="book-short" class="stat-value red">--</div></div>
+    <div class="card p-4"><div class="stat-label">Beta Adj.</div><div id="book-beta" class="stat-value yellow">--</div></div>
+    <div class="card p-4"><div class="stat-label">Top 5 Conc.</div><div id="book-top5" class="stat-value">--</div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="card p-4">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Risk Limits</h2>
+      <div id="book-risk-view" class="text-sm text-gray-300"></div>
+    </div>
+    <div class="card p-4">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">PnL Attribution</h2>
+      <div id="book-pnl-view" class="text-sm text-gray-300"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ IDEAS TAB ═══════════════ -->
+<div id="tab-ideas" class="hidden">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Idea Book</h2>
+    <button class="btn btn-gray text-xs" onclick="loadIdeas()">Refresh</button>
+  </div>
+  <div class="card p-4">
+    <div id="ideas-table" class="overflow-x-auto"></div>
+  </div>
+</div>
+
 <!-- ═══════════════ RISK TAB ═══════════════ -->
 <div id="tab-risk" class="hidden">
 
@@ -352,6 +567,94 @@
   <!-- Table -->
   <div class="card p-4">
     <div id="blotter-table" class="overflow-x-auto"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ MONTE CARLO TAB ═══════════════ -->
+<div id="tab-montecarlo" class="hidden">
+  <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Monte Carlo Simulation</h2>
+      <p class="text-xs text-gray-500 mt-1">Forward projection of portfolio outcomes — correlated GBM, 252-day horizon</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-gray-400">Paths:</label>
+      <select id="mc-paths" class="text-xs">
+        <option value="1000">1,000</option>
+        <option value="5000" selected>5,000</option>
+        <option value="10000">10,000</option>
+      </select>
+      <button class="btn btn-primary text-xs" onclick="loadMonteCarlo()">Run Simulation</button>
+    </div>
+  </div>
+  <div id="mc-error" class="hidden text-sm p-3 rounded mb-4" style="background:#3d1a1a;border:1px solid #f85149;color:#f85149"></div>
+  <div id="mc-loading" class="hidden text-sm text-gray-500 mb-4">Running Monte Carlo simulation...</div>
+  <div id="mc-content" class="hidden">
+    <!-- Percentile cards -->
+    <p class="text-xs text-gray-600 uppercase tracking-wider mb-2 font-semibold">Outcome Distribution — Final Portfolio Value (1 Year)</p>
+    <div class="grid grid-cols-5 gap-3 mb-5">
+      <div class="card p-4 text-center"><div class="stat-label">5th Pct</div><div id="mc-p5" class="stat-value red">--</div></div>
+      <div class="card p-4 text-center"><div class="stat-label">25th Pct</div><div id="mc-p25" class="stat-value yellow">--</div></div>
+      <div class="card p-4 text-center"><div class="stat-label">Median</div><div id="mc-p50" class="stat-value blue">--</div></div>
+      <div class="card p-4 text-center"><div class="stat-label">75th Pct</div><div id="mc-p75" class="stat-value green">--</div></div>
+      <div class="card p-4 text-center"><div class="stat-label">95th Pct</div><div id="mc-p95" class="stat-value green">--</div></div>
+    </div>
+    <!-- Risk probability cards -->
+    <p class="text-xs text-gray-600 uppercase tracking-wider mb-2 font-semibold">Risk Metrics</p>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      <div class="card p-4"><div class="stat-label">P(Loss)</div><div id="mc-prob-loss" class="stat-value yellow">--</div></div>
+      <div class="card p-4"><div class="stat-label">P(Drawdown &gt; 10%)</div><div id="mc-prob-dd" class="stat-value red">--</div></div>
+      <div class="card p-4"><div class="stat-label">Expected Sharpe</div><div id="mc-sharpe" class="stat-value blue">--</div></div>
+      <div class="card p-4"><div class="stat-label">Expected Max DD</div><div id="mc-maxdd" class="stat-value red">--</div></div>
+    </div>
+    <!-- Sample path chart -->
+    <div class="card p-4" style="height:280px">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Median Path vs Initial Value</h2>
+      <canvas id="chart-mc-path"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ REGIME TAB ═══════════════ -->
+<div id="tab-regime" class="hidden">
+  <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+    <div>
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Market Regime Detection</h2>
+      <p class="text-xs text-gray-500 mt-1">Rolling volatility percentile classification — informs policy soft blocks</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-gray-400">Window:</label>
+      <select id="regime-days" class="text-xs">
+        <option value="90">90d</option>
+        <option value="180" selected>180d</option>
+        <option value="365">365d</option>
+      </select>
+      <button class="btn btn-primary text-xs" onclick="loadRegime()">Refresh</button>
+    </div>
+  </div>
+  <div id="regime-error" class="hidden text-sm p-3 rounded mb-4" style="background:#3d1a1a;border:1px solid #f85149;color:#f85149"></div>
+  <div id="regime-loading" class="hidden text-sm text-gray-500 mb-4">Detecting regime...</div>
+  <div id="regime-content" class="hidden">
+    <!-- Big regime badge -->
+    <div class="flex items-center gap-6 mb-6">
+      <div id="regime-badge" class="text-3xl font-bold px-6 py-4 rounded-lg" style="min-width:160px;text-align:center">--</div>
+      <div id="regime-description" class="text-sm text-gray-400 max-w-xl"></div>
+    </div>
+    <!-- Regime metrics -->
+    <p class="text-xs text-gray-600 uppercase tracking-wider mb-2 font-semibold">Volatility Signals</p>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      <div class="card p-4"><div class="stat-label">Vol 30d (ann.)</div><div id="regime-vol30" class="stat-value yellow">--</div></div>
+      <div class="card p-4"><div class="stat-label">Vol 90d (ann.)</div><div id="regime-vol90" class="stat-value yellow">--</div></div>
+      <div class="card p-4"><div class="stat-label">Vol Ratio (30/90)</div><div id="regime-ratio" class="stat-value">--</div></div>
+      <div class="card p-4"><div class="stat-label">Return 30d</div><div id="regime-ret30" class="stat-value">--</div></div>
+    </div>
+    <!-- Soft block warning -->
+    <div id="regime-block-warning" class="hidden p-4 rounded-lg mb-4" style="background:#3d2d0a;border:1px solid #e3b341;color:#e3b341;font-size:13px;font-weight:500;">
+      &#9888; Soft block recommended — enable <code style="font-family:monospace;font-size:12px">regime_block: true</code> in profile policy to suspend new positions in this regime.
+    </div>
+    <div id="regime-block-ok" class="hidden p-4 rounded-lg mb-4" style="background:#1a4731;border:1px solid #3fb950;color:#3fb950;font-size:13px;font-weight:500;">
+      &#10003; Normal regime — no policy soft block recommended.
+    </div>
   </div>
 </div>
 
@@ -578,18 +881,73 @@ let backtestChart = null;
 let perfChart = null;
 let stressChart = null;
 let allTraces = [];
+const TAB_META = {
+  dashboard: { top: 'dashboard' },
+  control: { top: 'control' },
+  workspace: { top: 'workspace' },
+  riskhub: { top: 'riskhub' },
+  analytics: { top: 'analytics' },
+  audit: { top: 'audit' },
+  portfolio: { top: 'workspace', parent: 'Book', title: 'Portfolio Detail' },
+  book: { top: 'workspace', parent: 'Book', title: 'Book Summary' },
+  ideas: { top: 'workspace', parent: 'Book', title: 'Idea Book' },
+  blotter: { top: 'audit', parent: 'Audit', title: 'Execution Blotter' },
+  risk: { top: 'riskhub', parent: 'Risk', title: 'Risk Dashboard' },
+  regime: { top: 'riskhub', parent: 'Risk', title: 'Market Regime' },
+  stress: { top: 'riskhub', parent: 'Risk', title: 'Stress Test' },
+  perf: { top: 'analytics', parent: 'Analytics', title: 'Performance Detail' },
+  history: { top: 'analytics', parent: 'Analytics', title: 'History Detail' },
+  montecarlo: { top: 'analytics', parent: 'Analytics', title: 'Monte Carlo' },
+  backtest: { top: 'analytics', parent: 'Analytics', title: 'Backtest' },
+  correlation: { top: 'analytics', parent: 'Analytics', title: 'Correlation' },
+  traces: { top: 'audit', parent: 'Audit', title: 'Agent Trace' },
+  runs: { top: 'audit', parent: 'Audit', title: 'Cycle Log' },
+};
 
 // ── tabs ───────────────────────────────────────────────────────────────────
+function setActiveTopTab(name, btn) {
+  const top = (TAB_META[name] || {}).top || name;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  if (btn) {
+    btn.classList.add('active');
+    return;
+  }
+  const topBtn = document.querySelector(`.tab-btn[data-tab="${top}"]`);
+  if (topBtn) topBtn.classList.add('active');
+}
+
+function updateContextBar(name) {
+  const meta = TAB_META[name] || {};
+  const bar = document.getElementById('context-bar');
+  if (!meta.parent) {
+    bar.classList.add('hidden');
+    return;
+  }
+  document.getElementById('context-parent').textContent = meta.parent;
+  document.getElementById('context-title').textContent = meta.title || 'Detail View';
+  document.getElementById('context-back').onclick = () => showTab(meta.top);
+  bar.classList.remove('hidden');
+}
+
 function showTab(name, btn) {
   document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden'));
   document.getElementById('tab-' + name).classList.remove('hidden');
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
+  setActiveTopTab(name, btn);
+  updateContextBar(name);
   if (name === 'dashboard') loadDashboard();
+  if (name === 'control') updateContextBar(name);
+  if (name === 'workspace') loadWorkspaceHub();
   if (name === 'portfolio') loadPortfolio();
+  if (name === 'book') loadBook();
+  if (name === 'ideas') loadIdeas();
+  if (name === 'riskhub') loadRiskHub();
   if (name === 'risk') loadRisk();
   if (name === 'blotter') loadBlotter();
+  if (name === 'analytics') loadAnalyticsHub();
+  if (name === 'montecarlo') loadMonteCarlo();
+  if (name === 'regime') loadRegime();
   if (name === 'history') loadHistory();
+  if (name === 'audit') loadAuditHub();
   if (name === 'traces') loadTraces();
   if (name === 'runs') loadRuns();
   if (name === 'perf') loadPerf();
@@ -1965,6 +2323,310 @@ async function loadStress() {
   } catch (e) {
     loadEl.classList.add('hidden');
     errEl.textContent = 'Stress test endpoint unavailable: ' + String(e);
+    errEl.classList.remove('hidden');
+  }
+}
+
+async function loadBook() {
+  try {
+    const summary = await fetch(`${API}/api/book-summary`).then(r => r.json());
+    const exp = summary.exposures || {};
+    const risk = summary.risk || {};
+    const pnl = summary.pnl_attribution || {};
+
+    document.getElementById('book-gross').textContent = fmtPct(exp.gross_exposure);
+    document.getElementById('book-net').textContent = fmtPct(exp.net_exposure);
+    document.getElementById('book-long').textContent = fmtPct(exp.long_exposure);
+    document.getElementById('book-short').textContent = fmtPct(exp.short_exposure);
+    document.getElementById('book-beta').textContent = fmtPct(exp.beta_adjusted_exposure);
+    document.getElementById('book-top5').textContent = fmtPct(exp.top5_concentration);
+
+    const breaches = (risk.breaches || []).map(x => `<div class="kill-active mb-2">${esc(x)}</div>`).join('');
+    const near = (risk.near_breaches || []).map(x => `<div class="tag">${esc(x)}</div>`).join('');
+    const crowded = (risk.crowded_names || []).map(x => `<span class="tag">${esc(x)}</span>`).join('');
+    const squeeze = (risk.short_squeeze_names || []).map(x => `<span class="tag sell">${esc(x)}</span>`).join('');
+    document.getElementById('book-risk-view').innerHTML = `
+      ${breaches || '<div class="kill-ok">No active limit breaches</div>'}
+      <div class="mt-3 text-xs text-gray-500 uppercase tracking-wide">Near Breaches</div>
+      <div class="mt-2">${near || '<span class="text-gray-500 text-sm">None</span>'}</div>
+      <div class="mt-3 text-xs text-gray-500 uppercase tracking-wide">Crowded Names</div>
+      <div class="mt-2">${crowded || '<span class="text-gray-500 text-sm">None</span>'}</div>
+      <div class="mt-3 text-xs text-gray-500 uppercase tracking-wide">Short Squeeze Flags</div>
+      <div class="mt-2">${squeeze || '<span class="text-gray-500 text-sm">None</span>'}</div>
+    `;
+
+    const renderMap = (title, data) => {
+      const rows = Object.entries(data || {}).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+      return `<div class="mb-4"><div class="text-xs text-gray-500 uppercase tracking-wide mb-2">${esc(title)}</div>${
+        rows.length ? rows.map(([k,v]) => `<div class="flex justify-between py-1 border-b border-gray-800"><span>${esc(k)}</span><span class="${v >= 0 ? 'text-green-400' : 'text-red-400'}">${fmtUSD(v)}</span></div>`).join('') : '<div class="text-sm text-gray-500">No data</div>'
+      }</div>`;
+    };
+    document.getElementById('book-pnl-view').innerHTML = `
+      <div class="grid grid-cols-2 gap-3 mb-4">
+        <div class="card p-3"><div class="stat-label">Realized</div><div class="stat-value ${((pnl.realized_total || 0) >= 0) ? 'green' : 'red'}">${fmtUSD(pnl.realized_total)}</div></div>
+        <div class="card p-3"><div class="stat-label">Unrealized</div><div class="stat-value ${((pnl.unrealized_total || 0) >= 0) ? 'green' : 'red'}">${fmtUSD(pnl.unrealized_total)}</div></div>
+      </div>
+      ${renderMap('By Side', pnl.by_side)}
+      ${renderMap('By Sector', pnl.by_sector)}
+      ${renderMap('By Sleeve', pnl.by_sleeve)}
+    `;
+  } catch (e) {
+    document.getElementById('book-risk-view').innerHTML = `<p class="text-red-400 text-sm">${esc(String(e))}</p>`;
+  }
+}
+
+async function loadIdeas() {
+  try {
+    const ideas = await fetch(`${API}/api/idea-book`).then(r => r.json());
+    if (!Array.isArray(ideas) || ideas.length === 0) {
+      document.getElementById('ideas-table').innerHTML = '<p class="text-gray-500 text-sm">No ideas available.</p>';
+      return;
+    }
+    let html = `<table><thead><tr>
+      <th class="text-left">Idea</th>
+      <th class="text-left">Ticker</th>
+      <th class="text-left">Side</th>
+      <th class="text-left">Status</th>
+      <th class="text-right">Conviction</th>
+      <th class="text-left">Catalyst</th>
+      <th class="text-left">Invalidation</th>
+    </tr></thead><tbody>`;
+    for (const idea of ideas) {
+      const sideCls = (idea.side || 'long') === 'short' ? 'badge-err' : 'badge-ok';
+      html += `<tr>
+        <td class="font-mono text-xs text-blue-300">${esc(idea.idea_id || '')}</td>
+        <td class="font-semibold">${esc(idea.ticker || '')}</td>
+        <td><span class="${sideCls} text-xs px-2 py-0.5 rounded-full font-medium">${esc((idea.side || '').toUpperCase())}</span></td>
+        <td>${badge(idea.status || 'watchlist', 'info')}</td>
+        <td class="text-right">${fmtPct(idea.conviction)}</td>
+        <td>${esc(idea.catalyst || '')}</td>
+        <td class="text-xs text-gray-400">${esc(idea.invalidation_rule || '')}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('ideas-table').innerHTML = html;
+  } catch (e) {
+    document.getElementById('ideas-table').innerHTML = `<p class="text-red-400 text-sm">${esc(String(e))}</p>`;
+  }
+}
+
+async function loadWorkspaceHub() {
+  try {
+    const [pf, summary, ideas, execs] = await Promise.all([
+      fetch(`${API}/api/portfolio`).then(r => r.json()),
+      fetch(`${API}/api/book-summary`).then(r => r.json()),
+      fetch(`${API}/api/idea-book`).then(r => r.json()),
+      fetch(`${API}/api/executions?limit=10`).then(r => r.json()).catch(() => []),
+    ]);
+    document.getElementById('hub-nav').textContent = fmtUSD(pf.total_value);
+    document.getElementById('hub-gross').textContent = fmtPct(summary?.exposures?.gross_exposure);
+    document.getElementById('hub-net').textContent = fmtPct(summary?.exposures?.net_exposure);
+    document.getElementById('hub-ideas-count').textContent = Array.isArray(ideas) ? String(ideas.length) : '--';
+
+    const activity = [];
+    if (Array.isArray(ideas) && ideas.length) {
+      const liveIdeas = ideas.filter(x => ['investable', 'portfolio'].includes((x.status || '').toLowerCase())).length;
+      activity.push(`<div class="mb-2"><span class="text-gray-500">Live ideas:</span> <span class="text-blue-300 font-semibold">${liveIdeas}</span></div>`);
+    }
+    if (Array.isArray(execs) && execs.length) {
+      activity.push(...execs.slice(0, 5).map(e => `<div class="flex justify-between py-2 border-b border-gray-800">
+        <span><span class="${(e.action || '').toLowerCase()==='buy' ? 'text-green-400' : 'text-red-400'} font-semibold">${esc((e.action || '').toUpperCase())}</span> ${esc(e.ticker || '')}</span>
+        <span class="text-gray-400">${fmtUSD(e.notional)}</span>
+      </div>`));
+    }
+    document.getElementById('hub-activity').innerHTML = activity.length ? activity.join('') : '<div class="text-gray-500 text-sm">No recent activity.</div>';
+  } catch (e) {
+    document.getElementById('hub-activity').innerHTML = `<div class="text-red-400 text-sm">${esc(String(e))}</div>`;
+  }
+}
+
+async function loadRiskHub() {
+  try {
+    const [risk, regime, stress] = await Promise.all([
+      fetch(`${API}/api/book-risk`).then(r => r.json()),
+      fetch(`${API}/api/regime?days=180`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API}/api/stress`).then(r => r.json()).catch(() => []),
+    ]);
+    document.getElementById('riskhub-breaches').textContent = String((risk.breaches || []).length);
+    document.getElementById('riskhub-near').textContent = String((risk.near_breaches || []).length);
+    document.getElementById('riskhub-regime').textContent = String((regime.regime || 'unknown')).replace('_', ' ').toUpperCase();
+    const worst = Array.isArray(stress) && stress.length
+      ? stress.reduce((acc, item) => (item.pnl_pct < acc.pnl_pct ? item : acc), stress[0])
+      : null;
+    document.getElementById('riskhub-stress').textContent = worst ? fmtPct(worst.pnl_pct) : '--';
+  } catch (e) {
+    document.getElementById('riskhub-breaches').textContent = 'ERR';
+  }
+}
+
+async function loadAnalyticsHub() {
+  try {
+    const [snaps, backtest, corr, stress] = await Promise.all([
+      fetch(`${API}/api/snapshots?limit=120`).then(r => r.json()).catch(() => []),
+      fetch(`${API}/api/backtest?days=90`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API}/api/correlation?days=90`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API}/api/stress`).then(r => r.json()).catch(() => []),
+    ]);
+    document.getElementById('analytic-snapshots').textContent = Array.isArray(snaps) ? String(snaps.length) : '--';
+    document.getElementById('analytic-backtests').textContent = Object.keys(backtest || {}).length ? String(Object.keys(backtest).length) : '--';
+    document.getElementById('analytic-corr').textContent = corr?.n_obs ? String(corr.n_obs) : '--';
+    document.getElementById('analytic-stress-count').textContent = Array.isArray(stress) ? String(stress.length) : '--';
+  } catch (e) {
+    document.getElementById('analytic-snapshots').textContent = 'ERR';
+  }
+}
+
+async function loadAuditHub() {
+  try {
+    const [traces, runs, execs] = await Promise.all([
+      fetch(`${API}/api/traces?limit=20`).then(r => r.json()).catch(() => []),
+      fetch(`${API}/api/runs?limit=10`).then(r => r.json()).catch(() => []),
+      fetch(`${API}/api/executions?limit=20`).then(r => r.json()).catch(() => []),
+    ]);
+    document.getElementById('audit-runs-count').textContent = Array.isArray(runs) ? String(runs.length) : '--';
+    document.getElementById('audit-traces-count').textContent = Array.isArray(traces) ? String(traces.length) : '--';
+    document.getElementById('audit-execs-count').textContent = Array.isArray(execs) ? String(execs.length) : '--';
+    const lastCycle = Array.isArray(runs) && runs.length ? String(runs[0].cycle_id || '').slice(0, 8) : '--';
+    document.getElementById('audit-last-cycle').textContent = lastCycle || '--';
+  } catch (e) {
+    document.getElementById('audit-runs-count').textContent = 'ERR';
+  }
+}
+
+// ── monte carlo ────────────────────────────────────────────────────────────
+let monteCarloChart = null;
+async function loadMonteCarlo() {
+  const paths = document.getElementById('mc-paths').value;
+  const errEl = document.getElementById('mc-error');
+  const loadEl = document.getElementById('mc-loading');
+  const contentEl = document.getElementById('mc-content');
+  errEl.classList.add('hidden');
+  loadEl.classList.remove('hidden');
+  contentEl.classList.add('hidden');
+
+  try {
+    const resp = await fetch(`${API}/api/monte-carlo?paths=${paths}`);
+    loadEl.classList.add('hidden');
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+      errEl.textContent = detail.detail || 'Failed to run Monte Carlo simulation.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const data = await resp.json();
+
+    const pct = data.percentiles || {};
+    document.getElementById('mc-p5').textContent = fmtUSD(pct.p5);
+    document.getElementById('mc-p25').textContent = fmtUSD(pct.p25);
+    document.getElementById('mc-p50').textContent = fmtUSD(pct.p50);
+    document.getElementById('mc-p75').textContent = fmtUSD(pct.p75);
+    document.getElementById('mc-p95').textContent = fmtUSD(pct.p95);
+    document.getElementById('mc-prob-loss').textContent = fmtPct(data.prob_loss);
+    document.getElementById('mc-prob-dd').textContent = fmtPct(data.prob_drawdown_10pct);
+    document.getElementById('mc-sharpe').textContent = fmt(data.expected_sharpe);
+    document.getElementById('mc-maxdd').textContent = fmtPct(data.expected_max_dd);
+
+    const initial = Number(data.initial_value || 0);
+    const sample = Array.isArray(data.path_sample) ? data.path_sample : [];
+    const ctx = document.getElementById('chart-mc-path').getContext('2d');
+    if (monteCarloChart) { monteCarloChart.destroy(); monteCarloChart = null; }
+    monteCarloChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: sample.map((_, idx) => idx + 1),
+        datasets: [
+          {
+            label: 'Median Path',
+            data: sample,
+            borderColor: '#58a6ff',
+            backgroundColor: 'rgba(88,166,255,0.08)',
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: true,
+            tension: 0.2,
+          },
+          {
+            label: 'Initial Value',
+            data: sample.map(() => initial),
+            borderColor: '#8b949e',
+            borderDash: [6, 6],
+            borderWidth: 1.5,
+            pointRadius: 0,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color:'#8b949e', font:{ size:11 } } } },
+        scales: {
+          x: { ticks: { color:'#8b949e', font:{ size:11 } }, grid: { color:'#21262d' } },
+          y: { ticks: { color:'#8b949e', callback: v => '$' + Number(v).toLocaleString(), font:{ size:11 } }, grid: { color:'#21262d' } }
+        }
+      }
+    });
+
+    contentEl.classList.remove('hidden');
+  } catch (e) {
+    loadEl.classList.add('hidden');
+    errEl.textContent = 'Monte Carlo endpoint unavailable: ' + String(e);
+    errEl.classList.remove('hidden');
+  }
+}
+
+// ── regime detection ───────────────────────────────────────────────────────
+async function loadRegime() {
+  const days = document.getElementById('regime-days').value;
+  const errEl = document.getElementById('regime-error');
+  const loadEl = document.getElementById('regime-loading');
+  const contentEl = document.getElementById('regime-content');
+  const warnEl = document.getElementById('regime-block-warning');
+  const okEl = document.getElementById('regime-block-ok');
+  errEl.classList.add('hidden');
+  loadEl.classList.remove('hidden');
+  contentEl.classList.add('hidden');
+  warnEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+
+  try {
+    const resp = await fetch(`${API}/api/regime?days=${days}`);
+    loadEl.classList.add('hidden');
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({ detail: resp.statusText }));
+      errEl.textContent = detail.detail || 'Failed to detect market regime.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const data = await resp.json();
+    if (data.error && data.regime === 'unknown') {
+      errEl.textContent = data.error;
+      errEl.classList.remove('hidden');
+      return;
+    }
+
+    const badgeEl = document.getElementById('regime-badge');
+    const badgeStyles = {
+      bull: 'background:#1a4731;color:#3fb950;border:1px solid #3fb950',
+      bear: 'background:#3d2d0a;color:#e3b341;border:1px solid #e3b341',
+      risk_off: 'background:#3d1a1a;color:#f85149;border:1px solid #f85149',
+      normal: 'background:#1b2a3d;color:#58a6ff;border:1px solid #58a6ff',
+      unknown: 'background:#21262d;color:#8b949e;border:1px solid #30363d',
+    };
+    badgeEl.textContent = String(data.regime || 'unknown').replace('_', ' ').toUpperCase();
+    badgeEl.style = `min-width:160px;text-align:center;${badgeStyles[data.regime] || badgeStyles.unknown}`;
+    document.getElementById('regime-description').textContent = data.description || 'No description.';
+    document.getElementById('regime-vol30').textContent = fmtPct(data.vol_30d);
+    document.getElementById('regime-vol90').textContent = fmtPct(data.vol_90d);
+    document.getElementById('regime-ratio').textContent = fmt(data.vol_ratio, 2);
+    document.getElementById('regime-ret30').textContent = fmtPct(data.return_30d);
+
+    if (data.soft_block_recommended) warnEl.classList.remove('hidden');
+    else okEl.classList.remove('hidden');
+
+    contentEl.classList.remove('hidden');
+  } catch (e) {
+    loadEl.classList.add('hidden');
+    errEl.textContent = 'Regime endpoint unavailable: ' + String(e);
     errEl.classList.remove('hidden');
   }
 }

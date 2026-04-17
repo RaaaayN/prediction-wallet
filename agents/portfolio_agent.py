@@ -2,10 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging as _logging
+import threading
 import uuid
 from dataclasses import asdict
 from time import perf_counter
+from time import perf_counter as _perf
+
+_log = _logging.getLogger("prediction_wallet")
+
+
+def _slog(stage: str, cycle_id: str, t0: float, **extra) -> None:
+    """Emit a structured JSON log line for a cycle stage."""
+    record = {"stage": stage, "cycle_id": cycle_id, "duration_ms": round((_perf() - t0) * 1000, 2), **extra}
+    _log.info(json.dumps(record))
+
+
+def _save_cycle_event(cycle_id: str, event_type: str, payload: dict) -> None:
+    """Append a cycle event to the immutable event log. Non-critical — never raises."""
+    try:
+        from db.events import save_event
+        save_event(cycle_id, event_type, payload)  # type: ignore[arg-type]
+    except Exception:
+        pass
+
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.google import GoogleModel
@@ -13,11 +35,18 @@ from pydantic_ai.models.test import TestModel
 
 from agents.deps import AgentDependencies
 from agents.models import (
+    BookConstructionDecision,
+    BookRiskSnapshot,
     CycleAudit,
     CycleObservation,
+    ExposureSnapshot,
     ExecutionResult,
+    IdeaBookEntry,
+    IdeaProposal,
     MarketDataStatus,
     MarketSnapshot,
+    PnLAttribution,
+    PositionIntent,
     PortfolioSnapshot,
     RejectedTrade,
     TickerMetrics,
@@ -25,15 +54,18 @@ from agents.models import (
     TradeProposal,
 )
 from agents.policies import ExecutionPolicyEngine, PolicyConfig, build_risk_status
-from config import AGENT_BACKEND, AI_PROVIDER, CLAUDE_MODEL, GEMINI_MODEL, TARGET_ALLOCATION
+from config import AGENT_BACKEND, AI_PROVIDER, CLAUDE_MODEL, GEMINI_MODEL, HEDGE_FUND_PROFILE, SECTOR_MAP, TARGET_ALLOCATION
+from engine.hedge_fund import build_position_intents, classify_book_risk, compute_exposures, compute_pnl_attribution, convert_intents_to_trade_plan
 from engine.portfolio import compute_portfolio_value
 from execution.kill_switch import KillSwitch
 from services.execution_service import ExecutionService
+from services.idea_book_service import IdeaBookService
 from services.market_service import MarketService
 from services.reporting_service import ReportingService
 from strategies.calendar import CalendarStrategy
 from strategies.threshold import ThresholdStrategy
 from utils.time import utc_now_iso, utc_today_str
+from utils.telemetry import otel_enabled, stage_span
 
 
 def build_agent_model(model_name: str | None = None):
@@ -138,6 +170,7 @@ class PortfolioAgentService:
         self.audit_repository = AuditRepositoryAdapter()
         from portfolio_loader import get_active_profile
         self.policy_engine = ExecutionPolicyEngine(PolicyConfig.from_profile(get_active_profile()))
+        self.idea_book_service = IdeaBookService()
         self.agent = agent
 
     def _get_strategy(self, strategy_name: str):
@@ -152,7 +185,14 @@ class PortfolioAgentService:
         cycle_id = cycle_id or str(uuid.uuid4())[:8]
         tickers = list(TARGET_ALLOCATION.keys())
         started = perf_counter()
-        self.market_gateway.fetch_and_store(tickers, period="3mo")
+        fetch_latencies: dict[str, float] = {}
+        if hasattr(self.market_gateway, "fetch_and_store_async") and hasattr(self.market_gateway, "db_path"):
+            try:
+                _, fetch_latencies = self._run_async_fetch(tickers, period="3mo")
+            except Exception:
+                self.market_gateway.fetch_and_store(tickers, period="3mo")
+        else:
+            self.market_gateway.fetch_and_store(tickers, period="3mo")
         fetch_latency_ms = round((perf_counter() - started) * 1000, 2)
 
         prices = self.market_gateway.get_latest_prices(tickers)
@@ -174,11 +214,25 @@ class PortfolioAgentService:
         strategy = self._get_strategy(strategy_name)
         portfolio_for_strategy = self.execution_service.load_portfolio()
         strategy_signal = strategy.should_rebalance(portfolio_for_strategy, prices) and not kill_switch
-        trade_plan = [TradeProposal(**trade) for trade in (strategy.get_trades(
+        regime_summary = self._compute_regime(tickers)
+        monte_carlo_summary = self._compute_monte_carlo(portfolio_for_strategy, prices, tickers)
+        seeded_ideas = self.idea_book_service.seed_from_profile()
+        research = self._research_ideas(seeded_ideas, metrics)
+        exposures = self._compute_exposures(portfolio_for_strategy, prices)
+        construction = self._construct_book(cycle_id, research, metrics, exposures)
+        hedge_fund_plan = [TradeProposal(**trade) for trade in convert_intents_to_trade_plan(
+            [intent.model_dump() for intent in construction.intents],
+            positions=portfolio_for_strategy.get("positions", {}),
+            prices=prices,
+            cash=portfolio_for_strategy.get("cash", 0.0),
+        )]
+        rebalance_plan = [TradeProposal(**trade) for trade in (strategy.get_trades(
             portfolio_for_strategy, prices,
             volatilities=vols if vols else None,
             vol_blend=vol_blend,
         ) if strategy_signal else [])]
+        trade_plan = hedge_fund_plan or rebalance_plan
+        book_risk = self._classify_book_risk(exposures, portfolio_for_strategy)
         market = MarketSnapshot(
             prices=prices,
             metrics=metrics,
@@ -191,14 +245,31 @@ class PortfolioAgentService:
             portfolio=portfolio,
             market=market,
             risk=risk,
+            ideas=seeded_ideas,
+            research=research,
+            construction=construction,
+            exposures=ExposureSnapshot(**exposures),
+            book_risk=BookRiskSnapshot(**book_risk),
             trade_plan=trade_plan,
             observability={
                 "provider": AI_PROVIDER,
                 "agent_backend": AGENT_BACKEND,
                 "fetch_latency_ms": fetch_latency_ms,
+                "fetch_latency_by_ticker_ms": fetch_latencies,
+                "async_fetch_enabled": bool(fetch_latencies),
+                "otel_enabled": otel_enabled(),
                 "strategy_signal": strategy_signal,
                 "vol_blend": vol_blend,
                 "vol_assets_used": len(vols),
+                "regime": regime_summary,
+                "monte_carlo": monte_carlo_summary,
+                "hedge_fund_pipeline": {
+                    "research_count": len(research),
+                    "intent_count": len(construction.intents),
+                    "trade_plan_source": "hedge_fund" if hedge_fund_plan else "rebalance",
+                    "gross_exposure": exposures.get("gross_exposure", 0.0),
+                    "net_exposure": exposures.get("net_exposure", 0.0),
+                },
             },
         )
         self.audit_repository.save_decision_trace({
@@ -268,7 +339,9 @@ class PortfolioAgentService:
         return decision, {"tool_calls": len(tool_names), "tool_names": tool_names, "message_count": len(result.all_messages())}
 
     def execute(self, observation: CycleObservation, decision: TradeDecision, execution_mode: str = "simulate"):
-        policy = self.policy_engine.evaluate(decision, observation, execution_mode)
+        regime_name = (observation.observability.get("regime") or {}).get("regime")
+        with stage_span("cycle.validate", cycle_id=observation.cycle_id, execution_mode=execution_mode):
+            policy = self.policy_engine.evaluate(decision, observation, execution_mode, regime=regime_name)
         executions: list[ExecutionResult] = []
         hard_violation_codes = [v.code for v in policy.violations]
         validate_event_type = "kill_switch" if "kill_switch_active" in hard_violation_codes else (
@@ -294,26 +367,30 @@ class PortfolioAgentService:
         self.audit_repository.save_decision_trace(trace)
 
         if execution_mode == "simulate":
-            for idx, trade in enumerate(policy.allowed_trades):
-                market_price = observation.market.prices.get(trade.ticker, 0.0)
-                result = self.execution_service.execute_order(
-                    trade.model_dump(),
-                    market_price=market_price,
-                    cycle_id=observation.cycle_id,
-                    trades_this_cycle=idx,
-                )
-                w_before = observation.portfolio.current_weights.get(trade.ticker, 0.0)
-                t_weight = observation.portfolio.target_weights.get(trade.ticker, 0.0)
-                executions.append(ExecutionResult(
-                    **asdict(result),
-                    weight_before=round(w_before, 6),
-                    target_weight=round(t_weight, 6),
-                    drift_before=round(w_before - t_weight, 6),
-                    slippage_pct=round(
-                        (result.fill_price - result.market_price) / result.market_price, 6
-                    ) if result.market_price > 0 else 0.0,
-                    notional=round(abs(result.quantity * result.fill_price), 4),
-                ))
+            with stage_span("cycle.execute", cycle_id=observation.cycle_id, execution_mode=execution_mode):
+                for idx, trade in enumerate(policy.allowed_trades):
+                    market_price = observation.market.prices.get(trade.ticker, 0.0)
+                    result = self.execution_service.execute_order(
+                        trade.model_dump(),
+                        market_price=market_price,
+                        cycle_id=observation.cycle_id,
+                        trades_this_cycle=idx,
+                    )
+                    w_before = observation.portfolio.current_weights.get(trade.ticker, 0.0)
+                    t_weight = observation.portfolio.target_weights.get(trade.ticker, 0.0)
+                    executions.append(ExecutionResult(
+                        **asdict(result),
+                        weight_before=round(w_before, 6),
+                        target_weight=round(t_weight, 6),
+                        drift_before=round(w_before - t_weight, 6),
+                        slippage_pct=round(
+                            (result.fill_price - result.market_price) / result.market_price, 6
+                        ) if result.market_price > 0 else 0.0,
+                        notional=round(abs(result.quantity * result.fill_price), 4),
+                    ))
+                    from db.repository import save_execution
+
+                    save_execution(executions[-1].model_dump(), cycle_id=observation.cycle_id)
 
         failed_count = sum(1 for e in executions if not e.success)
         execute_event_type = "execution_failure" if failed_count > 0 else "cycle_step"
@@ -339,6 +416,18 @@ class PortfolioAgentService:
     def audit(self, observation: CycleObservation, decision: TradeDecision, policy, executions: list[ExecutionResult], execution_mode: str = "simulate") -> CycleAudit:
         report_path = self.reporting_service.generate_cycle_report(observation.cycle_id)
         self.execution_service.update_peak(self.execution_service.get_portfolio_value(observation.market.prices))
+        latest_portfolio = self.execution_service.load_portfolio()
+        exposures = self._compute_exposures(latest_portfolio, observation.market.prices)
+        book_risk = self._classify_book_risk(exposures, latest_portfolio)
+        pnl_attr = compute_pnl_attribution(
+            positions=latest_portfolio.get("positions", {}),
+            prices=observation.market.prices,
+            average_costs=latest_portfolio.get("average_costs", {}),
+            position_sides=latest_portfolio.get("position_sides", {}),
+            executions=[execution.model_dump() for execution in executions],
+            idea_lookup={idea.idea_id: idea.model_dump() for idea in observation.ideas},
+            sector_map=SECTOR_MAP,
+        )
         audit = CycleAudit(
             cycle_id=observation.cycle_id,
             timestamp=utc_now_iso(),
@@ -353,9 +442,25 @@ class PortfolioAgentService:
             policy=policy,
             executions=executions,
             report_path=report_path,
+            ideas=observation.ideas,
+            book_construction=observation.construction,
+            exposures=ExposureSnapshot(**exposures),
+            book_risk=BookRiskSnapshot(**book_risk),
+            pnl_attribution=PnLAttribution(**pnl_attr),
             observability=observation.observability,
             errors=[v.message for v in policy.violations]
                    + [e.error for e in executions if not e.success and e.error],
+        )
+        from db.repository import save_snapshot
+
+        save_snapshot(
+            {
+                "positions": audit.portfolio.positions,
+                "cash": audit.portfolio.cash,
+                "peak_value": audit.portfolio.peak_value,
+            },
+            observation.market.prices,
+            observation.cycle_id,
         )
         self.audit_repository.save_cycle_audit(self._audit_to_legacy_dict(audit))
         audit_event_type = "policy_violation" if audit.errors else "cycle_step"
@@ -381,11 +486,87 @@ class PortfolioAgentService:
         return audit
 
     def run_cycle(self, strategy_name: str = "threshold", execution_mode: str = "simulate", model_override=None) -> CycleAudit:
-        observation = self.observe(strategy_name=strategy_name, execution_mode=execution_mode)
-        decision, stats = self.decide(observation, execution_mode=execution_mode, model_override=model_override)
-        observation.observability.update(stats)
-        policy, executions = self.execute(observation, decision, execution_mode=execution_mode)
-        return self.audit(observation, decision, policy, executions, execution_mode=execution_mode)
+        cycle_t0 = _perf()
+        cycle_id = str(uuid.uuid4())[:8]
+        _save_cycle_event(cycle_id, "cycle_started", {
+            "strategy": strategy_name,
+            "mode": execution_mode,
+        })
+        try:
+            # --- observe ---
+            t_obs = _perf()
+            with stage_span("cycle.observe", cycle_id=cycle_id, execution_mode=execution_mode):
+                observation = self.observe(strategy_name=strategy_name, execution_mode=execution_mode, cycle_id=cycle_id)
+            _slog(
+                "observe", observation.cycle_id, t_obs,
+                tickers=list(observation.market.prices.keys()),
+                portfolio_value=observation.portfolio.total_value,
+            )
+            _save_cycle_event(observation.cycle_id, "observation_captured", {
+                "portfolio_value": observation.portfolio.total_value,
+                "tickers": list(observation.market.prices.keys()),
+                "kill_switch": observation.risk.kill_switch_active,
+                "regime": (observation.observability.get("regime") or {}).get("regime"),
+                "fetch_latency_ms": observation.observability.get("fetch_latency_ms"),
+            })
+
+            # --- decide ---
+            t_dec = _perf()
+            with stage_span("cycle.decide", cycle_id=observation.cycle_id, execution_mode=execution_mode):
+                decision, stats = self.decide(observation, execution_mode=execution_mode, model_override=model_override)
+            observation.observability.update(stats)
+            _slog(
+                "decide", observation.cycle_id, t_dec,
+                confidence=float(decision.confidence),
+                trades=len(decision.approved_trades),
+            )
+            _save_cycle_event(observation.cycle_id, "decision_made", {
+                "confidence": float(decision.confidence),
+                "trades_count": len(decision.approved_trades),
+                "rebalance_needed": decision.rebalance_needed,
+            })
+
+            # --- validate + execute ---
+            t_val = _perf()
+            policy, executions = self.execute(observation, decision, execution_mode=execution_mode)
+            _slog(
+                "validate", observation.cycle_id, t_val,
+                approved=policy.approved,
+                allowed=len(policy.allowed_trades),
+                blocked=len(policy.blocked_trades),
+            )
+            _save_cycle_event(observation.cycle_id, "policy_evaluated", {
+                "approved": policy.approved,
+                "allowed": len(policy.allowed_trades),
+                "blocked": len(policy.blocked_trades),
+                "violations": len(policy.violations),
+            })
+            total_notional = sum(
+                abs(e.quantity * e.fill_price) for e in executions if e.success
+            )
+            _slog(
+                "execute", observation.cycle_id, t_val,
+                executed=len(executions),
+            )
+            _save_cycle_event(observation.cycle_id, "trade_executed", {
+                "executed_count": len(executions),
+                "total_notional": round(total_notional, 4),
+            })
+
+            # --- audit ---
+            t_aud = _perf()
+            with stage_span("cycle.audit", cycle_id=observation.cycle_id, execution_mode=execution_mode):
+                audit_result = self.audit(observation, decision, policy, executions, execution_mode=execution_mode)
+            total_ms = round((_perf() - cycle_t0) * 1000, 2)
+            _slog("audit", observation.cycle_id, t_aud, total_ms=total_ms)
+            _save_cycle_event(observation.cycle_id, "audit_complete", {
+                "total_ms": total_ms,
+                "cycle_id": observation.cycle_id,
+            })
+            return audit_result
+        except Exception as exc:
+            _save_cycle_event(cycle_id, "cycle_failed", {"error": str(exc)})
+            raise
 
     def run_cycle_dict(self, strategy_name: str = "threshold", execution_mode: str = "simulate", model_override=None) -> dict:
         audit = self.run_cycle(strategy_name=strategy_name, execution_mode=execution_mode, model_override=model_override)
@@ -406,6 +587,56 @@ class PortfolioAgentService:
             "decision": audit.decision.model_dump(),
             "policy": audit.policy.model_dump(),
         }
+
+    def _compute_regime(self, tickers: list[str]) -> dict:
+        try:
+            from engine.regime import get_current_regime
+
+            return get_current_regime(tickers, days=180)
+        except Exception as exc:
+            return {"regime": "unknown", "error": str(exc), "soft_block_recommended": False}
+
+    def _compute_monte_carlo(self, portfolio: dict, prices: dict[str, float], tickers: list[str]) -> dict:
+        try:
+            from engine.monte_carlo import run_monte_carlo
+
+            historical_returns: dict[str, list[float]] = {}
+            for ticker in tickers:
+                hist = self.market_gateway.get_historical(ticker, days=252)
+                if hist is not None and not getattr(hist, "empty", True) and "Close" in hist.columns:
+                    returns = hist["Close"].pct_change().dropna().tolist()
+                    if len(returns) >= 30:
+                        historical_returns[ticker] = returns
+            if not historical_returns:
+                return {"available": False, "reason": "insufficient_history"}
+            result = run_monte_carlo(portfolio, prices, historical_returns, n_paths=10000)
+            result["available"] = True
+            return result
+        except Exception as exc:
+            return {"available": False, "reason": str(exc)}
+
+    def _run_async_fetch(self, tickers: list[str], period: str) -> tuple[dict, dict[str, float]]:
+        async_fetch = self.market_gateway.fetch_and_store_async
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(async_fetch(tickers, period=period))
+
+        result: dict[str, object] = {}
+        error: list[BaseException] = []
+
+        def _runner() -> None:
+            try:
+                result["value"] = asyncio.run(async_fetch(tickers, period=period))
+            except BaseException as exc:  # pragma: no cover - defensive bridge
+                error.append(exc)
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join()
+        if error:
+            raise error[0]
+        return result.get("value", ({}, {}))  # type: ignore[return-value]
 
     @staticmethod
     def _compute_data_freshness(refresh_status) -> str:
@@ -466,3 +697,57 @@ class PortfolioAgentService:
             "errors": audit.errors,
             "observability": audit.observability,
         }
+
+    def _research_ideas(self, ideas: list[IdeaBookEntry], metrics: dict[str, TickerMetrics]) -> list[IdeaProposal]:
+        metric_payload = {ticker: metric.model_dump() for ticker, metric in metrics.items()}
+        return self.idea_book_service.research(metric_payload)
+
+    def _construct_book(self, cycle_id: str, ideas: list[IdeaProposal], metrics: dict[str, TickerMetrics], exposures: dict) -> BookConstructionDecision:
+        conviction_to_size = HEDGE_FUND_PROFILE.get("conviction_to_size") or {}
+        metric_payload = {ticker: metric.model_dump() for ticker, metric in metrics.items()}
+        intents = build_position_intents(
+            [idea.model_dump() for idea in ideas if idea.status in {"investable", "portfolio"}],
+            conviction_to_size=conviction_to_size,
+            price_metrics=metric_payload,
+            sector_gross=exposures.get("sector_gross", {}),
+            sector_map=SECTOR_MAP,
+        )
+        return BookConstructionDecision(
+            cycle_id=cycle_id,
+            summary=f"Constructed {len(intents)} long/short intents from idea book.",
+            gross_exposure=exposures.get("gross_exposure", 0.0),
+            net_exposure=exposures.get("net_exposure", 0.0),
+            intents=[PositionIntent(**intent) for intent in intents],
+            notes=["Research and construction are deterministic from profile-seeded ideas plus market metrics."],
+        )
+
+    def _compute_exposures(self, portfolio: dict, prices: dict[str, float]) -> dict:
+        universe = HEDGE_FUND_PROFILE.get("universe") or {}
+        beta_map = {ticker: (meta or {}).get("beta", 1.0) for ticker, meta in universe.items()}
+        return compute_exposures(
+            portfolio.get("positions", {}),
+            prices,
+            portfolio.get("cash", 0.0),
+            position_sides=portfolio.get("position_sides", {}),
+            sector_map=SECTOR_MAP,
+            beta_map=beta_map,
+        )
+
+    def _classify_book_risk(self, exposures: dict, portfolio: dict) -> dict:
+        policy = self.policy_engine._config
+        universe = HEDGE_FUND_PROFILE.get("universe") or {}
+        crowded = {ticker: float((meta or {}).get("crowded_score", 0.0)) for ticker, meta in universe.items()}
+        squeeze = {ticker for ticker, meta in universe.items() if (meta or {}).get("short_squeeze_risk")}
+        return classify_book_risk(
+            exposures,
+            gross_limit=policy.gross_exposure_limit,
+            net_min=policy.net_exposure_min,
+            net_max=policy.net_exposure_max,
+            max_sector_gross=policy.max_sector_gross,
+            max_sector_net=policy.max_sector_net,
+            max_single_name_long=policy.max_single_name_long,
+            max_single_name_short=policy.max_single_name_short,
+            crowded_scores=crowded,
+            short_squeeze_names=squeeze,
+            position_sides=portfolio.get("position_sides", {}),
+        )

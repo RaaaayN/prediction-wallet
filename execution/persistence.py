@@ -32,6 +32,8 @@ class PortfolioStore:
     def default_portfolio() -> dict:
         return {
             "positions": {},
+            "position_sides": {},
+            "average_costs": {},
             "cash": INITIAL_CAPITAL,
             "peak_value": INITIAL_CAPITAL,
             "last_rebalanced": None,

@@ -7,8 +7,9 @@ import sqlite3
 
 import pandas as pd
 
-from config import MARKET_DB, TARGET_ALLOCATION
+from config import HEDGE_FUND_PROFILE, MARKET_DB, SECTOR_MAP, TARGET_ALLOCATION
 from db.schema import init_db
+from engine.hedge_fund import compute_exposures
 from engine.portfolio import compute_drift, compute_portfolio_value, compute_weights
 from engine.risk import compute_drawdown
 from utils.time import utc_now_iso
@@ -27,12 +28,21 @@ def _connect(db_path: str = MARKET_DB) -> sqlite3.Connection:
 
 def save_snapshot(portfolio: dict, prices: dict, cycle_id: str, db_path: str = MARKET_DB) -> int:
     positions = portfolio.get("positions", {})
+    position_sides = portfolio.get("position_sides", {})
     cash = portfolio.get("cash", 0.0)
     peak = portfolio.get("peak_value", cash)
     total = compute_portfolio_value(positions, cash, prices)
     drawdown = compute_drawdown(total, peak)
     weights = compute_weights(positions, prices, cash)
     drifts = compute_drift(weights, TARGET_ALLOCATION)
+    exposure = compute_exposures(
+        positions,
+        prices,
+        cash,
+        position_sides=position_sides,
+        sector_map=SECTOR_MAP,
+        beta_map={ticker: (HEDGE_FUND_PROFILE.get("universe", {}).get(ticker, {}) or {}).get("beta", 1.0) for ticker in positions},
+    )
     ts = utc_now_iso()
 
     with _connect(db_path) as conn:
@@ -46,10 +56,11 @@ def save_snapshot(portfolio: dict, prices: dict, cycle_id: str, db_path: str = M
         snapshot_id = cur.lastrowid
         for ticker, qty in positions.items():
             price = prices.get(ticker, 0.0)
+            side = position_sides.get(ticker, "short" if qty < 0 else "long")
             conn.execute(
                 """
-                INSERT INTO positions (snapshot_id, ticker, quantity, price, value, weight, target_weight, drift)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO positions (snapshot_id, ticker, quantity, price, value, weight, target_weight, drift, side, idea_id, gross_exposure, net_exposure)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     snapshot_id,
@@ -60,6 +71,10 @@ def save_snapshot(portfolio: dict, prices: dict, cycle_id: str, db_path: str = M
                     weights.get(ticker, 0.0),
                     TARGET_ALLOCATION.get(ticker, 0.0),
                     drifts.get(ticker, 0.0),
+                    side,
+                    (portfolio.get("position_ideas") or {}).get(ticker),
+                    exposure.get("single_name_concentration", {}).get(ticker, 0.0),
+                    (qty * price) / total if total else 0.0,
                 ),
             )
         conn.commit()
@@ -74,8 +89,9 @@ def save_execution(trade_result, cycle_id: str, db_path: str = MARKET_DB) -> int
             """
             INSERT INTO executions
                 (cycle_id, trade_id, timestamp, ticker, action, quantity, market_price, fill_price, cost, slippage,
-                 reason, success, error, weight_before, target_weight, drift_before, slippage_pct, notional)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reason, success, error, weight_before, target_weight, drift_before, slippage_pct, notional,
+                 side, idea_id, sleeve, exposure_before, exposure_after, gross_impact, net_impact)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cycle_id,
@@ -96,6 +112,13 @@ def save_execution(trade_result, cycle_id: str, db_path: str = MARKET_DB) -> int
                 trade.get("drift_before", 0.0),
                 trade.get("slippage_pct", 0.0),
                 trade.get("notional", 0.0),
+                trade.get("side", "long"),
+                trade.get("idea_id"),
+                trade.get("sleeve", "core_longs"),
+                trade.get("exposure_before", 0.0),
+                trade.get("exposure_after", 0.0),
+                trade.get("gross_impact", 0.0),
+                trade.get("net_impact", 0.0),
             ),
         )
         conn.commit()
@@ -261,6 +284,73 @@ def get_latest_positions(db_path: str = MARKET_DB) -> list[dict]:
                 ORDER BY p.ticker ASC
                 """,
             ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def upsert_idea_book(entries: list[dict], db_path: str = MARKET_DB) -> None:
+    ts = utc_now_iso()
+    with _connect(db_path) as conn:
+        for entry in entries:
+            conn.execute(
+                """
+                INSERT INTO idea_book
+                    (idea_id, ticker, side, thesis, catalyst, time_horizon, conviction, upside_case, downside_case,
+                     invalidation_rule, status, sleeve, source, crowded_score, short_squeeze_risk, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(idea_id) DO UPDATE SET
+                    ticker=excluded.ticker,
+                    side=excluded.side,
+                    thesis=excluded.thesis,
+                    catalyst=excluded.catalyst,
+                    time_horizon=excluded.time_horizon,
+                    conviction=excluded.conviction,
+                    upside_case=excluded.upside_case,
+                    downside_case=excluded.downside_case,
+                    invalidation_rule=excluded.invalidation_rule,
+                    status=excluded.status,
+                    sleeve=excluded.sleeve,
+                    source=excluded.source,
+                    crowded_score=excluded.crowded_score,
+                    short_squeeze_risk=excluded.short_squeeze_risk,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    entry.get("idea_id"),
+                    entry.get("ticker"),
+                    entry.get("side", "long"),
+                    entry.get("thesis", ""),
+                    entry.get("catalyst", ""),
+                    entry.get("time_horizon", ""),
+                    float(entry.get("conviction", 0.5)),
+                    entry.get("upside_case", ""),
+                    entry.get("downside_case", ""),
+                    entry.get("invalidation_rule", ""),
+                    entry.get("status", "watchlist"),
+                    entry.get("sleeve", "core_longs"),
+                    entry.get("source", "profile_seed"),
+                    float(entry.get("crowded_score", 0.0)),
+                    int(bool(entry.get("short_squeeze_risk", False))),
+                    ts,
+                    ts,
+                ),
+            )
+        conn.commit()
+
+
+def get_idea_book(status: str | None = None, db_path: str = MARKET_DB) -> list[dict]:
+    try:
+        with _connect(db_path) as conn:
+            if status:
+                rows = conn.execute(
+                    "SELECT * FROM idea_book WHERE status = ? ORDER BY conviction DESC, ticker ASC",
+                    (status,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM idea_book ORDER BY conviction DESC, ticker ASC"
+                ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []

@@ -47,6 +47,7 @@ DRIFT_THRESHOLD: float = _profile["drift_threshold"]
 KILL_SWITCH_DRAWDOWN: float = _profile["kill_switch_drawdown"]
 SLIPPAGE_EQUITIES: float = _profile["slippage_equities"]
 SLIPPAGE_CRYPTO: float = _profile["slippage_crypto"]
+HEDGE_FUND_PROFILE: dict = _profile.get("hedge_fund") or {}
 
 # ---------------------------------------------------------------------------
 # Derived constants
@@ -64,6 +65,7 @@ MAX_SECTOR_CONCENTRATION: float = 0.55  # soft block: 5pp above the 50% tech tar
 
 CALENDAR_FREQUENCY: str = "weekly"  # "weekly" or "monthly" for CalendarStrategy
 
-assert abs(sum(TARGET_ALLOCATION.values()) - 1.0) < 1e-6, (
-    f"Profile '{_profile['name']}' TARGET_ALLOCATION must sum to 1.0"
+_target_sum = sum(TARGET_ALLOCATION.values())
+assert _target_sum == 0.0 or abs(_target_sum - 1.0) < 1e-6, (
+    f"Profile '{_profile['name']}' TARGET_ALLOCATION must sum to 1.0 or be a zeroed hedge-fund seed book"
 )

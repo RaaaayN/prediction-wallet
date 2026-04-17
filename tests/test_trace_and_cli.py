@@ -9,6 +9,7 @@ import tempfile
 
 from db.repository import get_decision_traces, save_decision_trace
 from db.schema import init_db
+from db.events import get_events, replay_cycle, save_event
 
 
 def test_save_and_get_decision_trace():
@@ -107,3 +108,31 @@ def test_cli_observe_runs_without_model_key():
     )
     assert result.returncode == 0
     assert "\"cycle_id\"" in result.stdout
+
+
+def test_cycle_events_can_replay_from_fresh_db():
+    tmpdir = tempfile.mkdtemp()
+    db_path = f"{tmpdir}/market.db"
+    save_event("cycle-1", "cycle_started", {"strategy": "threshold", "mode": "simulate"}, db_path=db_path)
+    save_event("cycle-1", "observation_captured", {"portfolio_value": 1000, "tickers": ["AAPL"]}, db_path=db_path)
+    save_event("cycle-1", "decision_made", {"confidence": 0.8, "trades_count": 1}, db_path=db_path)
+    save_event("cycle-1", "audit_complete", {"total_ms": 42.0}, db_path=db_path)
+
+    events = get_events("cycle-1", db_path=db_path)
+    replay = replay_cycle("cycle-1", db_path=db_path)
+
+    assert len(events) == 4
+    assert replay["replayed"] is True
+    assert replay["confidence"] == 0.8
+    assert replay["total_duration_ms"] == 42.0
+
+
+def test_replay_cycle_captures_failure_event():
+    tmpdir = tempfile.mkdtemp()
+    db_path = f"{tmpdir}/market.db"
+    save_event("cycle-fail", "cycle_started", {"strategy": "threshold", "mode": "simulate"}, db_path=db_path)
+    save_event("cycle-fail", "cycle_failed", {"error": "boom"}, db_path=db_path)
+
+    replay = replay_cycle("cycle-fail", db_path=db_path)
+
+    assert "cycle_failed" in replay["stages_completed"]

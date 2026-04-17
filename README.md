@@ -25,6 +25,11 @@ No trade executes without passing three deterministic policy layers. Every decis
 
 - **9 assets** across equities, bonds, and crypto — 4 configurable portfolio profiles
 - **3-layer policy engine** blocks trades via hard rules (kill switch), market context (confidence, stale data), and per-trade constraints (sector concentration, notional caps)
+- **Event sourcing + replay**: immutable `cycle_events` log reconstructs each governed cycle
+- **Monte Carlo analytics**: forward distribution with Sharpe / max-drawdown confidence intervals
+- **Regime-aware policy**: rolling volatility percentile classifies `bull / normal / bear / risk_off`
+- **Async market pipeline**: parallel fetch path records per-ticker latency
+- **OpenTelemetry-ready tracing**: cycle stage spans are emitted when OTel is available
 - **7 risk metrics**: parametric VaR, historical VaR, CVaR, Sharpe, Sortino, Calmar, max drawdown
 - **4 crisis stress scenarios**: COVID-19, 2008 GFC, rate shock, tech selloff
 - **Full audit trail**: every cycle stage traced in SQLite (`decision_traces` table)
@@ -48,14 +53,17 @@ engine/
   risk.py              — compute_drawdown, check_kill_switch, RiskLevel (OK/WARN/HALT)
   performance.py       — VaR (parametric + historical), CVaR, Sortino, Calmar, Sharpe
   backtest.py          — run_strategy_comparison (threshold / calendar / buy-and-hold)
+  monte_carlo.py       — forward simulation + confidence intervals
+  regime.py            — rolling volatility percentile regime detection
 
 services/
   execution_service.py — ExecutionService (portfolio + orders)
-  market_service.py    — MarketService (yfinance → SQLite)
+  market_service.py    — MarketService (yfinance → SQLite, async fetch latency)
   reporting_service.py — ReportingService (PDF generation)
 
 db/
-  schema.py            — DDL: portfolio_snapshots, executions, agent_runs, decision_traces
+  schema.py            — DDL: portfolio_snapshots, executions, agent_runs, decision_traces, cycle_events
+  events.py            — immutable event log + replay
   repository.py        — SQLite read/write functions
 
 strategies/
@@ -135,6 +143,8 @@ Open `http://localhost:8000`. Available tabs:
 | Tab | Description |
 |-----|-------------|
 | Portfolio | Holdings, allocations, drift visualization |
+| Monte Carlo | Forward outcome distribution and confidence intervals |
+| Regime | Volatility-percentile market classification |
 | History | Portfolio value over time |
 | Agent Trace | Per-cycle decision log with policy outcomes |
 | Performance | Sharpe, Sortino, Calmar, VaR, CVaR |
@@ -165,6 +175,7 @@ Portfolio profiles (`profiles/*.yaml`) define target allocations, drift threshol
 - **Market context soft blocks** (low confidence, stale data): all trades in cycle blocked, cycle marked valid
 - **Per-trade soft blocks** (unknown ticker, missing price, notional cap, sector concentration): individual trade blocked, others proceed
 - Every stage — observe / decide / validate / execute / audit — is written to `decision_traces`
+- Every cycle is appended to immutable `cycle_events` and can be replayed from `/api/events/replay/{cycle_id}`
 - Kill switch (drawdown ≥ 10%) is deterministic and blocks all execution regardless of LLM output
 
 ---

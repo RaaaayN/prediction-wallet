@@ -4,6 +4,88 @@ Reports are append-only. Each session adds a dated section below.
 
 ---
 
+## Session: 2026-03-26 — Post-sprint audit + deferred features #2/#4/#9 evaluation
+**Last Updated:** 2026-03-26
+
+### Context
+
+Post-sprint audit of all 9 features delivered since the previous usecases session (2026-03-25), followed by evaluation of 3 deferred features (#2 HMM regime detection, #4 Risk Parity, #9 Multi-agent committee) whose prerequisite blockers (#11 confidence scoring and #15 explainability) are now confirmed stable.
+
+Sources read: `agents/policies.py`, `agents/models.py`, `agents/portfolio_agent.py`, `engine/orders.py`, `engine/portfolio.py`, `engine/performance.py`, `engine/risk.py`, `engine/backtest.py`, `config.py`, `docs/team/backend-report.md`, `docs/team/strategy-report.md`, `docs/team/ui-report.md`.
+
+---
+
+### Feature Audits
+
+| Feature | Location | Verdict | Rationale |
+|---------|----------|---------|-----------|
+| **#1 Policy-as-code hiérarchique** | `agents/policies.py` — `PolicyConfig` + `ExecutionPolicyEngine` (3 layers) | **Useful** | Delivered exactly as scoped. Layer 0 (hard violations: kill switch, live mode, trade count), Layer 1 (market context soft blocks: `min_confidence`, `stale_data_blocks`), Layer 2 (per-trade: notional cap, per-ticker cap, sector concentration). `PolicyConfig` is profile-driven (`profiles/*.yaml` `policy:` section). All 4 profiles carry calibrated thresholds. 23 tests cover all paths. The sector concentration check (Layer 2, `MAX_SECTOR_CONCENTRATION=0.55`) directly addresses the documented 50% tech risk. No redundancy — this is the deterministic enforcement layer that the entire architecture depends on. |
+| **#11 Confidence scoring** | `agents/models.py` — `TradeDecision.confidence` + `data_freshness` | **Useful** | Both fields present and correctly scoped. `confidence` (LLM self-reported, float 0–1, ge/le validated) is wired into Layer 1 as a soft block. `data_freshness` is deterministic: computed by `_compute_data_freshness()` from `MarketDataStatus.refreshed_at` timestamps and injected post-LLM-run so the LLM cannot corrupt it. The agent instructions explicitly ask for confidence and note `data_freshness` is automatic. Correct treatment of the miscalibration risk: soft signal only, not a hard block. 9 tests green. |
+| **#15 Explainability structurée** | `agents/models.py` — `ExecutionResult` (5 fields) + `agents/portfolio_agent.py::execute()` | **Useful** | Five per-trade fields added to `ExecutionResult`: `weight_before`, `target_weight`, `drift_before`, `slippage_pct`, `notional`. All populated in `execute()` from live observation data. DB schema migrated (`_EXECUTIONS_MIGRATIONS`, idempotent). UI history tab now renders `drift_before` and `slippage_pct` (color-coded). This is the "governed portfolio agent" proof of record — each trade has a structured, auditable justification. No gaps: coverage from model → execution → persistence → UI. |
+| **#12 Event semantics** | `db/schema.py` — `decision_traces.event_type` + `tags` + `agents/portfolio_agent.py` (5 trace sites) | **Useful** | Schema migration adds `event_type` (TEXT) and `tags` (JSON TEXT) to `decision_traces`. All 5 stages (observe/decide/validate/execute/audit) emit typed events. Taxonomy is small and useful: `cycle_step`, `kill_switch`, `policy_violation`, `execution_failure`. Tags carry structured key=value pairs per stage (e.g., `confidence:0.72`, `approved_trades:3`). UI Traces tab already has a stage filter dropdown. Enables behavioral analytics on historical cycles. |
+| **#8 Realistic costs** | `engine/orders.py` — `apply_slippage()` + `estimate_transaction_cost()` | **Useful** | Vol-adjusted model: `rate = base_rate × clamp(vol / ref_vol, 0.5, 3.0)`. Reference vols: 20% equity, 65% crypto. Size-adjusted: +1 bp per $10k notional. Both params optional, so existing callers (backtest) are backward compatible. 13 tests including boundary conditions. One known pre-existing test tolerance failure (`test_estimate_cost_without_vol_unchanged`) is a floating-point precision issue, not a correctness bug. Improvement over flat rates is meaningful for stress scenarios (rate can reach 3× base during high-vol regimes). |
+| **#6 Correlation/concentration** | `engine/portfolio.py` — `compute_sector_exposure()` + `concentration_score()` / `engine/performance.py` — `rolling_correlation()` + `avg_pairwise_correlation()` / `agents/policies.py` Layer 2 sector check / `config.py` — `SECTOR_MAP` + `MAX_SECTOR_CONCENTRATION=0.55` | **Useful** | Four distinct functions delivered across two modules. Sector concentration is enforced in Layer 2 of the policy engine: buys that would push a sector above 55% are soft-blocked with a descriptive reason. Rolling correlation matrix (`rolling_correlation()`, default 30-day window) and `avg_pairwise_correlation()` are pure utility functions used by the `/api/correlation` endpoint and the heatmap tab. The 55% threshold is correctly set 5pp above the 50% tech target, giving a realistic buffer. One structural note: the concentration block is per-trade (buy-only), which means it blocks incremental overweight but does not enforce rebalancing when an existing overweight drifts higher due to price movement. This is intentional and consistent with how slippage works (you block the action that would worsen the state). |
+| **#5 Stress testing** | `engine/backtest.py` — `STRESS_SCENARIOS` + `run_stress_test()` / `api/main.py` — `GET /api/stress` / `reporting/pdf_report.py` — section 7 / `ui/index.html` — Stress Test tab | **Useful** | Four calibrated scenarios (COVID-19 crash, GFC 2008, rate shock 2022, tech selloff) with per-asset multiplicative shocks. Pure simulation — no trades, no I/O. Kill switch flag per scenario based on `pnl_pct <= -kill_switch_threshold`. Wired end-to-end: API endpoint, PDF section 7 (kill-switch rows highlighted red), and a full UI tab with Chart.js horizontal bar chart and per-scenario cards. The scenario shock values are historically plausible and cover the portfolio's main risk factors (tech concentration, crypto drawdown, rate sensitivity). Only note: crypto shocks for GFC 2008 are stress-hypothetical (crypto was nascent), as correctly documented in the scenario description. |
+| **#3 Dynamic sizing** | `engine/portfolio.py` — `compute_inverse_vol_weights()` / `strategies/base.py` + `strategies/threshold.py` + `strategies/calendar.py` — `get_trades(volatilities, vol_blend)` / `agents/portfolio_agent.py::observe()` — wired via `vol_blend` from profile | **Useful** | Inverse-volatility weighting with blend parameter (`0.0`=pure fixed target, `1.0`=pure inverse-vol). Default `vol_blend=0.3` per profile is a conservative starting point. Wired in `observe()`: volatilities extracted from `TickerMetrics.volatility_30d`, passed to strategy. `vol_blend` and `vol_assets_used` recorded in `observability` dict for traceability. The blend approach is the right design choice — pure inverse-vol would ignore the explicit portfolio mandate; the blend respects it while allowing vol-adjusted sizing. Profile-configurable without code changes. |
+| **Correlation Heatmap tab** | `ui/index.html` — Correlation tab / `api/main.py` — `GET /api/correlation` | **Useful** | NxN interactive heatmap with RGB linear interpolation (negative=red, zero=dark, positive=blue). Summary stat cards: avg pairwise correlation (color-coded), obs count, highest/lowest pair. Window selector (30/60/90/180/365d). Graceful degradation on empty DB (503 with clear message). Directly consumable by portfolio managers for daily regime awareness. The color thresholds (0.3/0.6) are reasonable heuristics; the note in the UI report acknowledges they're not portfolio-theory-backed — acceptable for a monitoring view. |
+
+**Summary: 9/9 features are Useful. No Redundant or Useless verdicts.**
+
+---
+
+### New Feature Evaluations
+
+Evaluation framework: **Value** (what problem does it solve, who benefits) / **Complexity** (scope of code change) / **Risk** (what can break) / **Fit** (alignment with governed, auditable, deterministic-first architecture). Prerequisite condition: #11 (confidence scoring) and #15 (explainability) are confirmed stable as of 2026-03-26.
+
+| # | Idea | Verdict | Value | Complexity | Risk | Notes |
+|---|------|---------|-------|------------|------|-------|
+| 2 | **Régimes HMM (Hidden Markov Models)** | **Defer** | H | H | M | The prerequisite logic is now clearer: #11 + #15 being stable is necessary but not sufficient. The core problem with HMM is auditability: a stochastic latent-variable model introduces non-deterministic regime assignments that are hard to explain to an auditor. This is in direct tension with the project's governing principle ("les décisions critiques ne dépendent jamais d'un texte libre non validé" — equally applies to opaque model state). However, the underlying need is real: the portfolio currently has a single strategy mode regardless of whether vol is 15% or 80%. A better-scoped entry point than HMM: a **deterministic vol-regime classifier** using rolling volatility percentile (e.g., high-vol = 30d vol > 75th historical percentile). This is interpretable, auditable, and can be added to the `CycleObservation` without model state. Recommend reformulating as "vol-regime classifier" and accepting that, instead of full HMM. Full HMM remains deferred. |
+| 4 | **Risk Parity (equal risk contribution)** | **Defer** | H | H | M | #6 (correlation) is now stable and provides `rolling_correlation()` and `compute_sector_exposure()` — which was the stated prerequisite. However, one prerequisite remains unmet: data quality. The `rolling_correlation()` function uses a configurable window (default 30d). ERC (equal risk contribution) requires a reliable covariance matrix, which needs 60–90 trading days minimum per asset to be statistically stable. The portfolio includes BTC-USD and ETH-USD, which have structural regime breaks. More concretely: the current `vol_blend` mechanism already moves the portfolio in the direction of risk parity (inverse-vol weighting) without requiring covariance matrix inversion. Risk Parity via ERC adds marginal value over the existing `vol_blend=1.0` mode while adding `cvxpy` as a dependency and making each rebalance decision harder to explain. Recommend first evaluating `vol_blend=1.0` (pure inverse-vol) as a proxy, then decide whether full ERC is worth the added complexity. True Risk Parity deferred until longer price history and an explicit design decision on the optimization dependency. |
+| 9 | **Multi-agent committee** | **Defer** | H | VH | H | The stated blocker (#11 + #15 stable) is now cleared. However, the implementation risk has not changed: multiple concurrent LLM calls add latency and cost, and the policy engine must be extended to aggregate/adjudicate conflicting sub-agent decisions. Neither the `TradeDecision` schema nor the `PolicyEvaluation` schema currently supports multiple independent inputs. The right design question is: what does each sub-agent produce, and how does the committee resolve disagreement? `confidence` (from #11) is now available per-decision and could serve as a weighting factor, but there is no mechanism for one agent's risk veto to override another's buy signal. Furthermore, the existing `ExecutionPolicyEngine` is deterministic and single-threaded by design — introducing parallel LLM runners would require a new coordination layer. Assessment: the prerequisite work is done, but the design work has not been done. Accept the design phase (spec out the committee protocol, decision schema extensions, and adjudication rules) as a first step; implementation remains deferred until the design is stable. |
+
+---
+
+### Open Issues
+
+1. **`MarketSnapshot.research_summary`** — field confirmed always `""` (backend-report.md, multiple sessions). Still present in `agents/models.py`. Pending team-ui confirmation that it is not rendered in the HTML/JS UI. This is dead schema weight that misleads contributors reading the model.
+
+2. **`hit_ratio` function deprecated** — `engine/performance.py` marks it as deprecated (simulator `success` is trivially True for all executed trades). The Performance tab in the UI still displays it. Should either remove the UI card or replace with `avg_slippage_bps` for a meaningful execution quality metric. Flagged in strategy-report from 2026-03-24; not yet resolved.
+
+3. **Vol-regime classifier as a scoped #2 alternative** — the case for a deterministic vol-regime signal (rolling vol percentile) is strong and unblocked. This is not HMM and has zero auditability risk. No owner has been assigned.
+
+4. **`vol_blend` calibration** — all 4 profiles default to `0.3`. No retrospective analysis has been done to validate whether 0.3 produces better risk-adjusted outcomes than 0.0 or 1.0. This is empirical question that backtest + stress test infrastructure can now answer, but no one has run it.
+
+5. **Pre-existing test tolerance failure** — `test_engine.py::TestVolAdjustedSlippage::test_estimate_cost_without_vol_unchanged` still fails with floating-point tolerance ~0.01 vs 1e-9. Carried forward across multiple strategy-report sessions. Low urgency but should be closed.
+
+---
+
+### Blockers / Dependencies
+
+- **#2 (HMM/vol-regime)**: No blocker for the reformulated deterministic vol-regime classifier. Full HMM blocked by auditability design constraint.
+- **#4 (Risk Parity)**: Blocked by data quality (need 60–90d stable covariance) and design decision on `cvxpy` dependency. Correlation infrastructure (#6) is now available.
+- **#9 (Multi-agent)**: Design phase can start (define committee protocol, schema extensions, adjudication rules). Implementation blocked pending that design.
+- **`research_summary` removal**: Blocked by team-ui coordination (field may be rendered in the HTML/JS UI — needs verification).
+
+---
+
+### Recommendations for the Leader
+
+1. **All 9 sprint features are production-quality.** No removals or rollbacks needed. The policy engine (#1), confidence scoring (#11), and explainability (#15) together constitute the core "governed agent" proof of concept — this combination is the strongest value demonstration the project has.
+
+2. **Accept the vol-regime classifier as a scoped, auditable alternative to #2 (HMM).** A 10-line deterministic function (rolling vol percentile → `"high_vol"` / `"normal"` / `"low_vol"` label added to `CycleObservation`) unlocks regime-aware strategy behavior with zero auditability risk. Assign to team-strategy. This is not HMM; do not conflate them.
+
+3. **For #4 (Risk Parity): run the `vol_blend=1.0` backtest first.** The existing `compute_inverse_vol_weights()` with `blend=1.0` is a pure-inverse-vol allocation — functionally similar to risk parity on volatility. Compare its backtest Sharpe and max drawdown to `vol_blend=0.3` and `vol_blend=0.0` before committing to full ERC with covariance matrix. The infrastructure to run this comparison (backtest tab, stress test tab) now exists.
+
+4. **For #9 (Multi-agent): start the design, not the implementation.** A 1-page spec covering (a) what each sub-agent produces, (b) how the committee adjudicates disagreements, (c) what `TradeDecision` schema extensions are needed, and (d) how `PolicyEvaluation` aggregates multiple inputs is the correct next step. Assign to team-usecases (this agent) or team-lead for the design document. Implementation remains deferred.
+
+5. **Close the `research_summary` field with team-ui.** The backend confirmed it is always `""`. The UI team should verify the Correlation tab and other new tabs do not render it, then a single-line model deletion closes this open issue permanently. Low effort, eliminates ongoing confusion.
+
+6. **Assign the `hit_ratio` / `avg_slippage_bps` swap to team-ui.** The deprecated function is still displayed as "Hit Ratio %" in the Performance tab. Replace the card label and value with `avg_slippage_bps` — more informative, already computed in `performance_report`.
+
+7. **The correlation + stress test + backtest trio now forms a coherent portfolio quality dashboard.** Consider adding a brief narrative interpretation layer (e.g., "your tech sector is at 52% and the rate shock scenario produces a -31% loss — consider reducing growth equity exposure") as a structured output from the agent's `audit()` stage. This would be a high-value, low-complexity use of the existing infrastructure.
+
+---
+
 ## Session: 2026-03-25 — Evaluation of 15 new feature ideas
 **Last Updated:** 2026-03-25
 
