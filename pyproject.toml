@@ -27,6 +27,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic-settings>=2.0",
     "PyYAML>=6.0",
+    "prisma[node]>=0.15.0",
 ]
 
 [dependency-groups]

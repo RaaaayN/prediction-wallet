@@ -6,15 +6,16 @@ import json
 import os
 from dataclasses import asdict
 
-from config import INITIAL_CAPITAL, PORTFOLIO_FILE, TRADES_LOG
+from runtime_context import build_default_portfolio, build_runtime_context
 from utils.time import utc_now_iso
 
 
 class PortfolioStore:
     """File-backed portfolio state store."""
 
-    def __init__(self, portfolio_file: str = PORTFOLIO_FILE):
-        self.portfolio_file = portfolio_file
+    def __init__(self, portfolio_file: str | None = None, *, profile_name: str | None = None, runtime_context=None):
+        self.runtime_context = runtime_context or build_runtime_context(profile_name)
+        self.portfolio_file = portfolio_file or self.runtime_context.portfolio_file
 
     def load(self) -> dict:
         try:
@@ -29,24 +30,18 @@ class PortfolioStore:
             json.dump(portfolio, f, indent=2, default=str)
 
     @staticmethod
-    def default_portfolio() -> dict:
-        return {
-            "positions": {},
-            "position_sides": {},
-            "average_costs": {},
-            "cash": INITIAL_CAPITAL,
-            "peak_value": INITIAL_CAPITAL,
-            "last_rebalanced": None,
-            "history": [],
-            "created_at": utc_now_iso(),
-        }
+    def default_portfolio(initial_capital: float = 100_000.0) -> dict:
+        portfolio = build_default_portfolio(initial_capital)
+        portfolio.setdefault("created_at", utc_now_iso())
+        return portfolio
 
 
 class TradeLogStore:
     """Append-only JSONL trade log."""
 
-    def __init__(self, trades_log: str = TRADES_LOG):
-        self.trades_log = trades_log
+    def __init__(self, trades_log: str | None = None, *, profile_name: str | None = None, runtime_context=None):
+        self.runtime_context = runtime_context or build_runtime_context(profile_name)
+        self.trades_log = trades_log or self.runtime_context.trades_log
 
     def append(self, payload: dict | object) -> None:
         os.makedirs(os.path.dirname(self.trades_log), exist_ok=True)

@@ -5,8 +5,8 @@ import json
 import sqlite3
 from typing import Literal
 
-from config import MARKET_DB
 from db.schema import init_db
+from runtime_context import build_runtime_context
 from utils.time import utc_now_iso
 
 EventType = Literal[
@@ -24,11 +24,15 @@ def save_event(
     cycle_id: str,
     event_type: EventType,
     payload: dict,
-    db_path: str = MARKET_DB,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
 ) -> None:
     """Append an event to the immutable event log."""
-    init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    resolved_db_path = db_path or (runtime_context or build_runtime_context(profile_name)).market_db
+    init_db(resolved_db_path)
+    with sqlite3.connect(resolved_db_path) as conn:
         conn.execute(
             "INSERT INTO cycle_events (cycle_id, event_type, payload_json, created_at) VALUES (?,?,?,?)",
             (cycle_id, event_type, json.dumps(payload), utc_now_iso()),
@@ -36,10 +40,11 @@ def save_event(
         conn.commit()
 
 
-def get_events(cycle_id: str, db_path: str = MARKET_DB) -> list[dict]:
+def get_events(cycle_id: str, db_path: str | None = None, *, runtime_context=None, profile_name: str | None = None) -> list[dict]:
     """Return all events for a cycle, ordered chronologically."""
-    init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    resolved_db_path = db_path or (runtime_context or build_runtime_context(profile_name)).market_db
+    init_db(resolved_db_path)
+    with sqlite3.connect(resolved_db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM cycle_events WHERE cycle_id = ? ORDER BY created_at ASC",
@@ -57,10 +62,11 @@ def get_events(cycle_id: str, db_path: str = MARKET_DB) -> list[dict]:
     ]
 
 
-def get_recent_events(limit: int = 100, db_path: str = MARKET_DB) -> list[dict]:
+def get_recent_events(limit: int = 100, db_path: str | None = None, *, runtime_context=None, profile_name: str | None = None) -> list[dict]:
     """Return the most recent events across all cycles."""
-    init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    resolved_db_path = db_path or (runtime_context or build_runtime_context(profile_name)).market_db
+    init_db(resolved_db_path)
+    with sqlite3.connect(resolved_db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM cycle_events ORDER BY created_at DESC LIMIT ?",
@@ -78,9 +84,10 @@ def get_recent_events(limit: int = 100, db_path: str = MARKET_DB) -> list[dict]:
     ]
 
 
-def replay_cycle(cycle_id: str, db_path: str = MARKET_DB) -> dict:
+def replay_cycle(cycle_id: str, db_path: str | None = None, *, runtime_context=None, profile_name: str | None = None) -> dict:
     """Reconstruct cycle state by replaying its event log."""
-    events = get_events(cycle_id, db_path=db_path)
+    resolved_db_path = db_path or (runtime_context or build_runtime_context(profile_name)).market_db
+    events = get_events(cycle_id, db_path=resolved_db_path)
     state: dict = {
         "cycle_id": cycle_id,
         "events": events,

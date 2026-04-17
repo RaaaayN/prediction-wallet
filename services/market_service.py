@@ -8,8 +8,10 @@ import time
 
 import pandas as pd
 
-from config import BENCHMARK_TICKER, MARKET_DB
+from config import BENCHMARK_TICKER
 from db.schema import init_db
+from runtime_context import build_runtime_context, reset_profile_market_cache
+from settings import settings
 from utils.time import utc_now_iso
 
 
@@ -75,23 +77,32 @@ def _require_yfinance():
 class MarketService:
     """Wrap yfinance access and record refresh metadata in SQLite."""
 
-    def __init__(self, db_path: str = MARKET_DB, min_refresh_interval_seconds: int = 900):
-        self.db_path = db_path
-        self.min_refresh_interval_seconds = min_refresh_interval_seconds
+    REQUIRED_PRICE_COLUMNS = {"Open", "High", "Low", "Close", "Volume"}
+
+    def __init__(
+        self,
+        db_path: str | None = None,
+        min_refresh_interval_seconds: int | None = None,
+        *,
+        profile_name: str | None = None,
+        runtime_context=None,
+    ):
+        self.runtime_context = runtime_context or build_runtime_context(profile_name)
+        self.db_path = db_path or self.runtime_context.market_db
+        self.min_refresh_interval_seconds = min_refresh_interval_seconds or settings.market_data_ttl_seconds
         init_db(self.db_path)
 
     def fetch_and_store(self, tickers: list[str], period: str = "1y", force: bool = False) -> dict[str, pd.DataFrame]:
         results = {}
         for ticker in tickers:
-            if not force and not self._needs_refresh(ticker):
-                cached = self._load_from_db(ticker)
-                if cached is not None and not cached.empty:
-                    results[ticker] = cached
-                    continue
+            cached = self._load_valid_history(ticker)
+            if not force and cached is not None and not cached.empty and not self._needs_refresh(ticker):
+                results[ticker] = cached
+                continue
             try:
                 df = self._download(ticker, period)
-                if df.empty:
-                    self._record_refresh(ticker, False, "No data returned")
+                if not self._is_history_valid(df, ticker):
+                    self._record_refresh(ticker, False, "Invalid or incomplete price history")
                     continue
                 df = add_technical_indicators(df)
                 self._save_to_db(df, ticker)
@@ -108,50 +119,51 @@ class MarketService:
         period: str = "1y",
         force: bool = False,
     ) -> tuple[dict[str, pd.DataFrame], dict[str, float]]:
-        async def _fetch_one(ticker: str) -> tuple[str, pd.DataFrame | None, float]:
+        results: dict[str, pd.DataFrame] = {}
+        latencies: dict[str, float] = {}
+        for ticker in tickers:
             started = time.perf_counter()
-            if not force and not self._needs_refresh(ticker):
-                cached = self._load_from_db(ticker)
+            if not force:
+                cached = self._load_valid_history(ticker)
                 if cached is not None and not cached.empty:
-                    return ticker, cached, round((time.perf_counter() - started) * 1000, 2)
+                    if not self._needs_refresh(ticker):
+                        results[ticker] = cached
+                        latencies[ticker] = round((time.perf_counter() - started) * 1000, 2)
+                        continue
             try:
                 df = await asyncio.to_thread(self._download, ticker, period)
-                if df.empty:
-                    self._record_refresh(ticker, False, "No data returned")
-                    return ticker, None, round((time.perf_counter() - started) * 1000, 2)
+                if not self._is_history_valid(df, ticker):
+                    self._record_refresh(ticker, False, "Invalid or incomplete price history")
+                    latencies[ticker] = round((time.perf_counter() - started) * 1000, 2)
+                    continue
                 df = add_technical_indicators(df)
                 self._save_to_db(df, ticker)
                 self._record_refresh(ticker, True, "")
-                return ticker, df, round((time.perf_counter() - started) * 1000, 2)
+                results[ticker] = df
             except Exception as exc:
                 self._record_refresh(ticker, False, str(exc))
-                return ticker, None, round((time.perf_counter() - started) * 1000, 2)
-
-        results: dict[str, pd.DataFrame] = {}
-        latencies: dict[str, float] = {}
-        for ticker, df, latency_ms in await asyncio.gather(*[_fetch_one(ticker) for ticker in tickers]):
-            latencies[ticker] = latency_ms
-            if df is not None and not df.empty:
-                results[ticker] = df
+            latencies[ticker] = round((time.perf_counter() - started) * 1000, 2)
         return results, latencies
 
     def get_latest_prices(self, tickers: list[str]) -> dict[str, float]:
         prices = {}
-        yf = _require_yfinance()
         for ticker in tickers:
             try:
-                df = self._load_from_db(ticker)
-                if df is not None and not df.empty:
-                    prices[ticker] = float(df["Close"].iloc[-1])
+                cached = self._load_valid_history(ticker)
+                cached_price = float(cached["Close"].iloc[-1]) if cached is not None and not cached.empty else 0.0
+                live_price = self._fetch_live_price(ticker)
+                if cached_price > 0 and self._is_price_consistent(cached_price, live_price):
+                    prices[ticker] = cached_price
+                elif live_price > 0:
+                    prices[ticker] = live_price
                 else:
-                    live = yf.Ticker(ticker).fast_info
-                    prices[ticker] = float(live.get("lastPrice", live.get("regularMarketPrice", 0)))
+                    prices[ticker] = cached_price
             except Exception:
                 prices[ticker] = 0.0
         return prices
 
     def get_historical(self, ticker: str, days: int = 90) -> pd.DataFrame:
-        df = self._load_from_db(ticker)
+        df = self._load_valid_history(ticker)
         if df is None or df.empty:
             return pd.DataFrame()
         return df.tail(days)
@@ -164,15 +176,10 @@ class MarketService:
 
     def refresh_prices(self, tickers: list[str]) -> dict[str, float]:
         prices = {}
-        yf = _require_yfinance()
         for ticker in tickers:
-            try:
-                info = yf.Ticker(ticker).fast_info
-                price = info.get("lastPrice") or info.get("regularMarketPrice")
-                if price:
-                    prices[ticker] = float(price)
-            except Exception:
-                pass
+            price = self._fetch_live_price(ticker)
+            if price > 0:
+                prices[ticker] = price
         return prices
 
     def get_refresh_status(self) -> list[dict]:
@@ -185,6 +192,11 @@ class MarketService:
             return [dict(r) for r in rows]
         except Exception:
             return []
+
+    def rebuild_cache(self, tickers: list[str], period: str = "1y") -> dict[str, pd.DataFrame]:
+        reset_profile_market_cache(self.runtime_context)
+        init_db(self.db_path)
+        return self.fetch_and_store(tickers, period=period, force=True)
 
     def _download(self, ticker: str, period: str) -> pd.DataFrame:
         yf = _require_yfinance()
@@ -216,6 +228,14 @@ class MarketService:
             except Exception:
                 return None
 
+    def _load_valid_history(self, ticker: str) -> pd.DataFrame | None:
+        df = self._load_from_db(ticker)
+        if df is None or df.empty:
+            return None
+        if not self._is_history_valid(df, ticker):
+            return None
+        return df
+
     def _needs_refresh(self, ticker: str) -> bool:
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -242,3 +262,35 @@ class MarketService:
                 (ticker, utc_now_iso(), int(success), error),
             )
             conn.commit()
+
+    def _is_history_valid(self, df: pd.DataFrame | None, ticker: str) -> bool:
+        if df is None or df.empty:
+            return False
+        normalized = _normalize_ohlcv_columns(df)
+        if not self.REQUIRED_PRICE_COLUMNS.issubset(set(normalized.columns)):
+            return False
+        close = pd.to_numeric(normalized.get("Close"), errors="coerce").dropna()
+        if close.empty or close.iloc[-1] <= 0:
+            return False
+        live_price = self._fetch_live_price(ticker)
+        return self._is_price_consistent(float(close.iloc[-1]), live_price)
+
+    @staticmethod
+    def _is_price_consistent(cached_price: float, live_price: float) -> bool:
+        if cached_price <= 0:
+            return False
+        if live_price <= 0:
+            return True
+        return abs(cached_price - live_price) / max(live_price, 1.0) <= 0.35
+
+    @staticmethod
+    def _fetch_live_price(ticker: str) -> float:
+        yf = _require_yfinance()
+        try:
+            info = yf.Ticker(ticker).fast_info
+        except Exception:
+            return 0.0
+        try:
+            return float(info.get("lastPrice") or info.get("regularMarketPrice") or 0.0)
+        except Exception:
+            return 0.0

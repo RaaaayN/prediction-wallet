@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #1f6feb;
+  --color-green: #3fb950;
+  --color-red: #f85149;
+  --color-yellow: #e3b341;
+  --color-purple: #8957e5;
+  --color-gray-bg: #0d1117;
+  --color-card-bg: #161b22;
+  --color-terminal-bg: #010409;
+  --color-border: #30363d;
+}
+
+body {
+  @apply bg-gray-bg text-[#e6edf3] font-sans;
+}
+
+::-webkit-scrollbar {
+  @apply w-1.5 h-1.5;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-card-bg;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-border rounded-full;
+}
+
+table {
+  @apply w-full border-collapse;
+}
+
+th {
+  @apply text-[#8b949e] font-medium text-[11px] uppercase tracking-wider p-2 border-b border-[#21262d];
+}
+
+td {
+  @apply p-2 border-b border-[#21262d] text-sm;
+}
+
+tr:last-child td {
+  @apply border-b-0;
+}
+
+tr:hover td {
+  @apply bg-[#1c2128];
+}

@@ -1,0 +1,171 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-py"
+}
+
+model PortfolioSnapshot {
+  id          Int        @id @default(autoincrement())
+  timestamp   DateTime
+  cycle_id    String
+  total_value Float
+  cash        Float
+  peak_value  Float
+  drawdown    Float
+  positions   Position[]
+
+  @@index([cycle_id])
+  @@index([timestamp])
+  @@map("portfolio_snapshots")
+}
+
+model Position {
+  id              Int               @id @default(autoincrement())
+  snapshot_id     Int
+  snapshot        PortfolioSnapshot @relation(fields: [snapshot_id], references: [id])
+  ticker          String
+  quantity        Float
+  price           Float
+  value           Float
+  weight          Float
+  target_weight   Float
+  drift           Float
+  side            String            @default("long")
+  idea_id         String?
+  gross_exposure  Float             @default(0.0)
+  net_exposure    Float             @default(0.0)
+
+  @@index([snapshot_id])
+  @@index([ticker])
+  @@map("positions")
+}
+
+model Execution {
+  id              Int      @id @default(autoincrement())
+  cycle_id        String
+  trade_id        String
+  timestamp       DateTime
+  ticker          String
+  action          String
+  quantity        Float
+  market_price    Float
+  fill_price      Float
+  cost            Float
+  slippage        Float
+  reason          String?
+  success         Boolean
+  error           String?
+  side            String   @default("long")
+  idea_id         String?
+  sleeve          String   @default("core_longs")
+  exposure_before Float    @default(0.0)
+  exposure_after  Float    @default(0.0)
+  gross_impact    Float    @default(0.0)
+  net_impact      Float    @default(0.0)
+  weight_before   Float    @default(0.0)
+  target_weight   Float    @default(0.0)
+  drift_before    Float    @default(0.0)
+  slippage_pct    Float    @default(0.0)
+  notional        Float    @default(0.0)
+
+  @@index([cycle_id])
+  @@index([timestamp])
+  @@index([ticker])
+  @@map("executions")
+}
+
+model AgentRun {
+  id               Int      @id @default(autoincrement())
+  cycle_id         String
+  timestamp        DateTime
+  strategy         String?
+  signal           Boolean
+  analysis         String?
+  trades_count     Int
+  report_path      String?
+  kill_switch      Boolean
+  provider         String?
+  tool_calls       Int      @default(0)
+  fetch_latency_ms Float    @default(0)
+  errors_json      String?
+
+  @@index([cycle_id])
+  @@index([timestamp])
+  @@map("agent_runs")
+}
+
+model MarketDataStatus {
+  ticker       String   @id
+  refreshed_at DateTime
+  success      Boolean
+  error        String?
+
+  @@map("market_data_status")
+}
+
+model DecisionTrace {
+  id              Int      @id @default(autoincrement())
+  cycle_id        String
+  stage           String
+  payload_json    String
+  validation_json String?
+  mcp_tools_json  String?
+  provider        String?
+  agent_backend   String?
+  execution_mode  String?
+  created_at      DateTime
+  event_type      String?
+  tags            String?
+
+  @@index([cycle_id])
+  @@index([stage])
+  @@index([created_at])
+  @@map("decision_traces")
+}
+
+model CycleEvent {
+  id           Int      @id @default(autoincrement())
+  cycle_id     String
+  event_type   String
+  payload_json String
+  created_at   DateTime
+
+  @@index([cycle_id])
+  @@index([created_at])
+  @@map("cycle_events")
+}
+
+model IdeaBook {
+  idea_id            String   @id
+  ticker             String
+  side               String
+  thesis             String
+  catalyst           String
+  time_horizon       String
+  conviction         Float
+  upside_case        String?
+  downside_case      String?
+  invalidation_rule  String
+  status             String
+  sleeve             String   @default("core_longs")
+  edge_source        String   @default("")
+  why_now            String   @default("")
+  key_risk           String   @default("")
+  supporting_signals String   @default("[]")
+  evidence_quality   String   @default("medium")
+  review_status      String   @default("approved")
+  origin_cycle_id    String?
+  llm_generated      Boolean  @default(false)
+  source             String   @default("profile_seed")
+  crowded_score      Float    @default(0.0)
+  short_squeeze_risk Boolean  @default(false)
+  created_at         DateTime
+  updated_at         DateTime
+
+  @@index([status])
+  @@index([ticker])
+  @@map("idea_book")
+}

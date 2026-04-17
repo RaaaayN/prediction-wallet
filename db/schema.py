@@ -127,6 +127,14 @@ CREATE TABLE IF NOT EXISTS idea_book (
     invalidation_rule  TEXT NOT NULL,
     status             TEXT NOT NULL,
     sleeve             TEXT DEFAULT 'core_longs',
+    edge_source        TEXT DEFAULT '',
+    why_now            TEXT DEFAULT '',
+    key_risk           TEXT DEFAULT '',
+    supporting_signals TEXT DEFAULT '[]',
+    evidence_quality   TEXT DEFAULT 'medium',
+    review_status      TEXT DEFAULT 'approved',
+    origin_cycle_id    TEXT,
+    llm_generated      INTEGER DEFAULT 0,
     source             TEXT DEFAULT 'profile_seed',
     crowded_score      REAL DEFAULT 0.0,
     short_squeeze_risk INTEGER DEFAULT 0,
@@ -172,12 +180,23 @@ _POSITIONS_MIGRATIONS = [
     "ALTER TABLE positions ADD COLUMN net_exposure REAL DEFAULT 0.0",
 ]
 
+_IDEA_BOOK_MIGRATIONS = [
+    "ALTER TABLE idea_book ADD COLUMN edge_source TEXT DEFAULT ''",
+    "ALTER TABLE idea_book ADD COLUMN why_now TEXT DEFAULT ''",
+    "ALTER TABLE idea_book ADD COLUMN key_risk TEXT DEFAULT ''",
+    "ALTER TABLE idea_book ADD COLUMN supporting_signals TEXT DEFAULT '[]'",
+    "ALTER TABLE idea_book ADD COLUMN evidence_quality TEXT DEFAULT 'medium'",
+    "ALTER TABLE idea_book ADD COLUMN review_status TEXT DEFAULT 'approved'",
+    "ALTER TABLE idea_book ADD COLUMN origin_cycle_id TEXT",
+    "ALTER TABLE idea_book ADD COLUMN llm_generated INTEGER DEFAULT 0",
+]
+
 
 def init_db(db_path: str) -> None:
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(DDL)
-        for stmt in _AGENT_RUNS_MIGRATIONS + _EXECUTIONS_MIGRATIONS + _DECISION_TRACES_MIGRATIONS + _POSITIONS_MIGRATIONS:
+        for stmt in _AGENT_RUNS_MIGRATIONS + _EXECUTIONS_MIGRATIONS + _DECISION_TRACES_MIGRATIONS + _POSITIONS_MIGRATIONS + _IDEA_BOOK_MIGRATIONS:
             try:
                 conn.execute(stmt)
             except sqlite3.OperationalError:

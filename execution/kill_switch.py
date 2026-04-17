@@ -1,17 +1,18 @@
 """Drawdown monitor: triggers an emergency stop if losses exceed the threshold."""
 
-from config import KILL_SWITCH_DRAWDOWN, TRADES_LOG
 from engine.risk import check_kill_switch as _check_kill_switch, compute_drawdown as _compute_drawdown
 from execution.persistence import TradeLogStore
+from runtime_context import build_runtime_context
 from utils.time import utc_now_iso
 
 
 class KillSwitch:
     """Monitor portfolio drawdown and activate emergency stop if needed."""
 
-    def __init__(self, threshold: float = KILL_SWITCH_DRAWDOWN, trades_log: str = TRADES_LOG):
-        self.threshold = threshold
-        self.trade_log_store = TradeLogStore(trades_log)
+    def __init__(self, threshold: float | None = None, trades_log: str | None = None, *, profile_name: str | None = None, runtime_context=None):
+        self.runtime_context = runtime_context or build_runtime_context(profile_name)
+        self.threshold = float(threshold if threshold is not None else self.runtime_context.kill_switch_drawdown)
+        self.trade_log_store = TradeLogStore(trades_log, runtime_context=self.runtime_context)
 
     def check(self, portfolio: dict) -> bool:
         current_value = self._estimate_current_value(portfolio)
