@@ -95,9 +95,12 @@
 </header>
 
 <!-- TABS -->
-<nav class="border-b border-gray-800 px-6 flex gap-6">
+<nav class="border-b border-gray-800 px-6 flex gap-6 overflow-x-auto">
+  <button class="tab-btn py-3 text-sm" onclick="showTab('dashboard', this)">Dashboard</button>
   <button class="tab-btn active py-3 text-sm" onclick="showTab('control', this)">Control</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('portfolio', this)">Portfolio</button>
+  <button class="tab-btn py-3 text-sm" onclick="showTab('risk', this)">Risk</button>
+  <button class="tab-btn py-3 text-sm" onclick="showTab('blotter', this)">Blotter</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('history', this)">History</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('traces', this)">Agent Trace</button>
   <button class="tab-btn py-3 text-sm" onclick="showTab('runs', this)">Cycles</button>
@@ -108,6 +111,67 @@
 </nav>
 
 <main class="p-6 max-w-7xl mx-auto">
+
+<!-- ═══════════════ DASHBOARD TAB ═══════════════ -->
+<div id="tab-dashboard" class="hidden">
+
+  <!-- Row 1: KPI cards -->
+  <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
+    <div class="card p-4">
+      <div class="text-xs text-gray-500 mb-1">Total Value</div>
+      <div id="dash-total" class="text-xl font-bold text-blue-400">--</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-gray-500 mb-1">P&amp;L ($)</div>
+      <div id="dash-pnl" class="text-xl font-bold text-gray-300">--</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-gray-500 mb-1">P&amp;L (%)</div>
+      <div id="dash-pnl-pct" class="text-xl font-bold text-gray-300">--</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-gray-500 mb-1">Max Drawdown</div>
+      <div id="dash-maxdd" class="text-xl font-bold text-red-400">--</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-xs text-gray-500 mb-1">Last Cycle</div>
+      <div id="dash-last-cycle" class="text-sm font-bold text-gray-300">--</div>
+    </div>
+    <div class="card p-4 flex flex-col justify-between">
+      <div class="text-xs text-gray-500 mb-1">Agent Status</div>
+      <div id="dash-agent-status" class="text-sm font-bold">
+        <span class="badge-info text-xs px-2 py-0.5 rounded-full font-medium">IDLE</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2: P&L Waterfall -->
+  <div class="card p-4 mb-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Session P&amp;L per Cycle</h2>
+      <button class="btn btn-gray text-xs" onclick="loadDashboard()">Refresh</button>
+    </div>
+    <div style="height:240px">
+      <canvas id="chart-pnl-waterfall"></canvas>
+    </div>
+  </div>
+
+  <!-- Row 3: two-column -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <!-- Last 5 decision signals -->
+    <div class="card p-4">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Last 5 Decision Signals</h2>
+      <div id="dash-signals" class="flex flex-col gap-2 text-sm text-gray-500">Loading...</div>
+    </div>
+    <!-- Kill switch status -->
+    <div class="card p-4">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Kill Switch</h2>
+      <div id="dash-kill-switch">
+        <div class="kill-ok">Checking...</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════════ CONTROL TAB ═══════════════ -->
 <div id="tab-control">
@@ -210,7 +274,7 @@
     </div>
   </div>
 
-  <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+  <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
     <div class="card p-4 lg:col-span-1">
       <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Allocation</h2>
       <div style="position:relative;height:220px">
@@ -222,6 +286,72 @@
       <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Positions</h2>
       <div id="positions-table" class="overflow-x-auto"></div>
     </div>
+  </div>
+
+  <!-- P&L Attribution -->
+  <div class="card p-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Realized P&amp;L Attribution</h2>
+    <div id="attribution-no-data" class="hidden text-sm text-gray-500">No closed trades yet.</div>
+    <div style="height:200px">
+      <canvas id="chart-attribution"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ RISK TAB ═══════════════ -->
+<div id="tab-risk" class="hidden">
+
+  <!-- Section 1: Risk metrics -->
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Risk Overview</h2>
+    <button class="btn btn-gray text-xs" onclick="loadRisk()">Refresh</button>
+  </div>
+
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+    <div class="card p-4">
+      <div class="stat-label">Max Drawdown</div>
+      <div id="risk-maxdd" class="stat-value red">--</div>
+    </div>
+    <div class="card p-4">
+      <div class="stat-label">Drawdown from Peak</div>
+      <div id="risk-curr-dd" class="stat-value red">--</div>
+    </div>
+    <div class="card p-4">
+      <div class="stat-label">Largest Single-Day Loss</div>
+      <div id="risk-max-loss" class="stat-value red">--</div>
+    </div>
+    <div class="card p-4">
+      <div class="stat-label">Recovery Factor</div>
+      <div id="risk-recovery" class="stat-value blue">--</div>
+    </div>
+  </div>
+
+  <!-- Section 2: Sector Concentration -->
+  <div class="card p-4 mb-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Sector Concentration</h2>
+    <div id="risk-sector-no-data" class="hidden text-sm text-gray-500">No position data available.</div>
+    <div style="height:180px">
+      <canvas id="chart-sector"></canvas>
+    </div>
+  </div>
+
+  <!-- Section 3: Concentration Warning -->
+  <div id="risk-concentration-warning" class="mt-2"></div>
+</div>
+
+<!-- ═══════════════ BLOTTER TAB ═══════════════ -->
+<div id="tab-blotter" class="hidden">
+  <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Trade Blotter</h2>
+    <button class="btn btn-gray text-xs" onclick="loadBlotter()">Refresh</button>
+  </div>
+
+  <!-- Summary row -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4" id="blotter-summary"></div>
+
+  <!-- Table -->
+  <div class="card p-4">
+    <div id="blotter-table" class="overflow-x-auto"></div>
   </div>
 </div>
 
@@ -455,7 +585,10 @@ function showTab(name, btn) {
   document.getElementById('tab-' + name).classList.remove('hidden');
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  if (name === 'dashboard') loadDashboard();
   if (name === 'portfolio') loadPortfolio();
+  if (name === 'risk') loadRisk();
+  if (name === 'blotter') loadBlotter();
   if (name === 'history') loadHistory();
   if (name === 'traces') loadTraces();
   if (name === 'runs') loadRuns();
@@ -1079,9 +1212,10 @@ function eventTypeBadge(et) {
 
 // ── portfolio ──────────────────────────────────────────────────────────────
 async function loadPortfolio() {
-  const [pf, pos] = await Promise.all([
+  const [pf, pos, execs] = await Promise.all([
     fetch(`${API}/api/portfolio`).then(r=>r.json()),
     fetch(`${API}/api/positions`).then(r=>r.json()),
+    fetch(`${API}/api/executions?limit=500`).then(r=>r.json()).catch(() => []),
   ]);
 
   if (pf.error) {
@@ -1186,6 +1320,9 @@ async function loadPortfolio() {
     </div>`;
   }
   document.getElementById('alloc-legend').innerHTML = legendHtml;
+
+  // P&L attribution chart
+  await renderAttribution(execs);
 }
 
 // ── history chart ──────────────────────────────────────────────────────────
@@ -1832,6 +1969,399 @@ async function loadStress() {
   }
 }
 
+// ── dashboard ──────────────────────────────────────────────────────────────
+let pnlWaterfallChart = null;
+async function loadDashboard() {
+  let pf, snaps, traces;
+  try {
+    [pf, snaps, traces] = await Promise.all([
+      fetch(`${API}/api/portfolio`).then(r => r.json()),
+      fetch(`${API}/api/snapshots?limit=30`).then(r => r.json()),
+      fetch(`${API}/api/traces?limit=50`).then(r => r.json()),
+    ]);
+  } catch (e) {
+    document.getElementById('dash-total').textContent = 'Error';
+    return;
+  }
+
+  // KPI: Total Value
+  const totalEl = document.getElementById('dash-total');
+  totalEl.textContent = fmtUSD(pf.total_value);
+
+  // KPI: P&L $
+  const pnlDollars = pf.pnl_dollars ?? null;
+  const pnlEl = document.getElementById('dash-pnl');
+  pnlEl.textContent = fmtUSD(pnlDollars);
+  pnlEl.className = `text-xl font-bold ${(pnlDollars ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`;
+
+  // KPI: P&L %
+  const pnlPct = pf.pnl_pct ?? null;
+  const pnlPctEl = document.getElementById('dash-pnl-pct');
+  const pnlPctSign = (pnlPct ?? 0) >= 0 ? '+' : '';
+  pnlPctEl.textContent = pnlPct != null ? pnlPctSign + (pnlPct * 100).toFixed(2) + '%' : '--';
+  pnlPctEl.className = `text-xl font-bold ${(pnlPct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`;
+
+  // KPI: Max Drawdown from snapshots
+  const snapArr = Array.isArray(snaps) ? snaps : [];
+  let snapPeak = 0, snapMaxDD = 0;
+  const snapValues = snapArr.map(s => s.total_value || 0);
+  for (const v of snapValues) {
+    if (v > snapPeak) snapPeak = v;
+    const dd = snapPeak > 0 ? (v - snapPeak) / snapPeak : 0;
+    if (dd < snapMaxDD) snapMaxDD = dd;
+  }
+  const maxDDEl = document.getElementById('dash-maxdd');
+  maxDDEl.textContent = (snapMaxDD * 100).toFixed(2) + '%';
+  maxDDEl.className = `text-xl font-bold ${snapMaxDD < -0.05 ? 'text-red-400' : snapMaxDD < -0.02 ? 'text-yellow-400' : 'text-green-400'}`;
+
+  // KPI: Last Cycle timestamp
+  const lastCycleEl = document.getElementById('dash-last-cycle');
+  if (snapArr.length > 0) {
+    const lastTs = snapArr[snapArr.length - 1].timestamp || snapArr[0].timestamp || '';
+    lastCycleEl.textContent = lastTs ? lastTs.slice(0, 16).replace('T', ' ') : '--';
+  } else {
+    lastCycleEl.textContent = '--';
+  }
+
+  // P&L Waterfall chart
+  const waterfallLabels = [];
+  const waterfallData   = [];
+  const waterfallColors = [];
+  for (let i = 1; i < snapArr.length; i++) {
+    const delta = (snapArr[i].total_value || 0) - (snapArr[i - 1].total_value || 0);
+    const ts = (snapArr[i].timestamp || '').slice(0, 16).replace('T', ' ');
+    waterfallLabels.push(ts);
+    waterfallData.push(parseFloat(delta.toFixed(2)));
+    waterfallColors.push(delta >= 0 ? 'rgba(63,185,80,0.7)' : 'rgba(248,81,73,0.7)');
+  }
+
+  const ctxWf = document.getElementById('chart-pnl-waterfall').getContext('2d');
+  if (pnlWaterfallChart) { pnlWaterfallChart.destroy(); pnlWaterfallChart = null; }
+  if (waterfallData.length > 0) {
+    pnlWaterfallChart = new Chart(ctxWf, {
+      type: 'bar',
+      data: {
+        labels: waterfallLabels,
+        datasets: [{
+          label: 'Cycle P&L ($)',
+          data: waterfallData,
+          backgroundColor: waterfallColors,
+          borderColor: waterfallColors.map(c => c.replace('0.7)', '1)')),
+          borderWidth: 1,
+          borderRadius: 3,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#8b949e', maxTicksLimit: 10, font: { size: 10 } }, grid: { color: '#21262d' } },
+          y: { ticks: { color: '#8b949e', font: { size: 11 }, callback: v => '$' + Number(v).toLocaleString() }, grid: { color: '#21262d' } }
+        }
+      }
+    });
+  } else {
+    ctxWf.canvas.parentElement.insertAdjacentHTML('beforeend', '<p class="text-gray-500 text-sm mt-2">No cycle data yet.</p>');
+  }
+
+  // Last 5 decision signals from traces (non-observe)
+  const tracesArr = Array.isArray(traces) ? traces : [];
+  const signals = tracesArr.filter(t => t.stage !== 'observe').slice(0, 5);
+  const signalsEl = document.getElementById('dash-signals');
+  if (signals.length === 0) {
+    signalsEl.innerHTML = '<span class="text-gray-500 text-sm">No decision traces yet. Run a cycle first.</span>';
+  } else {
+    signalsEl.innerHTML = signals.map(t => {
+      const stageCls = `stage-${t.stage}`;
+      const shortId  = (t.cycle_id || '').slice(0, 8);
+      const ts       = (t.created_at || '').slice(0, 16).replace('T', ' ');
+      return `<div class="flex items-center gap-2">
+        <span class="stage-badge ${stageCls}">${esc(t.stage)}</span>
+        <span class="font-mono text-xs text-blue-300">${esc(shortId)}</span>
+        <span class="text-xs text-gray-500">${esc(ts)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  // Kill switch card
+  const killEl = document.getElementById('dash-kill-switch');
+  const currentDD = pf.peak_value && pf.total_value
+    ? (pf.total_value - pf.peak_value) / pf.peak_value
+    : snapMaxDD;
+  const killActive = currentDD < -0.10;
+  if (killActive) {
+    killEl.innerHTML = `<div class="kill-active">&#x26A0; KILL SWITCH: ACTIVE — Drawdown ${(currentDD * 100).toFixed(1)}%</div>`;
+  } else {
+    killEl.innerHTML = `<div class="kill-ok">&#x2714; KILL SWITCH: INACTIVE — Drawdown ${(currentDD * 100).toFixed(1)}%</div>`;
+  }
+}
+
+// ── risk ────────────────────────────────────────────────────────────────────
+const SECTOR_MAP = {
+  'AAPL':'Tech','MSFT':'Tech','GOOGL':'Tech','NVDA':'Tech',
+  'AMZN':'Consumer','TLT':'Bonds','BND':'Bonds',
+  'BTC-USD':'Crypto','ETH-USD':'Crypto'
+};
+const MAX_SECTOR_CONC = 0.55;
+let sectorChart = null;
+
+async function loadRisk() {
+  let snaps, pos;
+  try {
+    [snaps, pos] = await Promise.all([
+      fetch(`${API}/api/snapshots?limit=500`).then(r => r.json()),
+      fetch(`${API}/api/positions`).then(r => r.json()),
+    ]);
+  } catch (e) {
+    document.getElementById('risk-maxdd').textContent = 'Error';
+    return;
+  }
+
+  const snapArr   = Array.isArray(snaps) ? snaps : [];
+  const snapVals  = snapArr.map(s => s.total_value || 0);
+
+  // Max Drawdown
+  let peak = 0, maxDD = 0;
+  for (const v of snapVals) {
+    if (v > peak) peak = v;
+    const dd = peak > 0 ? (v - peak) / peak : 0;
+    if (dd < maxDD) maxDD = dd;
+  }
+  document.getElementById('risk-maxdd').textContent = (maxDD * 100).toFixed(2) + '%';
+  document.getElementById('risk-maxdd').className = `stat-value ${maxDD < -0.1 ? 'red' : maxDD < -0.05 ? 'yellow' : 'green'}`;
+
+  // Drawdown from peak (current)
+  const currVal  = snapVals.length > 0 ? snapVals[snapVals.length - 1] : 0;
+  const currDD   = peak > 0 ? (currVal - peak) / peak : 0;
+  document.getElementById('risk-curr-dd').textContent = (currDD * 100).toFixed(2) + '%';
+  document.getElementById('risk-curr-dd').className = `stat-value ${currDD < -0.1 ? 'red' : currDD < -0.05 ? 'yellow' : 'green'}`;
+
+  // Largest single-day loss
+  let maxLoss = 0;
+  for (let i = 1; i < snapVals.length; i++) {
+    const delta = snapVals[i] - snapVals[i - 1];
+    if (delta < maxLoss) maxLoss = delta;
+  }
+  const maxLossEl = document.getElementById('risk-max-loss');
+  maxLossEl.textContent = '$' + Math.abs(maxLoss).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  maxLossEl.className = `stat-value ${maxLoss < -5000 ? 'red' : maxLoss < -1000 ? 'yellow' : ''}`;
+
+  // Recovery Factor: total_return / |max_dd|
+  const totalRet = snapVals.length > 1 ? (snapVals[snapVals.length - 1] - snapVals[0]) / (snapVals[0] || 1) : 0;
+  const recovFactor = maxDD !== 0 ? totalRet / Math.abs(maxDD) : 0;
+  document.getElementById('risk-recovery').textContent = recovFactor.toFixed(2);
+  document.getElementById('risk-recovery').className = `stat-value ${recovFactor >= 1 ? 'green' : recovFactor >= 0 ? 'blue' : 'red'}`;
+
+  // Sector Concentration
+  const posArr = Array.isArray(pos) ? pos : [];
+  const noDataEl = document.getElementById('risk-sector-no-data');
+
+  if (posArr.length === 0) {
+    noDataEl.classList.remove('hidden');
+    return;
+  }
+  noDataEl.classList.add('hidden');
+
+  // Compute sector weights
+  const sectorWeights = {};
+  for (const p of posArr) {
+    const sector = SECTOR_MAP[p.ticker] || 'Other';
+    sectorWeights[sector] = (sectorWeights[sector] || 0) + (p.weight || 0);
+  }
+  const sectorLabels = Object.keys(sectorWeights);
+  const sectorVals   = sectorLabels.map(s => parseFloat((sectorWeights[s] * 100).toFixed(2)));
+  const sectorColors = ['#58a6ff', '#3fb950', '#e3b341', '#f85149', '#8957e5'];
+
+  const ctxSec = document.getElementById('chart-sector').getContext('2d');
+  if (sectorChart) { sectorChart.destroy(); sectorChart = null; }
+  sectorChart = new Chart(ctxSec, {
+    type: 'bar',
+    data: {
+      labels: sectorLabels,
+      datasets: [{
+        label: 'Weight (%)',
+        data: sectorVals,
+        backgroundColor: sectorLabels.map((_, i) => sectorColors[i % sectorColors.length] + '99'),
+        borderColor:     sectorLabels.map((_, i) => sectorColors[i % sectorColors.length]),
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        annotation: { annotations: {} }
+      },
+      scales: {
+        x: {
+          max: 100,
+          ticks: { color: '#8b949e', font: { size: 11 }, callback: v => v + '%' },
+          grid: { color: '#21262d' }
+        },
+        y: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: '#21262d' } }
+      }
+    }
+  });
+
+  // Concentration Warning
+  const warnEl  = document.getElementById('risk-concentration-warning');
+  const overCap = sectorLabels.filter((s, i) => sectorVals[i] / 100 > MAX_SECTOR_CONC);
+  if (overCap.length > 0) {
+    const msgs = overCap.map(s => {
+      const w = (sectorWeights[s] * 100).toFixed(1);
+      return `&#x26A0; ${esc(s)} at ${w}% — above ${(MAX_SECTOR_CONC * 100).toFixed(0)}% policy cap`;
+    });
+    warnEl.innerHTML = msgs.map(m => `<div class="kill-active mb-2">${m}</div>`).join('');
+  } else {
+    warnEl.innerHTML = `<div class="kill-ok">&#x2714; All sectors within policy limits</div>`;
+  }
+}
+
+// ── blotter ─────────────────────────────────────────────────────────────────
+async function loadBlotter() {
+  let execs;
+  try {
+    execs = await fetch(`${API}/api/executions?limit=500`).then(r => r.json());
+  } catch (e) {
+    document.getElementById('blotter-table').innerHTML = '<p class="text-red-400 text-sm">Error loading executions.</p>';
+    return;
+  }
+
+  const execArr = Array.isArray(execs) ? execs : [];
+
+  // Summary row
+  const summaryEl = document.getElementById('blotter-summary');
+  const nTotal   = execArr.length;
+  const nExec    = execArr.filter(e => (e.status || '') === 'executed' || e.success === 1 || e.success === true).length;
+  const totalNot = execArr.reduce((s, e) => s + Math.abs(e.notional || (e.fill_price || 0) * Math.abs(e.quantity || 0)), 0);
+  const slipVals = execArr.map(e => Math.abs(e.slippage_pct != null ? e.slippage_pct * 100 : 0));
+  const avgSlip  = slipVals.length > 0 ? slipVals.reduce((a, b) => a + b, 0) / slipVals.length : 0;
+  const hitRatio = nTotal > 0 ? nExec / nTotal : 0;
+
+  summaryEl.innerHTML = `
+    <div class="card p-4"><div class="stat-label">Total Trades</div><div class="stat-value blue">${nTotal}</div></div>
+    <div class="card p-4"><div class="stat-label">Total Notional</div><div class="stat-value">${fmtUSD(totalNot)}</div></div>
+    <div class="card p-4"><div class="stat-label">Avg Slippage %</div><div class="stat-value yellow">${avgSlip.toFixed(3)}%</div></div>
+    <div class="card p-4"><div class="stat-label">Hit Ratio</div><div class="stat-value ${hitRatio >= 0.8 ? 'green' : hitRatio >= 0.5 ? 'yellow' : 'red'}">${(hitRatio * 100).toFixed(1)}%</div></div>
+  `;
+
+  const tableEl = document.getElementById('blotter-table');
+  if (nTotal === 0) {
+    tableEl.innerHTML = '<p class="text-gray-500 text-sm">No executions yet — run a cycle first.</p>';
+    return;
+  }
+
+  let html = `<table><thead><tr>
+    <th class="text-left">Cycle ID</th>
+    <th class="text-left">Ticker</th>
+    <th class="text-left">Side</th>
+    <th class="text-right">Qty</th>
+    <th class="text-right">Avg Fill</th>
+    <th class="text-right">Notional</th>
+    <th class="text-right">Slippage %</th>
+    <th class="text-left">Status</th>
+  </tr></thead><tbody>`;
+
+  for (const e of execArr) {
+    const shortId  = (e.cycle_id || '').slice(0, 8);
+    const isBuy    = (e.action || '').toLowerCase() === 'buy';
+    const sideBadge = isBuy
+      ? `<span class="badge-ok text-xs px-2 py-0.5 rounded-full font-medium">BUY</span>`
+      : `<span class="badge-err text-xs px-2 py-0.5 rounded-full font-medium">SELL</span>`;
+
+    // Slippage colour
+    const slipPct    = e.slippage_pct != null ? Math.abs(e.slippage_pct) * 100 : null;
+    const slipText   = slipPct != null ? slipPct.toFixed(3) + '%' : '—';
+    const slipCls    = slipPct == null ? 'text-gray-500'
+                     : slipPct < 0.1 ? 'text-green-400'
+                     : slipPct < 0.3 ? 'text-yellow-400'
+                     : 'text-red-400';
+
+    // Notional
+    const notional = e.notional != null ? e.notional
+                   : Math.abs((e.fill_price || 0) * (e.quantity || 0));
+
+    // Status badge
+    const rawStatus = (e.status || (e.success === 1 || e.success === true ? 'executed' : 'blocked')).toLowerCase();
+    const statusBadge = rawStatus === 'executed' ? badge('executed', 'ok')
+                      : rawStatus === 'partial'  ? badge('partial',  'warn')
+                      : badge('blocked', 'err');
+
+    html += `<tr>
+      <td class="font-mono text-xs text-blue-300">${esc(shortId)}</td>
+      <td class="font-mono font-semibold">${esc(e.ticker || '—')}</td>
+      <td>${sideBadge}</td>
+      <td class="text-right font-mono text-xs">${fmt(e.quantity, 4)}</td>
+      <td class="text-right">${fmtUSD(e.fill_price)}</td>
+      <td class="text-right">${fmtUSD(notional)}</td>
+      <td class="text-right ${slipCls}">${slipText}</td>
+      <td>${statusBadge}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  tableEl.innerHTML = html;
+}
+
+// ── p&l attribution ─────────────────────────────────────────────────────────
+let attributionChart = null;
+async function renderAttribution(executions) {
+  const noDataEl = document.getElementById('attribution-no-data');
+  const execArr  = Array.isArray(executions) ? executions : [];
+
+  if (execArr.length === 0) {
+    noDataEl.classList.remove('hidden');
+    return;
+  }
+  noDataEl.classList.add('hidden');
+
+  // Realized P&L per ticker: sum(sell notional) - sum(buy notional)
+  const pnlByTicker = {};
+  for (const e of execArr) {
+    const ticker   = e.ticker || 'Unknown';
+    const notional = e.notional != null ? e.notional
+                   : Math.abs((e.fill_price || 0) * (e.quantity || 0));
+    if (!pnlByTicker[ticker]) pnlByTicker[ticker] = 0;
+    const isBuy = (e.action || '').toLowerCase() === 'buy';
+    pnlByTicker[ticker] += isBuy ? -notional : notional;
+  }
+
+  const tickers = Object.keys(pnlByTicker);
+  const vals    = tickers.map(t => parseFloat(pnlByTicker[t].toFixed(2)));
+  const colors  = vals.map(v => v >= 0 ? 'rgba(63,185,80,0.7)' : 'rgba(248,81,73,0.7)');
+  const borders = vals.map(v => v >= 0 ? '#3fb950' : '#f85149');
+
+  const ctxAtt = document.getElementById('chart-attribution').getContext('2d');
+  if (attributionChart) { attributionChart.destroy(); attributionChart = null; }
+  attributionChart = new Chart(ctxAtt, {
+    type: 'bar',
+    data: {
+      labels: tickers,
+      datasets: [{
+        label: 'Realized P&L ($)',
+        data: vals,
+        backgroundColor: colors,
+        borderColor: borders,
+        borderWidth: 1,
+        borderRadius: 3,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b949e', font: { size: 11 }, callback: v => '$' + Number(v).toLocaleString() }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: '#21262d' } }
+      }
+    }
+  });
+}
+
 // ── config badges ──────────────────────────────────────────────────────────
 async function loadConfig() {
   try {
@@ -1848,6 +2378,7 @@ async function loadConfig() {
 
 // ── init ───────────────────────────────────────────────────────────────────
 loadConfig();
+loadDashboard();
 </script>
 </body>
 </html>
