@@ -1,7 +1,11 @@
 [project]
-name = "prediction-wallet-1"
-version = "0.1.0"
-description = "Autonomous AI portfolio rebalancing agent"
+name = "prediction-wallet"
+version = "1.0.0"
+description = "AI-governed portfolio rebalancing agent with deterministic policy validation and audit trails"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Rayan Barreddine", email = "rayan.barreddine@gmail.com" }]
+keywords = ["portfolio", "AI", "finance", "rebalancing", "pydantic-ai", "governance"]
 requires-python = ">=3.13"
 dependencies = [
     # Core AI / Agent
@@ -24,6 +28,11 @@ dependencies = [
 ]
 
 [dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
 ]
