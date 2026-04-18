@@ -7,6 +7,7 @@ import pandas as pd
 from scipy import stats
 
 from config import RISK_FREE_RATE
+import engine.risk as risk
 
 
 def cumulative_return(history: list[dict]) -> float:
@@ -242,67 +243,32 @@ def compute_alpha_beta(
     if y.empty or x.empty or len(y) < 2:
         return 0.0, 1.0
     
-    slope, intercept, _, _, _ = stats.linregress(x, y)
-    # Annualize alpha: (1 + intercept)^252 - 1 (approximation) or intercept * 252
-    ann_alpha = float(intercept * 252)
-    beta = float(slope)
+    try:
+        slope, intercept, _, _, _ = stats.linregress(x, y)
+        # Annualize alpha: (1 + intercept)^252 - 1 (approximation) or intercept * 252
+        ann_alpha = float(intercept * 252)
+        beta = float(slope)
+    except Exception:
+        # Fallback for identical inputs or other regression failures
+        ann_alpha = 0.0
+        beta = 1.0
+    
     return ann_alpha, beta
 
 
 def parametric_var(returns: pd.Series, confidence: float = 0.95, portfolio_value: float = 1.0) -> float:
-    """Parametric (Gaussian) Value at Risk.
-
-    Args:
-        returns: daily return series
-        confidence: confidence level (default 0.95)
-        portfolio_value: total portfolio value in dollars
-
-    Returns:
-        VaR as a positive dollar loss (e.g. 1500.0 means "lose up to $1500 at 95% confidence")
-    """
-    if returns.empty or returns.std() == 0:
-        return 0.0
-    z = stats.norm.ppf(1 - confidence)
-    var_pct = -(returns.mean() + z * returns.std())
-    return float(var_pct * portfolio_value)
+    """Parametric (Gaussian) Value at Risk."""
+    return risk.parametric_var(returns, confidence, portfolio_value)
 
 
 def conditional_var(returns: pd.Series, confidence: float = 0.95, portfolio_value: float = 1.0) -> float:
-    """Conditional VaR (Expected Shortfall) — mean loss beyond VaR threshold.
-
-    Args:
-        returns: daily return series
-        confidence: confidence level (default 0.95)
-        portfolio_value: total portfolio value in dollars
-
-    Returns:
-        CVaR as a positive dollar loss
-    """
-    if returns.empty:
-        return 0.0
-    cutoff = returns.quantile(1 - confidence)
-    tail = returns[returns <= cutoff]
-    if tail.empty:
-        return 0.0
-    cvar_pct = -tail.mean()
-    return float(cvar_pct * portfolio_value)
+    """Conditional VaR (Expected Shortfall) — mean loss beyond VaR threshold."""
+    return risk.conditional_var(returns, confidence, portfolio_value)
 
 
 def historical_var(returns: pd.Series, confidence: float = 0.95, portfolio_value: float = 1.0) -> float:
-    """Historical (empirical) Value at Risk — no distributional assumption.
-
-    Args:
-        returns: daily return series
-        confidence: confidence level (default 0.95)
-        portfolio_value: total portfolio value in dollars
-
-    Returns:
-        VaR as a positive dollar loss
-    """
-    if returns.empty:
-        return 0.0
-    cutoff = returns.quantile(1 - confidence)
-    return float(max(0.0, -cutoff * portfolio_value))
+    """Historical (empirical) Value at Risk — no distributional assumption."""
+    return risk.historical_var(returns, confidence, portfolio_value)
 
 
 def sortino_ratio(returns: pd.Series, rf: float = RISK_FREE_RATE, mar: float = 0.0) -> float:
@@ -348,6 +314,7 @@ def performance_report(
     trades: list[dict],
     benchmark_history: list[dict] | None = None,
     exposures_history: list[dict] | None = None,
+    returns_df: pd.DataFrame | None = None,
 ) -> dict:
     """Compute a comprehensive performance report.
 
@@ -356,6 +323,7 @@ def performance_report(
         trades: executed trade list
         benchmark_history: optional benchmark history in same format
         exposures_history: optional list of exposure dicts over time
+        returns_df: optional DataFrame of daily returns for correlation-adjusted VaR
 
     Returns:
         Dict with all performance metrics, both gross and net of costs
@@ -401,6 +369,12 @@ def performance_report(
             report["avg_gross_exposure"] = float(exp_df["gross_exposure"].mean()) if "gross_exposure" in exp_df.columns else 1.0
             report["avg_net_exposure"] = float(exp_df["net_exposure"].mean()) if "net_exposure" in exp_df.columns else 1.0
             report["max_leverage"] = float(exp_df["leverage_used"].max()) if "leverage_used" in exp_df.columns else 1.0
+            
+            # Correlation-adjusted VaR (using latest weights)
+            if returns_df is not None and not returns_df.empty:
+                last_exp = exposures_history[-1]
+                weights = last_exp.get("single_name_concentration", {})
+                report["var_95_corr_adj"] = risk.correlation_adjusted_var(weights, returns_df, 0.95, avg_value)
     else:
         report["avg_gross_exposure"] = 1.0
         report["avg_net_exposure"] = 1.0
