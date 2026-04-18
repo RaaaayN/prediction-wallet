@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.runner import build_cycle_args, stream_command
-from api.auth import Role, get_current_user, requires_role
+from api.auth import Role, User, get_current_user, requires_role
 from api.models import (
     ConfigResponse, PortfolioResponse, PositionRow, 
     MarketStatusResponse, OnboardingStatusResponse
@@ -244,7 +244,12 @@ async def get_positions(cycle_id: str | None = Query(None), _: User = Depends(ge
 @app.get("/api/market-status", response_model=MarketStatusResponse)
 async def get_market_status(_: User = Depends(get_current_user)):
     from db.repository import get_market_data_status
-    return get_market_data_status()
+
+    rows = get_market_data_status()
+    return {
+        "tickers": [row["ticker"] for row in rows],
+        "last_refresh": {row["ticker"]: row.get("refreshed_at") for row in rows},
+    }
 
 
 @app.get("/api/backtest")

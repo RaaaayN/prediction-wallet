@@ -18,7 +18,7 @@ const Traces: React.FC = () => {
     const fetchData = async () => {
       try {
         const path = cycleFromUrl
-          ? `/api/traces?cycle=${encodeURIComponent(cycleFromUrl)}&limit=500`
+          ? `/api/traces?cycle_id=${encodeURIComponent(cycleFromUrl)}&limit=500`
           : '/api/traces?limit=100';
         const data = await ApiService.get<DecisionTrace[]>(path);
         setTraces(data);
