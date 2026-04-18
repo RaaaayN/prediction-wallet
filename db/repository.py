@@ -611,6 +611,57 @@ def update_idea_book_entry(
 
 
 # ---------------------------------------------------------------------------
+# IAM / User Management Repository Functions
+# ---------------------------------------------------------------------------
+
+def get_user_by_api_key(
+    api_key: str,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> dict | None:
+    """Retrieve a user by their API key."""
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    with get_connection(resolved) as conn:
+        row = conn.execute(
+            q("SELECT * FROM users WHERE api_key = ? AND is_active = 1"),
+            (api_key,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_user(
+    user_data: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    """Create a new user in the persistent store."""
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    if "created_at" not in user_data:
+        user_data["created_at"] = utc_now_iso()
+    
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q("""
+                INSERT INTO users (api_key, username, role, is_active, is_service_account, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """),
+            (
+                user_data["api_key"],
+                user_data["username"],
+                user_data["role"],
+                user_data.get("is_active", 1),
+                user_data.get("is_service_account", 0),
+                user_data["created_at"],
+            ),
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
 # Trading Core v1 Repository Functions
 # ---------------------------------------------------------------------------
 

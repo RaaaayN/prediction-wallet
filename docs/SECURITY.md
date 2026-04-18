@@ -2,33 +2,40 @@
 
 This document outlines the security architecture and authentication mechanisms introduced in the **Fondation** phase.
 
-## API Authentication (Opt-in)
+## API Authentication
 
-The Prediction Wallet API uses a header-based API Key authentication system. It is designed to be **opt-in**: if no API keys are configured in the environment, the API defaults to a "Super Admin" mode where all requests are permitted.
+The Prediction Wallet API uses a header-based authentication system. It supports both **Persistent DB-backed Users** and **Static Environment Keys**.
+
+### User Management (Persistent)
+
+The system maintains a `users` table in the database, allowing for multiple users and service accounts.
+
+- **Storage**: Keys are stored in the `users` table.
+- **Service Accounts**: Users can be flagged as `is_service_account` for programmatic access.
+- **Bootstrapping**: The `python main.py init` command prompts to create an initial Admin user if the database is empty.
 
 ### Role-Based Access Control (RBAC)
 
 Three roles are supported:
 
-| Role | Environment Variable | Permissions |
-|------|----------------------|-------------|
-| **ADMIN** | `API_KEY_ADMIN` | Full access to all endpoints (Read + Write + Execute). |
-| **TRADER** | `API_KEY_TRADER` | Access to research, idea book, and trade execution. |
-| **VIEWER** | `API_KEY_VIEWER` | Read-only access to portfolio, positions, and analytics. |
+| Role | Permissions |
+|------|-------------|
+| **ADMIN** | Full access to all endpoints (Read + Write + Execute). |
+| **TRADER** | Access to research, idea book, and trade execution. |
+| **VIEWER** | Read-only access to portfolio, positions, and analytics. |
 
-### Configuration
+### Configuration (Backward Compatibility)
 
-Add the following to your `.env` file to enable authentication:
+Static API keys in the `.env` file are still supported for backward compatibility and simple deployments:
 
 ```env
-# API Keys (leave empty to disable auth)
+# Static API Keys (fallback if not found in DB)
 API_KEY_ADMIN=your-admin-secret-key
 API_KEY_TRADER=your-trader-secret-key
 API_KEY_VIEWER=your-viewer-secret-key
-
-# CORS (comma-separated origins)
-ALLOWED_ORIGINS=http://localhost:5173,http://localhost:8000
 ```
+
+If no keys are configured in the environment AND the database has no users, the API defaults to an **"Opt-in mode"** where all requests are permitted with Super Admin privileges.
 
 ### Usage
 

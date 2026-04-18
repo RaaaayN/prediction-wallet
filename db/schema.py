@@ -236,6 +236,15 @@ CREATE TABLE IF NOT EXISTS cash_movements (
     description      TEXT
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    api_key            TEXT PRIMARY KEY,
+    username           TEXT NOT NULL,
+    role               TEXT NOT NULL,
+    is_active          INTEGER DEFAULT 1,
+    is_service_account INTEGER DEFAULT 0,
+    created_at         TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_cycle_id ON orders(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_order_events_order_id ON order_events(order_id);
 CREATE INDEX IF NOT EXISTS idx_trade_executions_v2_order_id ON trade_executions_v2(order_id);
@@ -489,6 +498,16 @@ POSTGRES_STATEMENTS: list[str] = [
         currency         TEXT DEFAULT 'USD',
         created_at       TEXT NOT NULL,
         description      TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        api_key            TEXT PRIMARY KEY,
+        username           TEXT NOT NULL,
+        role               TEXT NOT NULL,
+        is_active          INTEGER DEFAULT 1,
+        is_service_account INTEGER DEFAULT 0,
+        created_at         TEXT NOT NULL
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_orders_cycle_id ON orders(cycle_id)",

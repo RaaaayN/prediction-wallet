@@ -128,6 +128,37 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None):
     except Exception as e:
         print(f"Warning: Failed to sync to Trading Core ledger: {e}")
 
+    # 5. Bootstrap Admin User (IAM Fondation)
+    try:
+        from db.repository import create_user, get_connection, q
+        from config import MARKET_DB
+        import uuid
+        with get_connection(MARKET_DB) as conn:
+            user_count = conn.execute(q("SELECT COUNT(*) FROM users")).fetchone()[0]
+        
+        if user_count == 0:
+            print("\n--- IAM Fondation: Admin Setup ---")
+            ans = input("No users found in DB. Create an initial admin user? [y/N] ").strip().lower()
+            if ans == "y":
+                username = input("Enter admin username [admin]: ").strip() or "admin"
+                api_key = input("Enter API key (leave blank to auto-generate): ").strip()
+                if not api_key:
+                    api_key = f"pk_admin_{uuid.uuid4().hex[:16]}"
+                    print(f"Generated API key: {api_key}")
+                
+                create_user({
+                    "api_key": api_key,
+                    "username": username,
+                    "role": "admin",
+                    "is_active": 1,
+                    "is_service_account": 0
+                })
+                print(f"Admin user '{username}' created successfully.")
+            else:
+                print("Skipping admin creation. System will use static keys or opt-in mode.")
+    except Exception as e:
+        print(f"Warning: Failed to bootstrap admin user: {e}")
+
     print("Portfolio initialized.")
 
 

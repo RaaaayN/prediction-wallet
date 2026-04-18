@@ -27,7 +27,8 @@ The system strictly enforces a **3-layer deterministic policy engine** (`agents/
 - `agents/`: Pydantic AI orchestrator, deterministic policy engine, and Pydantic models.
 - `engine/`: Financial logic (risk, performance, Monte Carlo, regime detection, portfolio math).
 - `services/`: Gateways for market data, simulated execution, and reporting.
-- `db/`: SQLite repository, schema, and immutable event sourcing logic.
+- `db/`: SQLite/PostgreSQL repository, schema, and persistent IAM management.
+- `api/`: FastAPI endpoints with RBAC (Database-backed or static keys).
 - `strategies/`: Rebalancing strategies (threshold-based and calendar-based).
 - `profiles/`: YAML configurations for portfolio allocations and policy parameters.
 - `ui/`: Single-page HTML/JS interface for real-time visualization.
