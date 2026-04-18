@@ -205,8 +205,8 @@ class MarketService:
         init_db(self.db_path if not USE_POSTGRES else None)
         return self.fetch_and_store(tickers, period=period, force=True)
 
-    @retry(max_attempts=3, base_delay=1.0)
     @market_cb
+    @retry(max_attempts=3, base_delay=1.0)
     def _download(self, ticker: str, period: str) -> pd.DataFrame:
         yf = _require_yfinance()
         df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=True)
