@@ -23,6 +23,8 @@ No trade executes without passing three deterministic policy layers. Every decis
 
 ## Key Results
 
+- **Trading Core v1**: formal OMS and Aggregate Ledger as source of truth
+- **Middle Office**: automatic reconciliation engine and Transaction Cost Analysis (TCA)
 - **9 assets** across equities, bonds, and crypto — 4 configurable portfolio profiles
 - **3-layer policy engine** blocks trades via hard rules (kill switch), market context (confidence, stale data), and per-trade constraints (sector concentration, notional caps)
 - **Event sourcing + replay**: immutable `cycle_events` log reconstructs each governed cycle
@@ -30,11 +32,10 @@ No trade executes without passing three deterministic policy layers. Every decis
 - **Regime-aware policy**: rolling volatility percentile classifies `bull / normal / bear / risk_off`
 - **Async market pipeline**: parallel fetch path records per-ticker latency
 - **OpenTelemetry-ready tracing**: cycle stage spans are emitted when OTel is available
-- **7 risk metrics**: parametric VaR, historical VaR, CVaR, Sharpe, Sortino, Calmar, max drawdown
-- **4 crisis stress scenarios**: COVID-19, 2008 GFC, rate shock, tech selloff
+- **Industrialized Risk**: Asset-class based stress tests and real-time drawdown monitoring
 - **Full audit trail**: every cycle stage traced in SQLite (`decision_traces` table)
 - **Kill switch**: deterministic drawdown guard halts all execution at ≥ 10%
-- **23+ tests** covering policy engine, risk engine, strategies, and market data
+- **30+ tests** covering policy engine, trading core, reconciliation, and risk
 
 ---
 

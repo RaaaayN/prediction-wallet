@@ -18,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.runner import build_cycle_args, stream_command
 from api.auth import Role, User, get_current_user, requires_role
+from api.middle_office import router as middle_office_router
 from api.models import (
     ConfigResponse, PortfolioResponse, PositionRow, 
     MarketStatusResponse, OnboardingStatusResponse,
@@ -27,6 +28,9 @@ from api.models import (
 from config import ALLOWED_ORIGINS
 from utils.telemetry import trace_request
 
+app = FastAPI(title="Prediction Wallet API")
+
+app.include_router(middle_office_router)
 
 def _prefetch_price_history(tickers: list[str], *, min_days: int, period: str = "2y") -> None:
     """Warm the market cache for tickers when OHLCV is missing (yfinance on first hit)."""
@@ -373,7 +377,7 @@ async def get_correlation(days: int = Query(90, ge=10, le=365), _: User = Depend
 async def get_stress(_: User = Depends(get_current_user)):
     import json
     from config import PORTFOLIO_FILE
-    from engine.backtest import run_stress_test
+    from engine.stress_testing import run_stress_test_v2
     from services.market_service import MarketService
     try:
         with open(PORTFOLIO_FILE, encoding="utf-8") as f:
@@ -385,7 +389,7 @@ async def get_stress(_: User = Depends(get_current_user)):
     if tickers:
         _prefetch_price_history(tickers, min_days=30)
     prices = MarketService().get_latest_prices(tickers)
-    return run_stress_test(portfolio, prices)
+    return run_stress_test_v2(portfolio, prices)
 
 
 @app.get("/api/config", response_model=ConfigResponse)

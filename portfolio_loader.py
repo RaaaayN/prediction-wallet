@@ -43,9 +43,9 @@ def load_profile(name: str) -> dict:
 
 
 def get_active_profile() -> dict:
-    """Load the profile specified by the PORTFOLIO_PROFILE env var (default: balanced)."""
-    name = os.getenv("PORTFOLIO_PROFILE", "balanced")
-    return load_profile(name)
+    """Load the profile specified by settings (default: balanced)."""
+    from settings import settings
+    return load_profile(settings.portfolio_profile)
 
 
 def _validate(data: dict, name: str) -> None:

@@ -79,5 +79,13 @@ pytest tests/ -v
 
 - **Fondation**: la gouvernance applicative est déjà en place ou amorcée dans le code (`agents/policies.py`, traces enrichies, init DB durci, repository clarifié), incluant désormais RBAC et contrats API typés.
 - **Trading core**: **Phase 1 implémentée** (`trading_core/`). Inclut Security Master, Market Data Handler canonique, OMS v1, Ledger et Simulation Broker Adapter. Intégré de façon opt-in via `TRADING_CORE_ENABLED`.
-- **Risk & middle office**: les briques d'analyse de risque et d'audit existent déjà en partie, mais la réconciliation, le TCA industrialisé, les workflows d'exception et le reporting réglementaire restent au backlog.
+- **Risk & middle office**: **Phase 1 implémentée** (`services/middle_office_service.py`, `engine/stress_testing.py`). Inclut la réconciliation automatique, le TCA (Transaction Cost Analysis) par cycle, et des stress tests industrialisés par classe d'actifs.
+
+## Architecture Guidelines
+
+### Dynamic Configuration
+Le projet utilise un système de configuration dynamique dans `config.py` pour permettre le monkeypatching propre durant les tests (via `sys.modules[__name__].__class__ = ConfigModule`). 
+- Toujours importer les constantes depuis `config` (ex: `from config import MARKET_DB`).
+- Les composants critiques (`db/connection.py`, `db/repository.py`) résolvent ces valeurs à l'exécution pour honorer les overrides de test.
+- Pour isoler un test DB: utiliser `monkeypatch.setattr(config.settings, "market_db", tmp_path / "test.db")` et appeler `db.connection.clear_connection_cache()`.
 - Le document de référence pour suivre l'écart entre cible et réel est `deep-research-report (1).md`; les rapports d'équipe dans `docs/team/` donnent le détail d'implémentation courant.

@@ -8,7 +8,6 @@ from typing import Any
 
 import pandas as pd
 
-from config import MARKET_DB, USE_POSTGRES
 from db.connection import excluded_qualifier, get_connection, get_sqlalchemy_engine, q
 from engine.hedge_fund import compute_exposures
 from engine.portfolio import compute_drift, compute_portfolio_value, compute_weights
@@ -24,10 +23,17 @@ def _resolve_context(runtime_context=None, profile_name: str | None = None):
 
 
 def _resolve_db_path(db_path: str | None = None, *, runtime_context=None, profile_name: str | None = None) -> str:
-    if USE_POSTGRES:
-        return MARKET_DB
+    import config
+    if config.USE_POSTGRES:
+        return config.MARKET_DB
     if db_path:
         return db_path
+    
+    # Honor config.MARKET_DB if it's explicitly set (e.g. in tests)
+    # or if we are not forcing a specific profile
+    if not profile_name and config.MARKET_DB != "data/market.db":
+        return config.MARKET_DB
+
     ctx = _resolve_context(runtime_context, profile_name)
     return ctx.market_db
 

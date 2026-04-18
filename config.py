@@ -4,79 +4,95 @@ All existing imports (from config import TARGET_ALLOCATION, ...) continue to wor
 Switch profiles at runtime via the PORTFOLIO_PROFILE env var or --profile CLI flag.
 """
 
+import sys
 from settings import settings
 from portfolio_loader import get_active_profile
 
 # ---------------------------------------------------------------------------
-# Scalar settings from pydantic-settings (.env / env vars)
+# Dynamic properties handler
 # ---------------------------------------------------------------------------
 
-ANTHROPIC_API_KEY: str = settings.anthropic_api_key
-GEMINI_API_KEY: str = settings.gemini_api_key
-AI_PROVIDER: str = settings.ai_provider
-CLAUDE_MODEL: str = settings.claude_model
-GEMINI_MODEL: str = settings.gemini_model
+class ConfigModule(sys.modules[__name__].__class__):
+    def __getattr__(self, name):
+        # 1. Check settings (env vars / defaults)
+        if hasattr(settings, name.lower()):
+            return getattr(settings, name.lower())
+        
+        # 2. Check active profile
+        profile = get_active_profile()
+        if name == "TARGET_ALLOCATION": return profile["target_allocation"]
+        if name == "INITIAL_CAPITAL": return profile["initial_capital"]
+        if name == "DRIFT_THRESHOLD": return profile["drift_threshold"]
+        if name == "KILL_SWITCH_DRAWDOWN": return profile["kill_switch_drawdown"]
+        if name == "SLIPPAGE_EQUITIES": return profile["slippage_equities"]
+        if name == "SLIPPAGE_CRYPTO": return profile["slippage_crypto"]
+        if name == "HEDGE_FUND_PROFILE": return profile.get("hedge_fund") or {}
 
-DATA_DIR: str = settings.data_dir
-DATABASE_URL: str | None = settings.database_url
-USE_POSTGRES: bool = bool(DATABASE_URL)
-MARKET_DB: str = settings.market_db
-PORTFOLIO_FILE: str = settings.portfolio_file
-TRADES_LOG: str = settings.trades_log
-REPORTS_DIR: str = settings.reports_dir
-MAX_TRADES_PER_CYCLE: int = settings.max_trades_per_cycle
-MAX_ORDER_FRACTION_OF_PORTFOLIO: float = settings.max_order_fraction_of_portfolio
-MARKET_DATA_TTL_SECONDS: int = settings.market_data_ttl_seconds
+        # 3. Special derived / hardcoded
+        if name == "USE_POSTGRES": return bool(self.DATABASE_URL)
+        if name == "DATABASE_URL": return settings.database_url
+        if name == "ALLOWED_ORIGINS": return [o.strip() for o in settings.allowed_origins.split(",")]
+        if name == "CRYPTO_TICKERS": 
+            ta = profile["target_allocation"]
+            return {t for t in ta if "USD" in t and "-" in t}
+        if name == "SECTOR_MAP":
+            return {
+                "AAPL": "tech", "MSFT": "tech", "GOOGL": "tech", "AMZN": "tech", "NVDA": "tech",
+                "TLT": "bonds", "BND": "bonds",
+                "BTC-USD": "crypto", "ETH-USD": "crypto",
+            }
+        if name == "MAX_SECTOR_CONCENTRATION": return 0.55
+        if name == "CALENDAR_FREQUENCY": return "weekly"
+        if name == "DEFAULT_HISTORY_DAYS": return 90
+        
+        # Fallback to module globals (like this class itself)
+        if name in globals():
+            return globals()[name]
+            
+        raise AttributeError(f"module {__name__} has no attribute {name}")
 
-# Security (Fondation)
-API_KEY_ADMIN: str = settings.api_key_admin
-API_KEY_TRADER: str = settings.api_key_trader
-API_KEY_VIEWER: str = settings.api_key_viewer
-ALLOWED_ORIGINS: list[str] = [o.strip() for o in settings.allowed_origins.split(",")]
-
-TRADING_CORE_ENABLED: bool = settings.trading_core_enabled
-
-AGENT_BACKEND: str = settings.agent_backend
-EXECUTION_MODE: str = settings.execution_mode
-MCP_PROFILE: str = settings.mcp_profile
-MCP_TIMEOUT_SECONDS: int = settings.mcp_timeout_seconds
-
-BENCHMARK_TICKER: str = settings.benchmark_ticker
-DEFAULT_HISTORY_DAYS: int = 90
-VOLATILITY_WINDOW: int = settings.volatility_window
-RISK_FREE_RATE: float = settings.risk_free_rate
-
-# ---------------------------------------------------------------------------
-# Profile-based settings (target allocation, thresholds, slippage)
-# ---------------------------------------------------------------------------
-
-_profile = get_active_profile()
-
-TARGET_ALLOCATION: dict[str, float] = _profile["target_allocation"]
-INITIAL_CAPITAL: float = _profile["initial_capital"]
-DRIFT_THRESHOLD: float = _profile["drift_threshold"]
-KILL_SWITCH_DRAWDOWN: float = _profile["kill_switch_drawdown"]
-SLIPPAGE_EQUITIES: float = _profile["slippage_equities"]
-SLIPPAGE_CRYPTO: float = _profile["slippage_crypto"]
-HEDGE_FUND_PROFILE: dict = _profile.get("hedge_fund") or {}
+# This trick replaces the module with a class instance so __getattr__ works globally
+sys.modules[__name__].__class__ = ConfigModule
 
 # ---------------------------------------------------------------------------
-# Derived constants
+# Type hints for IDEs
 # ---------------------------------------------------------------------------
-
-CRYPTO_TICKERS: set[str] = {t for t in TARGET_ALLOCATION if "USD" in t and "-" in t}
-
-SECTOR_MAP: dict[str, str] = {
-    "AAPL": "tech", "MSFT": "tech", "GOOGL": "tech", "AMZN": "tech", "NVDA": "tech",
-    "TLT": "bonds", "BND": "bonds",
-    "BTC-USD": "crypto", "ETH-USD": "crypto",
-}
-
-MAX_SECTOR_CONCENTRATION: float = 0.55  # soft block: 5pp above the 50% tech target
-
-CALENDAR_FREQUENCY: str = "weekly"  # "weekly" or "monthly" for CalendarStrategy
-
-_target_sum = sum(TARGET_ALLOCATION.values())
-assert _target_sum == 0.0 or abs(_target_sum - 1.0) < 1e-6, (
-    f"Profile '{_profile['name']}' TARGET_ALLOCATION must sum to 1.0 or be a zeroed hedge-fund seed book"
-)
+ANTHROPIC_API_KEY: str
+GEMINI_API_KEY: str
+AI_PROVIDER: str
+CLAUDE_MODEL: str
+GEMINI_MODEL: str
+DATA_DIR: str
+DATABASE_URL: str | None
+USE_POSTGRES: bool
+MARKET_DB: str
+PORTFOLIO_FILE: str
+TRADES_LOG: str
+REPORTS_DIR: str
+MAX_TRADES_PER_CYCLE: int
+MAX_ORDER_FRACTION_OF_PORTFOLIO: float
+MARKET_DATA_TTL_SECONDS: int
+API_KEY_ADMIN: str
+API_KEY_TRADER: str
+API_KEY_VIEWER: str
+ALLOWED_ORIGINS: list[str]
+TRADING_CORE_ENABLED: bool
+AGENT_BACKEND: str
+EXECUTION_MODE: str
+MCP_PROFILE: str
+MCP_TIMEOUT_SECONDS: int
+BENCHMARK_TICKER: str
+DEFAULT_HISTORY_DAYS: int
+VOLATILITY_WINDOW: int
+RISK_FREE_RATE: float
+TARGET_ALLOCATION: dict[str, float]
+INITIAL_CAPITAL: float
+DRIFT_THRESHOLD: float
+KILL_SWITCH_DRAWDOWN: float
+SLIPPAGE_EQUITIES: float
+SLIPPAGE_CRYPTO: float
+HEDGE_FUND_PROFILE: dict
+CRYPTO_TICKERS: set[str]
+SECTOR_MAP: dict[str, str]
+MAX_SECTOR_CONCENTRATION: float
+CALENDAR_FREQUENCY: str

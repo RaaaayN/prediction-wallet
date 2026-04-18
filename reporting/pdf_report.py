@@ -41,14 +41,58 @@ class PDFReporter:
         story = []
         story.extend(self._build_header(cycle_id))
         story.extend(self._build_executive_summary(portfolio, prices))
+        story.extend(self._build_middle_office_summary())
         story.extend(self._build_allocation(portfolio, prices))
         story.extend(self._build_decision_log(trades))
+        story.extend(self._build_tca_section(cycle_id))
         story.extend(self._build_risk_metrics(market_data))
         story.extend(self._build_performance_attribution(portfolio, trades))
         story.extend(self._build_anomaly_flags(trades, market_data))
         story.extend(self._build_stress_test(stress_results or []))
         doc.build(story)
         return filename
+
+    def _build_middle_office_summary(self) -> list:
+        from services.middle_office_service import MiddleOfficeService
+        svc = MiddleOfficeService()
+        breaks = svc.reconcile_holdings()
+        
+        elements = [Paragraph("1b. Middle Office Reconciliation", self.styles["SectionHeader"])]
+        if not breaks:
+            elements.append(Paragraph("STATUS: MATCH. Legacy state and Trading Core Ledger are synchronized.", self.styles["Body"]))
+        else:
+            elements.append(Paragraph(f"STATUS: BREAK ({len(breaks)} discrepancy found).", self.styles["Alert"]))
+            data = [["Type", "Subject", "Legacy", "Ledger", "Diff"]]
+            for b in breaks:
+                data.append([b.break_type, b.subject, f"{b.legacy_value:.4f}", f"{b.ledger_value:.4f}", f"{b.diff:.4f}"])
+            table = Table(data, colWidths=[4 * cm, 3 * cm, 3 * cm, 3 * cm, 3 * cm])
+            table.setStyle(self._data_table_style())
+            elements.append(table)
+        elements.append(Spacer(1, 0.4 * cm))
+        return elements
+
+    def _build_tca_section(self, cycle_id: str) -> list:
+        from services.middle_office_service import MiddleOfficeService
+        svc = MiddleOfficeService()
+        try:
+            report = svc.generate_tca_report(cycle_id)
+            if report.total_trades == 0:
+                return []
+            
+            elements = [Paragraph("3b. Transaction Cost Analysis (TCA)", self.styles["SectionHeader"])]
+            summary_data = [
+                ["Metric", "Value"],
+                ["Total Notional", f"${report.total_notional:,.2f}"],
+                ["Total Slippage Cost", f"${report.total_slippage_dollars:,.2f}"],
+                ["Avg Slippage (bps)", f"{report.avg_slippage_bps:.1f} bps"]
+            ]
+            table = Table(summary_data, colWidths=[7 * cm, 7 * cm])
+            table.setStyle(self._summary_table_style())
+            elements.append(table)
+            elements.append(Spacer(1, 0.4 * cm))
+            return elements
+        except Exception:
+            return []
 
     def _build_header(self, cycle_id: str) -> list:
         return [

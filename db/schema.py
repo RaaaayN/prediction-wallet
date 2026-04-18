@@ -577,7 +577,7 @@ def init_db(db_path: str | None = None) -> None:
     """Create tables. Uses PostgreSQL when ``DATABASE_URL`` is set, else SQLite at ``db_path``."""
     from config import MARKET_DB, USE_POSTGRES
 
-    if USE_POSTGRES:
+    if USE_POSTGRES and db_path is None:
         _init_postgres()
         return
     path = db_path or MARKET_DB

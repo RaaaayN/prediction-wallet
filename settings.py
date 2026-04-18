@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     mcp_profile: str = Field(default="none")
     mcp_timeout_seconds: int = Field(default=5)
 
+    portfolio_profile: str = Field(default="balanced", env="PORTFOLIO_PROFILE")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
