@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from config import (
     CRYPTO_TICKERS,
@@ -99,7 +99,12 @@ class EventDrivenBacktester:
         
         return combined_prices, combined_volumes
 
-    def run(self, strategy_type: str = "threshold", benchmark_ticker: str = BENCHMARK_TICKER) -> BacktestResult:
+    def run(
+        self, 
+        strategy_type: str = "threshold", 
+        benchmark_ticker: str = BENCHMARK_TICKER,
+        sentiment_df: Optional[pd.DataFrame] = None,
+    ) -> BacktestResult:
         tickers = list(TARGET_ALLOCATION.keys())
         prices_df, volumes_df = self._get_data(tickers)
         
@@ -136,7 +141,6 @@ class EventDrivenBacktester:
 
         last_rebalance_idx = 0
 
-        
         for idx, (timestamp, current_prices_series) in enumerate(prices_df.iterrows()):
             current_prices = current_prices_series.to_dict()
             portfolio_value = portfolio["cash"] + sum(
@@ -160,18 +164,30 @@ class EventDrivenBacktester:
             exposures_history.append({"date": str(timestamp.date()), **exp})
 
             should_rebalance = False
-            if strategy_type == "threshold":
+            orders = []
+            
+            if strategy_type == "ensemble":
+                from strategies.ensemble import EnsembleStrategy
+                ensemble = EnsembleStrategy(TARGET_ALLOCATION, DRIFT_THRESHOLD)
+                # Get sentiment for this timestamp
+                current_sentiment = sentiment_df.loc[timestamp].to_dict() if sentiment_df is not None and timestamp in sentiment_df.index else {}
+                orders = ensemble.get_trades(portfolio, current_prices, current_sentiment)
+                if orders:
+                    should_rebalance = True
+            elif strategy_type == "threshold":
                 for t, target_w in TARGET_ALLOCATION.items():
                     current_w = (portfolio["positions"].get(t, 0.0) * current_prices.get(t, 0.0)) / portfolio_value if portfolio_value > 0 else 0.0
                     if abs(current_w - target_w) > DRIFT_THRESHOLD:
                         should_rebalance = True
                         break
+                if should_rebalance:
+                    orders = generate_rebalance_orders(portfolio, current_prices, TARGET_ALLOCATION)
             elif strategy_type == "calendar":
                 if idx - last_rebalance_idx >= 7:
                     should_rebalance = True
+                    orders = generate_rebalance_orders(portfolio, current_prices, TARGET_ALLOCATION)
             
-            if should_rebalance:
-                orders = generate_rebalance_orders(portfolio, current_prices, TARGET_ALLOCATION)
+            if should_rebalance and orders:
                 # Filter orders by risk constraints
                 safe_orders = self._filter_risk_constrained_orders(portfolio, orders, current_prices, timestamp)
                 executed_in_cycle = self._apply_orders(portfolio, safe_orders, current_prices, timestamp)
