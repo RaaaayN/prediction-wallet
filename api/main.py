@@ -28,31 +28,11 @@ from api.models import (
 from config import ALLOWED_ORIGINS
 from utils.telemetry import trace_request
 
-app = FastAPI(title="Prediction Wallet API")
+app = FastAPI(title="Prediction Wallet API", version="1.0.0")
 
 app.include_router(middle_office_router)
 
 def _prefetch_price_history(tickers: list[str], *, min_days: int, period: str = "2y") -> None:
-    """Warm the market cache for tickers when OHLCV is missing (yfinance on first hit)."""
-    if not tickers:
-        return
-    from services.market_service import MarketService
-
-    svc = MarketService()
-    need: list[str] = []
-    for t in tickers:
-        hist = svc.get_historical(t, days=min_days + 90)
-        if hist is None or hist.empty or "Close" not in hist.columns:
-            need.append(t)
-    if not need:
-        return
-    try:
-        svc.fetch_and_store(need, period=period, force=False)
-    except Exception:
-        pass
-
-
-app = FastAPI(title="Prediction Wallet API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
