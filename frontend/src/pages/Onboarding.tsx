@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ApiService } from '../api/service';
 import type { OnboardingProfile } from '../types';
-import { ChevronRight, ChevronLeft, Rocket, CheckCircle2 } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Rocket, CheckCircle2, History } from 'lucide-react';
 
 interface Props {
   onComplete: () => void;
@@ -57,6 +57,23 @@ const Onboarding: React.FC<Props> = ({ onComplete }) => {
   const handleSelectProfile = (p: OnboardingProfile) => {
     setSelectedProfile(p);
     setCapital(String(p.initial_capital));
+  };
+
+  const handleResume = async () => {
+    if (!selectedProfile) return;
+    setLaunching(true);
+    try {
+      const res = await ApiService.post<{ ok: boolean }>('/api/onboarding/resume', {
+        profile: selectedProfile.name
+      });
+      if (res.ok) {
+        onComplete();
+      }
+    } catch (err: any) {
+      addLog(`Error resuming fund: ${err.message}`, 'error');
+    } finally {
+      setLaunching(false);
+    }
   };
 
   const handleLaunch = () => {
@@ -158,17 +175,22 @@ const Onboarding: React.FC<Props> = ({ onComplete }) => {
                 <button
                   key={p.name}
                   onClick={() => handleSelectProfile(p)}
-                  className={`text-left p-4 rounded-lg border transition-all ${
+                  className={`text-left p-4 rounded-lg border transition-all relative ${
                     selectedProfile?.name === p.name
                       ? 'border-primary bg-primary/10'
                       : 'border-[#30363d] bg-[#0d1117] hover:border-[#8b949e]'
                   }`}
                 >
-                  <div className="flex items-start justify-between mb-2">
+                  {p.has_existing_data && (
+                    <div className="absolute top-2 right-2 flex items-center gap-1 text-[9px] font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded border border-primary/30 uppercase">
+                      <History size={10} /> Existing
+                    </div>
+                  )}
+                  <div className="flex items-start justify-between mb-2 mr-12">
                     <span className="font-semibold text-sm text-[#e6edf3]">{p.label}</span>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${RISK_COLORS[p.risk_level] ?? 'text-[#8b949e]'}`}>
-                      {p.risk_level}
-                    </span>
+                  </div>
+                  <div className={`inline-block text-[10px] px-2 py-0.5 rounded-full font-medium mb-2 ${RISK_COLORS[p.risk_level] ?? 'text-[#8b949e]'}`}>
+                    {p.risk_level}
                   </div>
                   <p className="text-[11px] text-[#8b949e] mb-2 leading-relaxed">{p.description}</p>
                   <div className="flex flex-wrap gap-1">
@@ -192,33 +214,67 @@ const Onboarding: React.FC<Props> = ({ onComplete }) => {
         {step === 2 && selectedProfile && (
           <div className="flex flex-col gap-6 flex-1 justify-center">
             <div>
-              <h2 className="text-lg font-semibold text-[#e6edf3] mb-1">Initial Capital</h2>
-              <p className="text-[#8b949e] text-xs">Set the starting AUM for {selectedProfile.label}.</p>
+              <h2 className="text-lg font-semibold text-[#e6edf3] mb-1">
+                {selectedProfile.has_existing_data ? 'Review Fund' : 'Initial Capital'}
+              </h2>
+              <p className="text-[#8b949e] text-xs">
+                {selectedProfile.has_existing_data 
+                  ? 'This profile already has data. You can resume it or overwrite it with a fresh start.' 
+                  : `Set the starting AUM for ${selectedProfile.label}.`}
+              </p>
             </div>
-            <div className="bg-[#0d1117] border border-[#30363d] rounded-lg p-4 flex flex-col gap-3">
-              <div className="flex items-center gap-3">
-                <span className="text-[#8b949e] text-lg font-bold">$</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={capital}
-                  onChange={(e) => setCapital(e.target.value)}
-                  className="flex-1 bg-transparent text-2xl font-bold text-[#e6edf3] focus:outline-none"
-                  placeholder="100000"
-                />
+
+            {!selectedProfile.has_existing_data ? (
+              <div className="bg-[#0d1117] border border-[#30363d] rounded-lg p-4 flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-[#8b949e] text-lg font-bold">$</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={capital}
+                    onChange={(e) => setCapital(e.target.value)}
+                    className="flex-1 bg-transparent text-2xl font-bold text-[#e6edf3] focus:outline-none"
+                    placeholder="100000"
+                  />
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {[50000, 100000, 250000, 500000, 1000000].map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setCapital(String(v))}
+                      className="text-xs px-3 py-1 rounded border border-[#30363d] text-[#8b949e] hover:border-primary hover:text-primary transition-colors"
+                    >
+                      ${(v / 1000).toFixed(0)}K
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="flex gap-2 flex-wrap">
-                {[50000, 100000, 250000, 500000, 1000000].map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setCapital(String(v))}
-                    className="text-xs px-3 py-1 rounded border border-[#30363d] text-[#8b949e] hover:border-primary hover:text-primary transition-colors"
+            ) : (
+              <div className="bg-primary/5 border border-primary/20 rounded-xl p-6 flex flex-col items-center gap-4 text-center">
+                <History size={40} className="text-primary" />
+                <div>
+                  <h3 className="text-[#e6edf3] font-semibold">Existing Portfolio Detected</h3>
+                  <p className="text-[#8b949e] text-xs mt-1">Previous positions and trade history are available for this profile.</p>
+                </div>
+                <div className="flex gap-3 w-full">
+                  <button 
+                    onClick={handleResume}
+                    disabled={launching}
+                    className="flex-1 bg-primary hover:bg-primary/80 text-white text-xs font-bold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all"
                   >
-                    ${(v / 1000).toFixed(0)}K
+                    {launching ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <ChevronRight size={14} />}
+                    Resume Existing Fund
                   </button>
-                ))}
+                  <button 
+                    onClick={() => { /* Stay here but maybe toggle a flag to show fresh start anyway? */ setSelectedProfile({...selectedProfile, has_existing_data: false}) }}
+                    className="flex-1 bg-[#21262d] hover:bg-[#30363d] text-[#c9d1d9] text-xs font-bold py-2.5 rounded-lg transition-all"
+                  >
+                    Overwrite (Fresh Start)
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
+
             <div className="bg-[#1c2128] border border-[#30363d] rounded-lg p-3 text-xs text-[#8b949e] leading-relaxed">
               <span className="text-[#e6edf3] font-medium">{selectedProfile.label}</span> ·{' '}
               {selectedProfile.strategy_type} · {selectedProfile.tickers.length} positions
@@ -251,7 +307,7 @@ const Onboarding: React.FC<Props> = ({ onComplete }) => {
                 onClick={handleLaunch}
                 className="mt-2 w-full bg-primary hover:bg-primary/80 text-white font-semibold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
               >
-                <Rocket size={16} /> Launch Fund
+                <Rocket size={16} /> Launch Fresh Fund
               </button>
             )}
 

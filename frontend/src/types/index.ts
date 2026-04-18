@@ -134,6 +134,7 @@ export interface OnboardingProfile {
   typical_aum: string;
   initial_capital: number;
   tickers: string[];
+  has_existing_data?: boolean;
 }
 
 export interface TradePreview {
@@ -235,4 +236,23 @@ export interface TCAReport {
     slippage_bps: number;
     fees: number;
   }>;
+}
+
+export interface AppSettings {
+  ai_provider: string;
+  gemini_model: string;
+  claude_model: string;
+  has_gemini_key: boolean;
+  has_anthropic_key: boolean;
+  execution_mode: string;
+  agent_backend: string;
+  trading_core_enabled: boolean;
+  portfolio_profile: string;
+  max_trades_per_cycle: number;
+  max_order_fraction_of_portfolio: number;
+  benchmark_ticker: string;
+  market_data_ttl_seconds: number;
+  risk_free_rate: number;
+  drift_threshold: number;
+  kill_switch_drawdown: number;
 }

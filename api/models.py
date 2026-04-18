@@ -94,3 +94,42 @@ class CashMovementRow(BaseModel):
     amount: float
     created_at: str
     description: str | None = None
+
+
+class SettingsResponse(BaseModel):
+    ai_provider: str
+    gemini_model: str
+    claude_model: str
+    has_gemini_key: bool
+    has_anthropic_key: bool
+    execution_mode: str
+    agent_backend: str
+    trading_core_enabled: bool
+    portfolio_profile: str
+    max_trades_per_cycle: int
+    max_order_fraction_of_portfolio: float
+    benchmark_ticker: str
+    market_data_ttl_seconds: int
+    risk_free_rate: float
+    # Profile specific
+    drift_threshold: float
+    kill_switch_drawdown: float
+
+
+class SettingsUpdateRequest(BaseModel):
+    ai_provider: str | None = None
+    gemini_model: str | None = None
+    claude_model: str | None = None
+    gemini_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    execution_mode: str | None = None
+    agent_backend: str | None = None
+    trading_core_enabled: bool | None = None
+    portfolio_profile: str | None = None
+    max_trades_per_cycle: int | None = None
+    max_order_fraction_of_portfolio: float | None = None
+    benchmark_ticker: str | None = None
+    market_data_ttl_seconds: int | None = None
+    risk_free_rate: float | None = None
+    drift_threshold: float | None = None
+    kill_switch_drawdown: float | None = None

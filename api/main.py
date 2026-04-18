@@ -23,7 +23,8 @@ from api.models import (
     ConfigResponse, PortfolioResponse, PositionRow, 
     MarketStatusResponse, OnboardingStatusResponse,
     InstrumentRow, TradingCoreOrderRow, TradingCoreExecutionRow,
-    TradingCorePositionRow, CashMovementRow
+    TradingCorePositionRow, CashMovementRow,
+    SettingsResponse, SettingsUpdateRequest
 )
 from config import ALLOWED_ORIGINS
 from utils.telemetry import trace_request
@@ -454,6 +455,7 @@ async def onboarding_status(_: User = Depends(get_current_user)):
 @app.get("/api/onboarding/profiles")
 async def onboarding_profiles(_: User = Depends(get_current_user)):
     from portfolio_loader import load_profile
+    from runtime_context import build_runtime_context
 
     PROFILE_METADATA = {
         "balanced": {
@@ -497,6 +499,20 @@ async def onboarding_profiles(_: User = Depends(get_current_user)):
     for name, meta in PROFILE_METADATA.items():
         try:
             profile = load_profile(name)
+            
+            # Check for existing data
+            has_data = False
+            try:
+                ctx = build_runtime_context(name, ensure_storage=False)
+                p_path = Path(ctx.portfolio_file)
+                if p_path.exists():
+                    with open(p_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        # Has data if it has positions or history
+                        has_data = bool(data.get("positions")) or len(data.get("history", [])) > 0
+            except Exception:
+                pass
+
             result.append({
                 "name": name,
                 "label": meta["label"],
@@ -506,10 +522,120 @@ async def onboarding_profiles(_: User = Depends(get_current_user)):
                 "typical_aum": meta["typical_aum"],
                 "initial_capital": profile.get("initial_capital", 100000),
                 "tickers": list(profile.get("target_allocation", {}).keys()),
+                "has_existing_data": has_data,
             })
         except Exception:
             pass
     return result
+
+
+@app.post("/api/onboarding/resume")
+async def resume_fund(req: RunRequest, _: User = Depends(get_current_user)):
+    if not req.profile:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Profile name required")
+    
+    from dotenv import set_key
+    from settings import settings
+    
+    # Persist the choice
+    set_key(".env", "PORTFOLIO_PROFILE", req.profile)
+    settings.portfolio_profile = req.profile
+    
+    return {"ok": True, "message": f"Fund {req.profile} resumed."}
+
+
+# ── settings ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/settings", response_model=SettingsResponse)
+async def get_app_settings(_: User = Depends(get_current_user)):
+    from settings import settings
+    from portfolio_loader import get_active_profile
+    profile = get_active_profile()
+    
+    return {
+        "ai_provider": settings.ai_provider,
+        "gemini_model": settings.gemini_model,
+        "claude_model": settings.claude_model,
+        "has_gemini_key": bool(settings.gemini_api_key),
+        "has_anthropic_key": bool(settings.anthropic_api_key),
+        "execution_mode": settings.execution_mode,
+        "agent_backend": settings.agent_backend,
+        "trading_core_enabled": settings.trading_core_enabled,
+        "portfolio_profile": settings.portfolio_profile,
+        "max_trades_per_cycle": settings.max_trades_per_cycle,
+        "max_order_fraction_of_portfolio": settings.max_order_fraction_of_portfolio,
+        "benchmark_ticker": settings.benchmark_ticker,
+        "market_data_ttl_seconds": settings.market_data_ttl_seconds,
+        "risk_free_rate": settings.risk_free_rate,
+        # Profile specific
+        "drift_threshold": profile.get("drift_threshold", 0.05),
+        "kill_switch_drawdown": profile.get("kill_switch_drawdown", 0.10),
+    }
+
+
+@app.post("/api/settings")
+async def update_app_settings(req: SettingsUpdateRequest, _: User = Depends(requires_role([Role.ADMIN]))):
+    try:
+        import os
+        import yaml
+        from dotenv import set_key
+        from settings import settings
+        from portfolio_loader import load_profile
+        
+        env_file = ".env"
+        
+        # Update .env for global settings
+        if req.ai_provider is not None:
+            set_key(env_file, "AI_PROVIDER", req.ai_provider)
+        if req.gemini_model is not None:
+            set_key(env_file, "GEMINI_MODEL", req.gemini_model)
+        if req.claude_model is not None:
+            set_key(env_file, "CLAUDE_MODEL", req.claude_model)
+        if req.gemini_api_key is not None:
+            set_key(env_file, "GEMINI_API_KEY", req.gemini_api_key)
+        if req.anthropic_api_key is not None:
+            set_key(env_file, "ANTHROPIC_API_KEY", req.anthropic_api_key)
+        if req.execution_mode is not None:
+            set_key(env_file, "EXECUTION_MODE", req.execution_mode)
+        if req.agent_backend is not None:
+            set_key(env_file, "AGENT_BACKEND", req.agent_backend)
+        if req.trading_core_enabled is not None:
+            set_key(env_file, "TRADING_CORE_ENABLED", str(req.trading_core_enabled).lower())
+        if req.portfolio_profile is not None:
+            set_key(env_file, "PORTFOLIO_PROFILE", req.portfolio_profile)
+        if req.max_trades_per_cycle is not None:
+            set_key(env_file, "MAX_TRADES_PER_CYCLE", str(req.max_trades_per_cycle))
+        if req.max_order_fraction_of_portfolio is not None:
+            set_key(env_file, "MAX_ORDER_FRACTION_OF_PORTFOLIO", str(req.max_order_fraction_of_portfolio))
+        if req.benchmark_ticker is not None:
+            set_key(env_file, "BENCHMARK_TICKER", req.benchmark_ticker)
+        if req.market_data_ttl_seconds is not None:
+            set_key(env_file, "MARKET_DATA_TTL_SECONDS", str(req.market_data_ttl_seconds))
+        if req.risk_free_rate is not None:
+            set_key(env_file, "RISK_FREE_RATE", str(req.risk_free_rate))
+
+        # Update profile YAML for risk settings
+        if req.drift_threshold is not None or req.kill_switch_drawdown is not None:
+            profile_name = settings.portfolio_profile
+            profile_path = Path("profiles") / f"{profile_name}.yaml"
+            if profile_path.exists():
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    profile_data = yaml.safe_load(f) or {}
+                
+                if req.drift_threshold is not None:
+                    profile_data["drift_threshold"] = req.drift_threshold
+                if req.kill_switch_drawdown is not None:
+                    profile_data["kill_switch_drawdown"] = req.kill_switch_drawdown
+                    
+                with open(profile_path, "w", encoding="utf-8") as f:
+                    yaml.dump(profile_data, f, sort_keys=False)
+
+        return {"ok": True, "message": "Settings updated. Some changes may require a restart to take full effect."}
+    except Exception as e:
+        print(f"ERROR updating settings: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── manual trade endpoints ─────────────────────────────────────────────────────

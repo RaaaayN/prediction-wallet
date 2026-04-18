@@ -1,0 +1,51 @@
+{
+  "positions": {
+    "AAPL": 44.406614780499424,
+    "MSFT": 28.382884546631825,
+    "GOOGL": 26.340436059831173,
+    "AMZN": 35.91954057987784,
+    "NVDA": 39.666800329870696,
+    "TLT": 172.2751814927554,
+    "BND": 202.5384889883707,
+    "BTC-USD": 0.15754531273975403,
+    "ETH-USD": 3.3174107753446576
+  },
+  "position_sides": {
+    "AAPL": "long",
+    "MSFT": "long",
+    "GOOGL": "long",
+    "AMZN": "long",
+    "NVDA": "long",
+    "TLT": "long",
+    "BND": "long",
+    "BTC-USD": "long",
+    "ETH-USD": "long"
+  },
+  "average_costs": {
+    "AAPL": 270.50024099731445,
+    "MSFT": 423.21279855346677,
+    "GOOGL": 342.021672668457,
+    "AMZN": 250.8105575561523,
+    "NVDA": 201.881672668457,
+    "TLT": 87.15706969451904,
+    "BND": 74.13405755615234,
+    "BTC-USD": 76549.40531249999,
+    "ETH-USD": 2369.3176794433593
+  },
+  "cash": 9.094947017729282e-13,
+  "peak_value": 100000.0,
+  "last_rebalanced": "2026-04-18T16:39:07.085423+00:00",
+  "history": [],
+  "created_at": "2026-04-18T16:39:03.667797+00:00",
+  "position_ideas": {
+    "AAPL": null,
+    "MSFT": null,
+    "GOOGL": null,
+    "AMZN": null,
+    "NVDA": null,
+    "TLT": null,
+    "BND": null,
+    "BTC-USD": null,
+    "ETH-USD": null
+  }
+}

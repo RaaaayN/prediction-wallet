@@ -23,6 +23,7 @@ import Backtest from './pages/Backtest';
 import Correlation from './pages/Correlation';
 import Runs from './pages/Runs';
 import Operations from './pages/Operations';
+import Settings from './pages/Settings';
 import Onboarding from './pages/Onboarding';
 import { ApiService } from './api/service';
 import type { OnboardingStatus } from './types';
@@ -52,6 +53,7 @@ const MainApp: React.FC = () => (
         <Route path="/correlation" element={<Correlation />} />
         <Route path="/runs" element={<Runs />} />
         <Route path="/operations" element={<Operations />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Layout>
