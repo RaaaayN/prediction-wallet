@@ -9,16 +9,29 @@ import json
 class SecurityMaster:
     """Manages the universe of known instruments."""
 
-    def __init__(self):
+    def __init__(self, db_path: str | None = None, profile_name: str | None = None):
         self._instruments: Dict[str, Instrument] = {}
+        self.db_path = db_path
+        self.profile_name = profile_name
 
     @staticmethod
     def make_instrument_id(symbol: str, asset_class: InstrumentType) -> str:
         """Generate a stable, deterministic instrument ID."""
         return f"{asset_class.value.upper()}:{symbol.upper()}"
 
+    def load_from_db(self):
+        """Initialize the in-memory cache from the instruments table."""
+        from db.repository import get_trading_core_instruments
+        rows = get_trading_core_instruments(db_path=self.db_path, profile_name=self.profile_name)
+        for row in rows:
+            inst = Instrument(**row)
+            self._instruments[inst.instrument_id] = inst
+
     def bootstrap(self, existing_positions: Dict[str, float] = None):
         """Seed the security master from config and existing data."""
+        # Load existing first
+        self.load_from_db()
+
         # 1. Target Allocation
         for ticker in TARGET_ALLOCATION:
             self._add_ticker(ticker)
@@ -51,7 +64,7 @@ class SecurityMaster:
             name = universe_meta.get("name", name)
             sector = universe_meta.get("sector", sector)
 
-        self._instruments[instrument_id] = Instrument(
+        instrument = Instrument(
             instrument_id=instrument_id,
             symbol=ticker,
             name=name,
@@ -59,6 +72,11 @@ class SecurityMaster:
             sector=sector,
             metadata_json=universe_meta if isinstance(universe_meta, dict) else {}
         )
+        self._instruments[instrument_id] = instrument
+
+        # Persistent save
+        from db.repository import upsert_instruments
+        upsert_instruments([instrument.model_dump()], db_path=self.db_path, profile_name=self.profile_name)
 
     def get_instrument(self, instrument_id: str) -> Instrument | None:
         return self._instruments.get(instrument_id)

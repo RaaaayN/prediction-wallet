@@ -164,6 +164,8 @@ class AuditRepositoryAdapter:
         return save_decision_trace(trace)
 
 
+from services.trading_core_service import TradingCoreService
+
 class PortfolioAgentService:
     """Primary cycle service driven by Pydantic AI."""
 
@@ -173,6 +175,9 @@ class PortfolioAgentService:
         execution_service: ExecutionService | None = None,
         reporting_service: ReportingService | None = None,
         agent=None,
+        *,
+        db_path: str | None = None,
+        profile_name: str | None = None,
     ):
         self.market_gateway = market_gateway or MarketService()
         self.execution_service = execution_service or ExecutionService()
@@ -188,36 +193,9 @@ class PortfolioAgentService:
 
         # Trading Core v1
         if TRADING_CORE_ENABLED:
-            from db.repository import upsert_instruments
-            from trading_core.models import OrderType, Position
-            
-            portfolio = self.execution_service.load_portfolio()
-            self.security_master = SecurityMaster()
-            self.security_master.bootstrap(existing_positions=portfolio.get("positions", {}))
-            self.market_data_handler = MarketDataHandler(self.market_gateway, self.security_master)
-            self.oms = OrderManagementSystem(self.security_master)
-            
-            # Bootstrap ledger positions
-            initial_tc_positions = {}
-            for ticker, qty in portfolio.get("positions", {}).items():
-                inst = self.security_master.get_or_create_by_symbol(ticker)
-                # We don't have full history here, so avg_cost is roughly last_price or price from portfolio
-                price = portfolio.get("average_costs", {}).get(ticker, 0.0)
-                initial_tc_positions[inst.instrument_id] = Position(
-                    instrument_id=inst.instrument_id,
-                    symbol=ticker,
-                    quantity=qty,
-                    avg_cost=price,
-                    last_price=price,
-                    market_value=qty * price,
-                    updated_at=utc_now_iso()
-                )
-            
-            self.ledger = Ledger(initial_cash=portfolio.get("cash", 0.0), initial_positions=initial_tc_positions)
-            self.broker_adapter = SimulationBrokerAdapter()
-            
-            # Persist instruments to the DB
-            upsert_instruments([inst.model_dump() for inst in self.security_master.list_instruments()])
+            self.trading_core = TradingCoreService(db_path=db_path, profile_name=profile_name)
+        else:
+            self.trading_core = None
 
     def _get_strategy(self, strategy_name: str):
         if strategy_name == "calendar":
@@ -415,50 +393,22 @@ class PortfolioAgentService:
         if execution_mode == "simulate":
             with stage_span("cycle.execute", cycle_id=observation.cycle_id, execution_mode=execution_mode):
                 for idx, trade in enumerate(policy.allowed_trades):
-                    if TRADING_CORE_ENABLED:
+                    if TRADING_CORE_ENABLED and self.trading_core:
                         # --- Trading Core v1 Path ---
-                        from db.repository import (
-                            save_market_price, save_order, save_order_event,
-                            save_trade_execution_v2, save_position_ledger, save_cash_movement
-                        )
-
-                        # 1. Market Data Snapshot
-                        m_price = self.market_data_handler.get_market_price(trade.ticker)
-                        save_market_price(m_price.model_dump())
-
-                        # 2. OMS: Create & Validate Order
                         side = OrderSide.BUY if trade.action == "buy" else OrderSide.SELL
-                        order = self.oms.create_order(
+                        execution_v2 = self.trading_core.execute_order(
                             cycle_id=observation.cycle_id,
                             symbol=trade.ticker,
                             side=side,
                             quantity=trade.quantity,
                             reason=trade.reason
                         )
-                        self.oms.update_status(order.order_id, OrderStatus.VALIDATED)
-                        save_order(order.model_dump())
-                        save_order_event(order.order_id, OrderStatus.VALIDATED.value, "validation_passed")
 
-                        # 3. Broker: Execute
-                        self.oms.update_status(order.order_id, OrderStatus.SUBMITTED)
-                        save_order(order.model_dump())
-                        
-                        execution_v2 = self.broker_adapter.execute_order(order, m_price)
-                        self.oms.update_status(order.order_id, OrderStatus.FILLED)
-                        save_order(order.model_dump())
-                        save_order_event(order.order_id, OrderStatus.FILLED.value, "execution_filled")
-                        save_trade_execution_v2(execution_v2.model_dump())
-
-                        # 4. Ledger: Apply
-                        self.ledger.apply_execution(execution_v2, cycle_id=observation.cycle_id)
-                        save_position_ledger([p.model_dump() for p in self.ledger.list_positions()])
-                        save_cash_movement(self.ledger.list_cash_movements(cycle_id=observation.cycle_id)[-1].model_dump())
-
-                        # 5. Legacy Bridge: produce ExecutionResult for compat
+                        # Legacy Bridge: produce ExecutionResult for compat
                         # Also sync back to PortfolioStore (portfolio.json) via ExecutionService
                         result = self.execution_service.execute_order(
                             trade.model_dump(),
-                            market_price=m_price.price,
+                            market_price=execution_v2.market_price,
                             cycle_id=observation.cycle_id,
                             trades_this_cycle=idx,
                             allow_unallocated=True

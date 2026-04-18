@@ -9,6 +9,7 @@ This project is an **AI-governed portfolio rebalancing agent** designed to demon
   - **Runtime:** Python 3.13+
   - **AI Framework:** [Pydantic AI](https://ai.pydantic.dev/) (orchestrating Gemini or Anthropic Claude)
   - **Backend:** FastAPI + Uvicorn
+  - **Trading Core:** Persistent OMS, Ledger, and Security Master (TradingCoreService)
   - **Data:** SQLite (event sourcing + state) + yfinance
   - **Analytics:** NumPy + Pandas (Risk/Performance metrics)
   - **Reporting:** ReportLab (PDF)
@@ -22,6 +23,7 @@ The system strictly enforces a **3-layer deterministic policy engine** (`agents/
 
 ## Directory Structure
 
+- `trading_core/`: Order Management System, Security Master, and Ledger with database persistence.
 - `agents/`: Pydantic AI orchestrator, deterministic policy engine, and Pydantic models.
 - `engine/`: Financial logic (risk, performance, Monte Carlo, regime detection, portfolio math).
 - `services/`: Gateways for market data, simulated execution, and reporting.
