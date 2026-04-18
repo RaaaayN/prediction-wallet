@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import mlflow
+from mlflow.exceptions import MlflowException
 from pathlib import Path
 from typing import Optional, Any, Dict, List
 
@@ -92,5 +93,8 @@ class MLflowService:
     def get_champion(self, model_name: str) -> Optional[mlflow.entities.model_registry.ModelVersion]:
         """Get the latest version tagged as Champion."""
         client = mlflow.tracking.MlflowClient()
-        versions = client.get_latest_versions(model_name, stages=["Production"])
-        return versions[0] if versions else None
+        try:
+            versions = client.get_latest_versions(model_name, stages=["Production"])
+            return versions[0] if versions else None
+        except MlflowException:
+            return None
