@@ -131,6 +131,7 @@ export interface BacktestResult {
   n_trades: number;
   n_risk_violations: number;
   data_hash?: string;
+  history?: Array<{ date: string; total_value: number }>;
 }
 
 export interface GovernanceReport {
@@ -139,4 +140,56 @@ export interface GovernanceReport {
   recent_violations: any[];
   champion_strategy?: string;
   data_lineage_status: string;
+}
+
+export interface IdeaBookEntry {
+  idea_id: string;
+  ticker: string;
+  status: string;
+  review_status: string;
+  rationale: string;
+  alpha_expectation?: number;
+  risk_score?: number;
+  llm_generated: boolean;
+  created_at: string;
+}
+
+export interface StressScenario {
+  scenario: string;
+  equity_shock: number;
+  bond_shock: number;
+  crypto_shock: number;
+  pnl_dollars: number;
+  pnl_pct: number;
+  kill_switch_triggered: boolean;
+}
+
+export interface CorrelationData {
+  tickers: string[];
+  matrix: number[][];
+  days: number;
+  n_obs: number;
+}
+
+export interface SystemStatus {
+  health: {
+    status: string;
+    checks: Record<string, any>;
+  };
+  last_rebalance?: any;
+  last_reconciliation?: any;
+  last_nav?: any;
+  backups: {
+    count: number;
+    latest?: string;
+  };
+}
+
+export interface MonteCarloResult {
+  current_value: number;
+  expected_value: number;
+  var_95: number;
+  cvar_95: number;
+  percentiles: Record<string, number>;
+  paths?: number[][];
 }

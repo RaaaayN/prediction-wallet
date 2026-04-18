@@ -8,7 +8,9 @@ import {
   Database, 
   TestTube, 
   Bot, 
-  FileText 
+  FileText,
+  Settings as SettingsIcon,
+  Activity
 } from "lucide-react";
 import { cn } from "@/utils/cn";
 
@@ -21,7 +23,9 @@ const navItems = [
   { path: "/data", label: "Data Explorer", icon: Database },
   { path: "/experiments", label: "Experiments", icon: TestTube },
   { path: "/agents", label: "Agents Panel", icon: Bot },
+  { path: "/events", label: "Event Browser", icon: Activity },
   { path: "/reports", label: "Reports", icon: FileText },
+  { path: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 export function AppLayout() {
@@ -57,7 +61,6 @@ export function AppLayout() {
       <main className="flex-1 flex flex-col min-w-0">
         <header className="h-16 border-b border-border flex items-center justify-between px-8 bg-card/50 backdrop-blur-sm z-10 sticky top-0">
           <div className="flex items-center gap-4">
-            {/* Context/status indicators could go here */}
             <div className="flex items-center gap-2">
               <span className="relative flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>

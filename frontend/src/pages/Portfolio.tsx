@@ -1,19 +1,26 @@
-import { useQuery } from "@tanstack/react-query";
 import { useStore } from "@/store/useStore";
-import { apiClient } from "@/api/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
+import { usePortfolio } from "@/api/queries";
+import { AlertCircle } from "lucide-react";
 
 const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#6366f1', '#ec4899', '#f43f5e', '#f59e0b', '#eab308'];
 
 export function Portfolio() {
   const profile = useStore((state) => state.profile);
-  const { data: portfolio, isLoading } = useQuery({
-    queryKey: ["portfolio", profile],
-    queryFn: async () => (await apiClient.get(`/portfolio?profile=${profile}`)).data,
-  });
+  const { data: portfolio, isLoading } = usePortfolio(profile);
 
-  if (isLoading || !portfolio) return <div className="p-8 text-muted-foreground">Loading portfolio...</div>;
+  if (isLoading) return <div className="p-8 text-muted-foreground animate-pulse">Loading portfolio...</div>;
+
+  if (!portfolio || !portfolio.positions || Object.keys(portfolio.positions).length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+        <AlertCircle className="h-12 w-12 mb-4 opacity-20" />
+        <h3 className="text-xl font-bold text-foreground">Portfolio Empty</h3>
+        <p className="max-w-md text-center mt-2">No active positions found for {profile.toUpperCase()}. Go to Settings to initialize the fund or run an agent cycle.</p>
+      </div>
+    );
+  }
 
   const weightsData = Object.entries(portfolio.current_weights || {}).map(([ticker, weight]) => ({
     name: ticker,
