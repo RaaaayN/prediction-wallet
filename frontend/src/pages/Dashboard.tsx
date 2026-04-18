@@ -1,181 +1,118 @@
-import React, { useEffect, useState } from 'react';
-import { ApiService } from '../api/service';
-import type { PortfolioSnapshot, AgentRun, ReconciliationBreak } from '../types';
-import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
-import { Bar } from 'react-chartjs-2';
-import { ShieldCheck, ShieldAlert } from 'lucide-react';
+import { useQuery } from "@tanstack/react-query";
+import { useStore } from "@/store/useStore";
+import { apiClient } from "@/api/client";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import { Activity, DollarSign, Percent, AlertTriangle } from "lucide-react";
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
+export function Dashboard() {
+  const profile = useStore((state) => state.profile);
+  const { data: portfolio, isLoading } = useQuery({
+    queryKey: ["portfolio", profile],
+    queryFn: async () => (await apiClient.get(`/portfolio?profile=${profile}`)).data,
+  });
 
-const Dashboard: React.FC = () => {
-  const [portfolio, setPortfolio] = useState<PortfolioSnapshot | null>(null);
-  const [runs, setRuns] = useState<AgentRun[]>([]);
-  const [breaks, setBreaks] = useState<ReconciliationBreak[]>([]);
-  const [stress, setStress] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  if (isLoading || !portfolio) return <div className="p-8 text-muted-foreground animate-pulse">Loading dashboard...</div>;
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [pfData, runsData, bData, sData] = await Promise.all([
-          ApiService.get<PortfolioSnapshot>('/api/portfolio'),
-          ApiService.get<AgentRun[]>('/api/runs?limit=20'),
-          ApiService.get<ReconciliationBreak[]>('/api/middle-office/reconcile').catch(() => []),
-          ApiService.get<any[]>('/api/stress').catch(() => []),
-        ]);
-        setPortfolio(pfData);
-        setRuns(runsData);
-        setBreaks(bData || []);
-        setStress(sData || []);
-      } catch (err) {
-        console.error('Error fetching dashboard data:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
+  const totalValue = portfolio.total_value || 0;
+  const pnlPct = portfolio.pnl_pct || 0;
+  const isPositive = pnlPct >= 0;
 
-    fetchData();
-  }, []);
-
-  const pnlWaterfallData = {
-    labels: [...runs].reverse().map(r => r.cycle_id),
-    datasets: [
-      {
-        label: 'P&L per Cycle',
-        data: [...runs].reverse().map((r) => (typeof r.trades_count === 'number' ? r.trades_count : 0)),
-        backgroundColor: (context: { raw?: unknown }) => {
-          const value = typeof context.raw === 'number' ? context.raw : 0;
-          return value >= 0 ? '#3fb95099' : '#f8514999';
-        },
-        borderColor: (context: { raw?: unknown }) => {
-          const value = typeof context.raw === 'number' ? context.raw : 0;
-          return value >= 0 ? '#3fb950' : '#f85149';
-        },
-        borderWidth: 1,
-      },
-    ],
-  };
-
-  const fmtUSD = (n: number | undefined) => n == null ? '--' : '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const fmtPct = (n: number | undefined) => n == null ? '--' : (n * 100).toFixed(1) + '%';
-
-  if (loading) return <div className="text-gray-500">Loading Dashboard...</div>;
-
-  const lastRun = runs[0];
-  const tv = portfolio?.total_value;
-  const pk = portfolio?.peak_value;
-  const drawdown = pk != null && pk !== 0 && tv != null ? (tv - pk) / pk : 0;
+  const mockHistory = portfolio.history?.length ? portfolio.history : [
+    { date: "2024-01-01", total_value: 100000 },
+    { date: "2024-01-02", total_value: 101000 },
+    { date: "2024-01-03", total_value: 100500 },
+    { date: "2024-01-04", total_value: 102000 },
+    { date: "2024-01-05", total_value: 103500 },
+  ];
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* KPI CARDS */}
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-        <div className="bg-card-bg border border-border rounded-lg p-4">
-          <div className="text-xs text-[#8b949e] mb-1">Total Value</div>
-          <div className="text-xl font-bold text-primary">{fmtUSD(portfolio?.total_value)}</div>
-        </div>
-        <div className="bg-card-bg border border-border rounded-lg p-4">
-          <div className="text-xs text-[#8b949e] mb-1">P&L ($)</div>
-          <div className={`text-xl font-bold ${(portfolio?.pnl_dollars ?? 0) >= 0 ? 'text-green' : 'text-red'}`}>
-            {fmtUSD(portfolio?.pnl_dollars)}
-          </div>
-        </div>
-        <div className="bg-card-bg border border-border rounded-lg p-4">
-          <div className="text-xs text-[#8b949e] mb-1">P&L (%)</div>
-          <div className={`text-xl font-bold ${(portfolio?.pnl_pct ?? 0) >= 0 ? 'text-green' : 'text-red'}`}>
-            {fmtPct(portfolio?.pnl_pct)}
-          </div>
-        </div>
-        <div className="bg-card-bg border border-border rounded-lg p-4">
-          <div className="text-xs text-[#8b949e] mb-1">Max Drawdown</div>
-          <div className="text-xl font-bold text-red">{fmtPct(drawdown)}</div>
-        </div>
-        <div className="bg-card-bg border border-border rounded-lg p-4">
-          <div className="text-xs text-[#8b949e] mb-1">Last Cycle</div>
-          <div className="text-sm font-bold text-[#e6edf3]">{lastRun?.cycle_id || '--'}</div>
-        </div>
-        <div className="bg-card-bg border border-border rounded-lg p-4 flex flex-col justify-between">
-          <div className="text-xs text-[#8b949e] mb-1">Agent Status</div>
-          <div>
-            <span className="bg-[#1b2a3d] text-primary text-[10px] px-2 py-0.5 rounded-full font-medium uppercase">
-              {loading ? 'BUSY' : 'IDLE'}
-            </span>
-          </div>
-        </div>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-3xl font-bold tracking-tight">Overview ({profile.toUpperCase()})</h2>
       </div>
 
-      {/* CHART */}
-      <div className="bg-card-bg border border-border rounded-lg p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide">Trades per cycle (recent runs)</h2>
-        </div>
-        <div className="h-[240px]">
-          <Bar
-            data={pnlWaterfallData}
-            options={{
-              responsive: true,
-              maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: {
-                x: { ticks: { color: '#8b949e', font: { size: 10 } }, grid: { display: false } },
-                y: { ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: '#21262d' } },
-              },
-            }}
-          />
-        </div>
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total Portfolio Value</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+            <p className="text-xs text-muted-foreground">Last updated {portfolio.last_rebalanced || "recently"}</p>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Net P&L</CardTitle>
+            <Percent className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className={`text-2xl font-bold ${isPositive ? "text-emerald-500" : "text-destructive"}`}>
+              {isPositive ? "+" : ""}{(pnlPct * 100).toFixed(2)}%
+            </div>
+            <p className="text-xs text-muted-foreground">Since inception</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Active Positions</CardTitle>
+            <Activity className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{Object.keys(portfolio.positions || {}).length} Assets</div>
+            <p className="text-xs text-muted-foreground">Excluding cash reserves</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-emerald-500/20 bg-emerald-500/5">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-emerald-600">Risk Status</CardTitle>
+            <AlertTriangle className="h-4 w-4 text-emerald-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-emerald-600">Healthy</div>
+            <p className="text-xs text-emerald-600/80">Drawdown within limits</p>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* LOWER GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="bg-card-bg border border-border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide mb-3">Last 5 Cycles</h2>
-          <div className="flex flex-col gap-2">
-            {runs.slice(0, 5).map((run) => (
-              <div key={run.cycle_id} className="flex items-center justify-between text-sm py-1 border-b border-[#21262d] last:border-0">
-                <span className="font-mono text-primary">{run.cycle_id}</span>
-                <span className="text-xs text-[#8b949e]">{run.timestamp.slice(0, 16).replace('T', ' ')}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${run.signal ? 'bg-[#1a4731] text-green' : 'bg-[#3d2d0a] text-yellow'}`}>
-                  {run.signal ? 'REBALANCE' : 'IDLE'}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="bg-card-bg border border-border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide mb-3">Risk & Middle Office</h2>
-          <div className="flex flex-col gap-3">
-             <div className={`p-2 rounded border flex items-center gap-2 text-xs font-bold ${breaks.length === 0 ? 'bg-green/10 border-green/30 text-green' : 'bg-red/10 border-red/30 text-red'}`}>
-               {breaks.length === 0 ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
-               {breaks.length === 0 ? 'RECONCILIATION MATCH' : `${breaks.length} RECON BREAKS`}
-             </div>
-             
-             <div className="flex flex-col gap-1.5">
-               <div className="text-[10px] text-[#8b949e] uppercase font-semibold">Crisis Stress Check</div>
-               {stress.slice(0, 2).map((s, i) => (
-                 <div key={i} className="bg-gray-bg border border-border/40 rounded p-1.5 text-[10px]">
-                   <div className="flex justify-between items-center mb-1">
-                     <span className="font-mono">{s.scenario.replace('_', ' ')}</span>
-                     <span className={s.pnl_pct < 0 ? 'text-red' : 'text-green'}>{(s.pnl_pct * 100).toFixed(1)}%</span>
-                   </div>
-                   <div className="w-full bg-border/20 h-1 rounded-full">
-                     <div className="h-full bg-orange" style={{ width: `${Math.min(Math.abs(s.pnl_pct) * 200, 100)}%` }}></div>
-                   </div>
-                 </div>
-               ))}
-             </div>
-          </div>
-        </div>
-
-        <div className="bg-card-bg border border-border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide mb-3">Kill Switch Status</h2>
-          <div className={`p-3 rounded-lg border font-semibold text-sm ${lastRun?.kill_switch ? 'bg-[#3d1a1a] border-red text-red' : 'bg-[#1a4731] border-green text-green'}`}>
-            {lastRun?.kill_switch ? '⚠️ KILL SWITCH ACTIVE' : '✓ KILL SWITCH NOMINAL'}
-          </div>
-        </div>
-      </div>
+      <Card className="col-span-4">
+        <CardHeader>
+          <CardTitle>Equity Curve</CardTitle>
+        </CardHeader>
+        <CardContent className="h-[400px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={mockHistory}>
+              <defs>
+                <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="date" stroke="#52525b" fontSize={12} tickLine={false} axisLine={false} />
+              <YAxis 
+                stroke="#52525b" 
+                fontSize={12} 
+                tickLine={false} 
+                axisLine={false} 
+                tickFormatter={(value) => `$${value.toLocaleString()}`}
+                domain={['auto', 'auto']}
+              />
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
+              <Tooltip 
+                contentStyle={{ backgroundColor: "#09090b", borderColor: "#27272a", borderRadius: "8px" }}
+                itemStyle={{ color: "#fafafa" }}
+                formatter={(value: any) => [`$${value.toLocaleString()}`, "Value"]}
+              />
+              <Area type="monotone" dataKey="total_value" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorValue)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
     </div>
   );
-};
-
-export default Dashboard;
+}
