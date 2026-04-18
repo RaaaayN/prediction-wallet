@@ -8,6 +8,7 @@ import os
 import sys
 
 from agents.portfolio_agent import PortfolioAgentService
+from agents.models import BacktestExperimentResult, GovernanceReport
 from config import AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE
 from runtime_context import build_runtime_context
 from strategies import available_strategy_names
@@ -181,6 +182,13 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
         sub.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy", "long_short_equity"], default=None)
     subparsers.add_parser("report")
+    subparsers.add_parser("governance-report")
+    
+    backtest_parser = subparsers.add_parser("research-backtest")
+    backtest_parser.add_argument("--strategy", choices=["threshold", "calendar", "ensemble"], default="threshold")
+    backtest_parser.add_argument("--days", type=int, default=90)
+    backtest_parser.add_argument("--gold-dataset", type=str, default=None)
+
     init_parser = subparsers.add_parser("init")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing portfolio without prompt")
     init_parser.add_argument("--initial-capital", type=float, help="Override initial capital from profile")
@@ -226,6 +234,37 @@ def main():
         return
     if command == "report":
         generate_report_only()
+        return
+    if command == "governance-report":
+        from services.governance_service import GovernanceService
+        gov = GovernanceService(profile_name=args.profile or os.getenv("PORTFOLIO_PROFILE", "balanced"))
+        print_json(gov.generate_governance_report())
+        return
+    if command == "research-backtest":
+        check_api_key()
+        from agents.portfolio_agent import build_research_copilot, AgentDependencies
+        from services.market_service import MarketService
+        from services.execution_service import ExecutionService
+        from services.reporting_service import ReportingService
+
+        copilot = build_research_copilot()
+        deps = AgentDependencies(
+            market_gateway=MarketService(profile_name=args.profile),
+            portfolio_repository=ExecutionService(profile_name=args.profile),
+            execution_gateway=ExecutionService(profile_name=args.profile),
+            audit_repository=PortfolioAgentService(profile_name=args.profile).audit_repository,
+            strategy_name=args.strategy,
+            execution_mode="simulate",
+            active_trade_plan=[],
+            cycle_id="research-run",
+        )
+        prompt = f"Run a research backtest for strategy '{args.strategy}' over {args.days} days."
+        if args.gold_dataset:
+            prompt += f" Use gold dataset '{args.gold_dataset}'."
+        
+        print(f"Launching research backtest for {args.strategy}...")
+        result = copilot.run_sync(prompt, deps=deps)
+        print_json(result.output)
         return
 
     service = PortfolioAgentService()

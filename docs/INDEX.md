@@ -14,6 +14,7 @@ Welcome to the institutional-grade research and portfolio management platform. T
 
 ## 💻 Technical Reference
 - **[API Reference](api.md)**: Detailed endpoint definitions and Pydantic schemas.
+- **[Operations Guide](OPERATIONS.md)**: MLflow UI, DVC versioning, and strategy promotion workflows.
 - **[Architecture Overview](../README.md#🏛️-institutional-grade-architecture)**: High-level system design and data flow.
 - **[Roadmap](../README.md#🗺️-roadmap-the-path-to-hedge-fund-grade)**: Strategic evolution and implementation phases.
 

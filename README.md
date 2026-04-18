@@ -156,8 +156,14 @@ cp .env.example .env
 # Initialize system
 python main.py init
 
-# Run a governed research cycle
+# Run a governed rebalancing cycle
 python main.py run-cycle --mode simulate
+
+# Launch a research experiment (MLflow tracked)
+python main.py research-backtest --strategy ensemble --days 90
+
+# Generate a governance audit report
+python main.py governance-report
 ```
 
 ---

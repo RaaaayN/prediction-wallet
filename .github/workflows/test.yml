@@ -19,7 +19,18 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: |
+          pip install -e ".[dev]"
+          pip install ruff mypy bandit[sarif]
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Type check with mypy
+        run: mypy . --ignore-missing-imports
+
+      - name: Security scan with bandit
+        run: bandit -r . -x ./tests
 
       - name: Run tests
         run: pytest tests/ -v --tb=short

@@ -48,6 +48,8 @@ cp .env.example .env  # Configure AI_PROVIDER, GEMINI_API_KEY, MLFLOW_TRACKING_U
 - **Initialize:** `python main.py init`
 - **Run Governed Cycle:** `python main.py run-cycle --mode simulate`
 - **MLflow UI:** `mlflow ui`
+- **Research Backtest:** `python main.py research-backtest --strategy ensemble --days 90`
+- **Governance Report:** `python main.py governance-report`
 - **Start Web UI:** `uvicorn api.main:app --reload`
 - **Run Tests:** `pytest tests/ -v`
 

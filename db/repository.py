@@ -396,6 +396,34 @@ def save_decision_trace(
     return rid
 
 
+def get_recent_risk_violations(
+    limit: int = 10,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    """Fetch recent policy or kill-switch violations from decision traces."""
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    try:
+        with get_connection(resolved) as conn:
+            rows = conn.execute(
+                q(
+                    """
+                SELECT cycle_id, stage, validation_json, created_at, event_type, tags 
+                FROM decision_traces 
+                WHERE event_type IN ('policy_violation', 'kill_switch')
+                ORDER BY created_at DESC 
+                LIMIT ?
+                """
+                ),
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
 def get_decision_traces(
     limit: int = 100,
     cycle_id: str | None = None,

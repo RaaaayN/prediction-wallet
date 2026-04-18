@@ -35,12 +35,14 @@ from pydantic_ai.models.test import TestModel
 
 from agents.deps import AgentDependencies
 from agents.models import (
+    BacktestExperimentResult,
     BookConstructionDecision,
     BookRiskSnapshot,
     CycleAudit,
     CycleObservation,
     ExposureSnapshot,
     ExecutionResult,
+    GovernanceReport,
     IdeaBookEntry,
     IdeaProposal,
     MarketDataStatus,
@@ -66,6 +68,8 @@ from services.execution_service import ExecutionService
 from services.idea_book_service import IdeaBookService
 from services.market_service import MarketService
 from services.reporting_service import ReportingService
+from services.mlflow_service import MLflowService
+from engine.backtest_v2 import EventDrivenBacktester
 from strategies import build_strategy
 
 # Trading Core v1
@@ -147,6 +151,56 @@ def build_portfolio_agent(model=None) -> Agent[AgentDependencies, TradeDecision]
             mcp_required=False,
         )
         return risk
+
+    return agent
+
+
+def build_research_copilot(model=None) -> Agent[AgentDependencies, Any]:
+    agent = Agent(
+        model=model or build_agent_model(),
+        deps_type=AgentDependencies,
+        name="research-copilot",
+        instructions=(
+            "You are a quantitative research copilot. Your goal is to help launch backtests, "
+            "analyze strategy performance, and log institutional experiments to MLflow. "
+            "You have access to high-fidelity event-driven backtesting tools. "
+            "Always link experiments to the current data lineage (data_hash)."
+        ),
+        defer_model_check=True,
+    )
+
+    @agent.tool
+    def run_backtest_experiment(
+        ctx: RunContext[AgentDependencies], 
+        strategy_type: str, 
+        days: int = 90,
+        gold_dataset: str | None = None
+    ) -> BacktestExperimentResult:
+        """Run an event-driven backtest experiment and log it to MLflow."""
+        tester = EventDrivenBacktester(days=days, gold_dataset_name=gold_dataset)
+        result = tester.run(strategy_type=strategy_type)
+        
+        # Log to MLflow
+        mlflow_svc = MLflowService()
+        mlflow_svc.log_backtest(result, {
+            "strategy_type": strategy_type,
+            "days": days,
+            "gold_dataset": gold_dataset or "live_sync"
+        })
+        
+        # Return summary
+        return BacktestExperimentResult(
+            strategy_name=result.strategy_name,
+            days=days,
+            annualized_return=result.metrics.get("annualized_return", 0.0),
+            sharpe=result.metrics.get("sharpe", 0.0),
+            max_drawdown=result.metrics.get("max_drawdown", 0.0),
+            alpha=result.metrics.get("alpha", 0.0),
+            beta=result.metrics.get("beta", 0.0),
+            n_trades=len(result.trades),
+            n_risk_violations=len(result.risk_violations),
+            data_hash=result.data_hash
+        )
 
     return agent
 

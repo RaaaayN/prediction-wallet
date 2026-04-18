@@ -260,3 +260,26 @@ class CycleObservation(BaseModel):
     book_risk: BookRiskSnapshot = Field(default_factory=BookRiskSnapshot)
     trade_plan: list[TradeProposal] = Field(default_factory=list)
     observability: dict = Field(default_factory=dict)
+
+
+class BacktestExperimentResult(BaseModel):
+    strategy_name: str
+    days: int
+    annualized_return: float
+    sharpe: float
+    max_drawdown: float
+    alpha: float
+    beta: float
+    n_trades: int
+    n_risk_violations: int
+    mlflow_run_id: str | None = None
+    data_hash: str | None = None
+
+
+class GovernanceReport(BaseModel):
+    timestamp: str
+    total_cycles_scanned: int
+    risk_violations_count: int
+    recent_violations: list[dict] = Field(default_factory=list)
+    champion_strategy: str | None = None
+    data_lineage_status: str = "healthy"
