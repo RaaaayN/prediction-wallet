@@ -1,37 +1,37 @@
 # Gemini CLI - Prediction Wallet Context
 
-This project is an **AI-governed portfolio rebalancing agent** designed to demonstrate auditable, deterministic, and compliant LLM-driven financial decisions.
+This project is an **institutional-grade research and autonomous portfolio management platform** designed to demonstrate auditable, deterministic, and compliant LLM-driven financial decisions.
 
 ## Project Overview
 
-- **Core Mission:** Prove that AI-driven portfolio management can be transparent and safe through a five-stage governed cycle: `OBSERVE → DECIDE → VALIDATE → EXECUTE → AUDIT`.
+- **Core Mission:** Bridge the gap between AI innovation and hedge-fund-level rigor through a five-stage governed cycle (`OBSERVE → DECIDE → VALIDATE → EXECUTE → AUDIT`) and a robust MLOps framework.
 - **Key Technologies:**
   - **Runtime:** Python 3.13+
   - **AI Framework:** [Pydantic AI](https://ai.pydantic.dev/) (orchestrating Gemini or Anthropic Claude)
-  - **Backend:** FastAPI + Uvicorn
-  - **Trading Core:** Persistent OMS, Ledger, and Security Master (TradingCoreService)
-  - **Data:** SQLite (event sourcing + state) + yfinance
-  - **Analytics:** NumPy + Pandas (Risk/Performance metrics)
-  - **Reporting:** ReportLab (PDF)
+  - **MLOps:** **MLflow** (Experiment Tracking, Model Registry), **DVC** (Data Versioning)
+  - **Data Layer:** **Apache Parquet** (Bronze/Silver/Gold), PostgreSQL (Metadata), SQLite (Event Sourcing)
+  - **NLP:** **FinBERT** for financial sentiment analysis
+  - **Analytics:** NumPy + Pandas + Scipy (Risk, Performance, Backtesting v2)
+  - **Serving:** FastAPI + BentoML + Vite/React
 
 ## Architectural Governance
 
-The system strictly enforces a **3-layer deterministic policy engine** (`agents/policies.py`) that acts as a guardrail for the LLM:
-1.  **Hard Violations:** Kill switch (drawdown ≥ 10%), blocked execution modes, or excessive trade counts abort the entire cycle.
-2.  **Market Context Soft Blocks:** Low LLM confidence or stale market data blocks all trades but keeps the cycle valid.
-3.  **Per-Trade Soft Blocks:** Ticker-specific rules (sector concentration, notional caps, short-squeeze flags) block individual trades while allowing others.
+The system strictly enforces a **multi-layer deterministic policy engine** and a **governed research workflow**:
+1.  **Deterministic Guardrails:** Hard/Soft blocks in `agents/policies.py` ensure trade compliance and risk mitigation.
+2.  **Scientific Validation:** Mandatory walk-forward or CPCV validation for all strategies.
+3.  **Auditable Lineage:** DVC + MLflow ensure every decision can be traced back to the exact code, data version, and model weights used.
 
 ## Directory Structure
 
-- `trading_core/`: Order Management System, Security Master, and Ledger with database persistence.
-- `agents/`: Pydantic AI orchestrator, deterministic policy engine, and Pydantic models.
-- `engine/`: Financial logic (risk, performance, Monte Carlo, regime detection, portfolio math).
-- `services/`: Gateways for market data, simulated execution, and reporting.
-- `db/`: SQLite/PostgreSQL repository, schema, and persistent IAM management.
-- `api/`: FastAPI endpoints with RBAC (Database-backed or static keys).
-- `strategies/`: Rebalancing strategies (threshold-based and calendar-based).
-- `profiles/`: YAML configurations for portfolio allocations and policy parameters.
-- `ui/`: Single-page HTML/JS interface for real-time visualization.
+- `agents/`: Pydantic AI research copilots and deterministic policy engine.
+- `engine/`: Financial logic (Realistic Backtesting v2, Risk Engine, Performance, Monte Carlo).
+- `trading_core/`: Persistent OMS, Ledger, and Security Master.
+- `ml/`: Model training pipelines, FinBERT integration, and experiment logic.
+- `data/`: Ingestion pipelines and versioned Parquet storage (Bronze/Silver/Gold).
+- `services/`: Gateways for market data, execution, and reporting.
+- `db/`: PostgreSQL metadata, SQLite event sourcing, and IAM.
+- `api/`: FastAPI endpoints with RBAC.
+- `frontend/`: Vite + React + TypeScript UI for real-time visualization and analytics.
 
 ## Development Workflows
 
@@ -41,23 +41,23 @@ The system strictly enforces a **3-layer deterministic policy engine** (`agents/
 uv venv --python 3.13
 source .venv/bin/activate
 uv pip install -e .
-cp .env.example .env  # Configure AI_PROVIDER and GEMINI_API_KEY
+cp .env.example .env  # Configure AI_PROVIDER, GEMINI_API_KEY, MLFLOW_TRACKING_URI
 ```
 
 ### Key Commands
 - **Initialize:** `python main.py init`
 - **Run Governed Cycle:** `python main.py run-cycle --mode simulate`
+- **MLflow UI:** `mlflow ui`
 - **Start Web UI:** `uvicorn api.main:app --reload`
-- **Generate Report:** `python main.py report`
 - **Run Tests:** `pytest tests/ -v`
 
 ### Coding Standards
 - **Strict Typing:** All new code must use Python type hints and pass static analysis.
-- **Pydantic Models:** Use models in `agents/models.py` for all structured data passing between stages.
+- **Reproducibility:** Fix random seeds and version all datasets with DVC.
 - **Determinism:** Financial calculations and policy enforcement MUST remain deterministic and separate from LLM logic.
-- **Testing:** New features or bug fixes must include corresponding tests in `tests/`.
+- **Testing:** New features must include unit tests and, where applicable, backtest validation tests.
 
 ## Contextual Instructions
-- **Safety First:** Never allow trade execution in `live` mode; it is blocked by default in `agents/policies.py`.
-- **Auditable Logic:** Ensure every new stage or metric is logged to the `decision_traces` table via the `AuditRepositoryAdapter`.
-- **Performance:** Async market data fetching is preferred (`market/fetcher.py`).
+- **Safety First:** Execution in `live` mode is strictly blocked by default in `agents/policies.py`.
+- **Auditable Logic:** Ensure every new stage or metric is logged to `decision_traces` and tracked in MLflow.
+- **Data Integrity:** Prefer Parquet for large-scale analytical data; use PostgreSQL/SQLite for transactional metadata.

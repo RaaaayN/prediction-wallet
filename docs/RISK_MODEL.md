@@ -1,126 +1,95 @@
-# Risk Model
+# Institutional Risk Model
 
-Prediction Wallet implements a quantitative risk framework covering drawdown controls, return distribution analysis, and crisis stress testing.
+Prediction Wallet implements a quantitative risk framework covering multi-layer circuit breakers, return distribution analysis, factor attribution, and liquidity risk. Our framework aligns with institutional standards such as **Basel III** and the **Fundamental Review of the Trading Book (FRTB)**.
 
-## Kill Switch
+---
 
-The kill switch is a hard, deterministic circuit breaker. It runs before any LLM decision is validated.
+## 🛡️ Multi-Layer Circuit Breakers
+
+The platform employs a deterministic hierarchy of risk controls that operate independently of the AI strategy layer.
+
+### Layer 0: The Hard Kill Switch
+A system-level circuit breaker that halts all execution if the portfolio suffers catastrophic loss.
 
 ```
-drawdown = (peak_value - current_value) / peak_value
+drawdown = (peak_portfolio_value - current_portfolio_value) / peak_portfolio_value
 
 if drawdown >= 0.10:
     kill_switch_active = True  → Layer 0 hard block → cycle aborted
 ```
 
-Peak value is the highest `total_value` recorded across all portfolio snapshots. The kill switch cannot be overridden by the AI agent or by profile configuration — it is a system-level constraint.
-
-**Threshold levels:**
-
 | Drawdown | Risk Level | Action |
 |----------|-----------|--------|
-| < 7% | OK | Normal execution |
-| 7–10% | WARN | Cycle proceeds, warning logged |
-| ≥ 10% | HALT | Kill switch active, cycle aborted |
+| < 7% | **OK** | Normal execution |
+| 7–10% | **WARN** | Cycle proceeds, warning logged, no new leverage |
+| ≥ 10% | **HALT** | Kill switch active, all execution blocked |
 
-## Value at Risk (VaR)
+---
 
-VaR estimates the maximum expected loss over a holding period at a given confidence level.
+## 📊 Tail Risk Metrics (Basel III / FRTB Aligned)
 
-### Parametric VaR
+We move beyond simple volatility to capture the "fat tails" of financial distributions.
 
-Assumes normally distributed returns:
+### Value at Risk (VaR)
+Estimates the maximum expected loss over a holding period (1-day or 10-day) at a given confidence level.
+- **Parametric VaR**: Assumes normal distribution (μ - z_α × σ).
+- **Historical VaR**: Uses empirical return distributions from the **Parquet Gold** data layer.
+
+### Conditional VaR (CVaR / Expected Shortfall)
+The institutional standard for tail risk, CVaR measures the average loss *given* that the VaR threshold has been breached.
+```
+CVaR = E[Loss | Loss > VaR_95]
+```
+CVaR is a coherent risk measure that captures sub-additivity, unlike standard VaR.
+
+---
+
+## 🔍 Factor & Risk Attribution
+
+Understanding *where* risk comes from is as important as measuring its magnitude.
+
+| Component | Metric | Interpretation |
+|-----------|--------|----------------|
+| **Beta (β)** | `Cov(R_p, R_m) / Var(R_m)` | Sensitivity to broader market movements (SPY/ACWI) |
+| **Alpha (α)** | `R_p - [R_f + β(R_m - R_f)]` | Performance attributable to strategy/agent skill |
+| **Sector Exposure** | `% Net Value per Sector` | Concentration risk in Technology, Finance, Energy, etc. |
+| **Factor Loads** | `Fama-French 3-Factor` | Exposure to Size (SMB), Value (HML), and Momentum (WML) |
+
+---
+
+## 📏 Exposure & Concentration Limits
+
+To prevent "hallucination-driven" over-concentration, the system enforces strict exposure bounds:
+
+- **Gross Exposure**: `(Longs + |Shorts|) / Equity`. Max limit: 150%.
+- **Net Exposure**: `(Longs - |Shorts|) / Equity`. Target range: -20% to +100%.
+- **Single Ticker Cap**: No single asset can exceed 20% of the portfolio (adjustable by profile).
+- **Sector Cap**: No single sector can exceed 55% of the portfolio.
+
+---
+
+## 💧 Liquidity Risk & Execution (TCA)
+
+We model the cost of exiting positions in stressed markets.
+
+- **Time-to-Liquidate**: Estimates days to exit a position assuming a max of 10% of Average Daily Volume (ADV).
+- **Slippage (Market Impact)**: Uses a non-linear model based on volatility and order size relative to ADV.
+- **Transaction Cost Analysis (TCA)**: Post-trade audit of executed price vs. arrival price (mid-price at decision time).
 
 ```
-VaR_parametric = μ - z_α × σ
-
-where:
-  μ = mean daily return
-  σ = standard deviation of daily returns
-  z_α = 1.645 for 95% confidence, 2.326 for 99%
+executed_price = arrival_price × (1 + base_slippage + size_impact)
 ```
 
-### Historical VaR
+---
 
-Uses the empirical return distribution — no normality assumption:
+## 🌩️ Macro Stress Testing
 
-```
-VaR_historical = percentile(returns, 1 - confidence_level)
-```
+We apply calibrated historical shocks to the current holdings to estimate "Instantaneous Loss."
 
-Historical VaR captures fat tails and asymmetry that parametric VaR misses, particularly relevant for crypto-heavy portfolios.
+| Scenario | Equity | Bonds | Crypto | Volatility |
+|----------|--------|-------|--------|------------|
+| **2008 GFC** | -50% | +12% | N/A | 4.0× |
+| **COVID Crash** | -34% | +8% | -50% | 3.0× |
+| **2022 Rate Shock** | -20% | -15% | -65% | 2.0× |
 
-## Conditional VaR (CVaR / Expected Shortfall)
-
-CVaR answers: *given that we exceed VaR, how bad is it on average?*
-
-```
-CVaR = mean(returns[returns < VaR_threshold])
-```
-
-CVaR is a coherent risk measure (unlike VaR) and is the standard in Basel III / FRTB regulatory frameworks. Prediction Wallet reports CVaR at 95% confidence alongside VaR.
-
-## Return-Based Metrics
-
-| Metric | Formula | Interpretation |
-|--------|---------|----------------|
-| **Sharpe Ratio** | `(R_p - R_f) / σ_p` | Excess return per unit of total risk |
-| **Sortino Ratio** | `(R_p - R_f) / σ_downside` | Excess return per unit of downside risk only |
-| **Calmar Ratio** | `R_p / max_drawdown` | Return per unit of max drawdown risk |
-| **Max Drawdown** | `max((peak - trough) / peak)` | Worst peak-to-trough loss |
-
-All ratios use annualized returns. Risk-free rate default: 0% (configurable).
-
-Sortino is particularly useful for crypto-heavy profiles where upside volatility is large but not a risk — only downside volatility matters.
-
-## Stress Testing
-
-Four calibrated crisis scenarios are applied to the current portfolio to estimate loss under extreme conditions:
-
-| Scenario | Equity Shock | Bond Shock | Crypto Shock | Vol Multiplier |
-|----------|-------------|-----------|--------------|----------------|
-| **COVID-19 Crash** (Mar 2020) | -34% | +8% | -50% | 3× |
-| **2008 GFC** | -50% | +12% | N/A | 4× |
-| **Rate Shock** (2022) | -20% | -15% | -65% | 2× |
-| **Tech Selloff** | -40% | +5% | -35% | 2.5× |
-
-Each scenario returns:
-- Estimated portfolio P&L in dollars
-- Estimated portfolio P&L as a percentage
-- Whether the scenario would trigger the kill switch (drawdown ≥ 10%)
-
-Stress test results are surfaced in the UI (Stress Test tab) and included in PDF reports.
-
-## Slippage Model
-
-Trade execution uses a volume-adjusted slippage model:
-
-```
-slippage_rate = base_rate × vol_factor + size_factor
-
-where:
-  base_rate   = profile-level parameter (default: 0.001 = 10bps)
-  vol_factor  = 1.0 + (asset_volatility / 0.20)   [normalized to 20% annual vol]
-  size_factor = +0.0001 per $10,000 notional       [market impact]
-
-executed_price = market_price × (1 + slippage_rate)  [buys]
-executed_price = market_price × (1 - slippage_rate)  [sells]
-```
-
-Every execution stores `slippage_pct` in the `executions` table, enabling post-trade analysis of execution quality.
-
-## Correlation Analysis
-
-The correlation matrix across all portfolio assets is computed from historical daily returns. The UI renders this as a heatmap (Correlation tab).
-
-High off-diagonal correlations (> 0.85) signal concentration risk — the portfolio behaves as fewer independent assets than it appears. This is particularly important during stress periods when correlations tend to converge toward 1.
-
-## Portfolio Drift Monitoring
-
-Target allocation drift is computed per asset:
-
-```
-drift = (current_weight - target_weight) / target_weight
-```
-
-Rebalancing triggers when drift exceeds the profile threshold band. Per-asset bands (`per_asset_threshold` in `profiles/*.yaml`) allow tighter control on volatile assets (e.g., crypto) while allowing wider bands on liquid equities.
+Stress tests are executed every cycle and logged as part of the **MLflow** run metadata, ensuring strategy robustness across multiple regimes.

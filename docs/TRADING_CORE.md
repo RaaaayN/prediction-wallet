@@ -1,42 +1,63 @@
-# Trading Core v1
+# Institutional Trading Core & Execution
 
-The Trading Core is a deterministic, persistent, and auditable Order Management System (OMS) and Portfolio Management System (PMS) layer for the `prediction-wallet`.
+The Trading Core is a deterministic, event-driven Order Management System (OMS) and Portfolio Management System (PMS) designed for institutional-grade reliability and auditability.
 
-## Architecture
+---
 
-The Trading Core has been industrialized into a persistent service-oriented architecture:
+## 🏗️ Architecture: Event-Driven Execution
 
-1.  **TradingCoreService**: The central orchestrator that manages the lifecycle of trades, ensuring transactional integrity between the OMS, Ledger, and Database.
-2.  **Security Master**: Canonical repository of tradable instruments. It now automatically persists new instruments to the database and reloads state on startup.
-3.  **Market Data Handler**: Adapts raw market data into canonical `MarketPrice` objects with freshness tracking and persistence of snapshots.
-4.  **Order Management System (OMS)**: Manages order lifecycle. Every state transition is recorded in the `orders` and `order_events` tables for a complete audit trail.
-5.  **Broker Adapters**: Interfaces for trade execution. Currently includes a `SimulationBrokerAdapter` with slippage models.
-6.  **Ledger**: The source of truth for aggregate positions and cash movements. It is fully backed by the `position_ledger` and `cash_movements` tables.
+The core is built as a series of persistent services that ensure every state transition is logged and every trade is explainable.
 
-## Persistence
+1.  **TradingCoreService**: The central orchestrator managing the lifecycle of trades.
+2.  **Security Master**: Canonical repository of tradable instruments, integrated with the **Parquet Gold** layer for historical corporate actions.
+3.  **Market Data Handler**: High-performance adapter providing snapshots with microsecond-level freshness tracking.
+4.  **Order Management System (OMS)**: Handles the full state machine for orders (Pending, Open, Filled, Cancelled, Rejected).
+5.  **Execution Simulation (Broker Adapters)**:
+    - **Market Orders**: Immediate fill with volume-adjusted slippage.
+    - **Limit Orders**: Fill only when price crosses the limit, accounting for queue priority.
+    - **TWAP/VWAP Simulation**: Algorithmic execution simulation for large notional orders to minimize market impact.
 
-Unlike previous versions that relied on in-memory state or manual repository calls, the Trading Core components now handle their own persistence:
-- **Instruments** are upserted as they are discovered or bootstrapped.
-- **Orders** and their status updates are saved immediately.
-- **Executions** are recorded in the `trade_executions_v2` table.
-- **Positions** and **Cash** are updated in the database atomically as part of the execution application process.
+---
 
-## Integration
+## 📈 Realistic Backtesting v2
 
-The Trading Core is encapsulated within the `TradingCoreService`. The `PortfolioAgentService` utilizes this service to execute its trade plan when `TRADING_CORE_ENABLED=true`.
+Our backtesting engine moves beyond simple daily rebalancing to event-driven market simulation.
 
-## Configuration
+- **Look-Ahead Bias Protection**: Strict temporal alignment ensures strategies only see data available *at the moment of decision*.
+- **Realistic Fill Logic**: Uses bid/ask spreads and depth-of-book approximations from historical Parquet data.
+- **Transaction Cost Analysis (TCA)**: Every backtest calculates arrival price, implementation shortfall, and execution slippage.
+- **Survivorship Bias Mitigation**: The Security Master tracks inactive and delisted tickers.
 
-Enable the Trading Core via environment variable:
-```bash
-TRADING_CORE_ENABLED=true
-```
+---
 
-## API Endpoints
+## 🔄 The Institutional Trade Lifecycle
 
-Industrialized endpoints for inspecting the Trading Core state:
-- `GET /api/trading-core/instruments`: List known instruments.
-- `GET /api/trading-core/positions`: Active ledger positions (from DB).
-- `GET /api/trading-core/orders`: Order history (from DB).
-- `GET /api/trading-core/executions`: Execution history (from DB).
-- `GET /api/trading-core/cash-movements`: Cash history (from DB).
+Every decision follows a governed path from research to reconciliation:
+
+1.  **Strategy Generation**: The **Research Copilot** (LLM) or a Quantitative Model proposes a trade based on the current regime and signals.
+2.  **Compliance Check**: The **Policy Engine** runs Layer 0-2 checks (Drawdown, Concentration, Universe).
+3.  **Order Initialization**: The OMS creates a `Pending` order and assigns a unique `order_id`.
+4.  **Execution Simulation**: The Broker Adapter applies the **Slippage & Fee Model** (Fixed fee + bps + Impact).
+5.  **Ledger Application**: Successful fills atomically update the **Position Ledger** and **Cash Movements**.
+6.  **Reconciliation**: The Middle Office service reconciles the simulator state with the persistent database ledger every cycle.
+
+---
+
+## 📊 Transaction Cost Analysis (TCA)
+
+We measure execution quality through multiple benchmarks:
+
+| Benchmark | Definition | Interpretation |
+|-----------|------------|----------------|
+| **Arrival Price** | Mid-price at the moment of order creation | The target price for the strategy. |
+| **Implementation Shortfall** | `(Arrival Price - Executed Price) / Arrival Price` | Total cost of execution including delay and impact. |
+| **VWAP Benchmark** | Executed price vs. Volume Weighted Average Price | Measure of execution relative to market volume. |
+| **Slippage (bps)** | `|Executed - Market| / Market × 10,000` | Precision of the fill relative to the spot price. |
+
+---
+
+## 🛠️ Data Lineage & Persistence
+
+- **Transaction Ledger**: Every trade is stored in `trade_executions_v2` with a link to the **MLflow Run ID**.
+- **Audit Logs**: Every state transition in the OMS triggers an entry in `order_events`.
+- **Snapshot Storage**: Portfolio states are snapshotted to **Parquet** every cycle for high-speed analytical replay.

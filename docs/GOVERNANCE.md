@@ -1,12 +1,19 @@
-# Governance Model
+# Institutional Governance & Control
 
-Prediction Wallet enforces a **three-layer deterministic policy engine** that validates every LLM decision before any trade executes. The AI proposes; the policy decides.
+Prediction Wallet enforces a multi-layered governance framework that bridges the gap between AI-driven research and institutional-grade execution. Our philosophy is: **"AI for research operations, not unchecked trading autonomy."**
 
-## Design Philosophy
+## Governance Pillars
 
-The fundamental problem in AI portfolio management is not intelligence — it is accountability. Regulators, compliance officers, and portfolio managers need to answer: *why did this trade execute?* This engine makes that question answerable at every layer.
+The platform rests on four pillars of governance to ensure every decision is auditable, reproducible, and compliant:
 
-## The Five-Stage Cycle
+1.  **Deterministic Guardrails**: A three-layer policy engine that validates every LLM decision before any trade executes.
+2.  **Scientific Validation**: Mandatory walk-forward and Combinatorial Purged Cross-Validation (CPCV) to prevent backtest overfitting.
+3.  **MLOps Lineage**: Full tracking of data, code, and model versions via **DVC** and **MLflow**.
+4.  **Operational Audit**: Immutable event sourcing and persistent decision traces.
+
+---
+
+## 🛡️ The Five-Stage Governed Cycle
 
 Every rebalancing cycle passes through these stages in order:
 
@@ -15,75 +22,72 @@ Every rebalancing cycle passes through these stages in order:
 │ OBSERVE │───▶│ DECIDE  │───▶│ VALIDATE │───▶│ EXECUTE │───▶│ AUDIT │
 │         │    │  (LLM)  │    │ (policy) │    │  (sim)  │    │  (DB) │
 └─────────┘    └─────────┘    └──────────┘    └─────────┘    └───────┘
-  Market +        Trade          3-layer          Slippage      Full
- portfolio       Decision        engine           applied       trace
- snapshot       (Pydantic)      runs here         + logged      stored
+  Market +        Research       3-layer          Realistic     Full
+ portfolio        Copilot        engine           Slippage      Lineage
+ snapshot       (Strategy)      runs here         + Fees        stored
 ```
 
 The `VALIDATE` stage is the core governance layer. It runs entirely in Python with no LLM involvement — deterministic, testable, reproducible.
 
-## Policy Layers
+---
+
+## 🧱 The Three-Layer Policy Engine
 
 ### Layer 0 — Hard Violations (Cycle Abort)
+Checks for catastrophic failures or unauthorized states. Any failure aborts the entire cycle.
 
-These checks run first. Any failure aborts the entire cycle (`approved = False`). No trades execute.
-
-| Rule | Trigger |
-|------|---------|
-| **Kill switch** | Portfolio drawdown ≥ 10% from peak |
-| **Live mode blocked** | `EXECUTION_MODE=live` is not enabled |
-| **Trade count exceeded** | `len(approved_trades) > MAX_TRADES_PER_CYCLE` |
-
-When Layer 0 fires, the full violation set is written to `decision_traces` with `approved=false`. The cycle is closed and the next cycle starts fresh.
+- **Kill Switch**: Triggered if portfolio drawdown ≥ 10% from peak.
+- **Execution Mode**: Blocks execution if `EXECUTION_MODE` is set to `live` (unauthorized).
+- **Trade Volume**: Limits the total number of trades per cycle to prevent high-frequency "hallucinations."
 
 ### Layer 1 — Market Context Soft Blocks (All Trades Blocked)
+Evaluates the validity of the decision environment. If triggered, the cycle is valid but all trades are rejected.
 
-These checks apply to the entire decision, not individual trades. If triggered, the cycle is marked valid (`approved = True`) but all trades are rejected. This preserves cycle integrity while preventing bad-signal execution.
-
-| Rule | Trigger | Configured via |
-|------|---------|----------------|
-| **Low confidence** | `decision.confidence < min_confidence` | `profiles/*.yaml → policy.min_confidence` |
-| **Stale data** | `decision.data_freshness == "stale"` | `profiles/*.yaml → policy.stale_data_blocks: true` |
-
-Example: a conservative profile sets `min_confidence: 0.7`. An LLM that returns confidence 0.65 will have all its trades soft-blocked — but the cycle audit record remains valid.
+- **Confidence Floor**: `decision.confidence < min_confidence` (e.g., 0.70).
+- **Data Freshness**: Blocks all trades if market data is stale.
+- **Regime Check**: Blocks trades if the market regime is classified as `risk_off` (e.g., extreme volatility).
 
 ### Layer 2 — Per-Trade Soft Blocks (Individual Trade Rejected)
+Validates individual trade proposals against the portfolio mandate.
 
-Each trade proposal is evaluated independently. Blocked trades are recorded with their rejection reason; other trades in the same decision may still execute.
+- **Universe Check**: Ticker must be in the `TARGET_ALLOCATION` universe.
+- **Notional Cap**: Prevents any single trade from exceeding a percentage of total portfolio value.
+- **Sector Concentration**: Prevents buys that would push a sector above a defined limit (default 55%).
+- **Slippage Tolerance**: Rejects trades where the estimated slippage exceeds a threshold.
 
-| Rule | Check |
-|------|-------|
-| **Unknown ticker** | Ticker not in `TARGET_ALLOCATION` universe |
-| **Off-plan trade** | Trade not in the deterministic rebalance plan (prevents LLM hallucination) |
-| **Missing price** | Market price ≤ 0 for this ticker |
-| **Notional cap** | `(price × qty) / portfolio_value > MAX_ORDER_FRACTION_OF_PORTFOLIO` |
-| **Per-ticker cap** | Profile-level override: e.g., `BTC-USD` capped at 15% of portfolio |
-| **Sector concentration** | Buy would push sector above `MAX_SECTOR_CONCENTRATION` (default 55%) |
+---
 
-## Example: Why Was This Trade Blocked?
+## 🧪 Scientific Validation & Anti-Overfitting
 
-**Scenario:** Agent proposes `BUY BTC-USD 2.5 shares` in a balanced profile.
+To ensure strategies are robust and not just "lucky," the platform enforces institutional validation protocols:
 
-1. Layer 0: drawdown = 6% → kill switch not active. ✓
-2. Layer 1: confidence = 0.82, data fresh → no market block. ✓
-3. Layer 2:
-   - Ticker `BTC-USD` is in universe. ✓
-   - Trade is in deterministic plan. ✓
-   - Price = $45,000, qty = 2.5 → notional = $112,500. Portfolio = $500,000. Fraction = 22.5%.
-   - `MAX_ORDER_FRACTION_OF_PORTFOLIO = 20%` → **BLOCKED**
-   - Rejection: `"Trade exceeds notional cap (20%)."`
+- **Realistic Backtesting**: Every backtest includes slippage models, transaction fees (TCA), and realistic fill logic.
+- **Walk-Forward Validation**: Strategies are tested on rolling windows of data they haven't seen during training.
+- **Combinatorial Purged CV (CPCV)**: A robust cross-validation method that accounts for temporal dependencies and prevents data leakage, significantly reducing the "Probability of Backtest Overfitting."
 
-The rejection is stored in `decision_traces` with the full trade proposal. The agent can inspect this on the next cycle.
+---
 
-## Audit Trail
+## 📑 MLOps Governance (Lineage & Reproducibility)
 
-Every cycle writes a complete record to the `decision_traces` SQLite table:
+Institutional grade requires that every result be reproducible. We achieve this through:
+
+- **Data Versioning (DVC)**: Every dataset (Bronze/Silver/Gold) is versioned and hashed. We know exactly which data snapshot was used for every experiment.
+- **Experiment Tracking (MLflow)**: Every research run logs its code version, hyper-parameters, data version, and performance metrics.
+- **Model Registry**: Only models that have passed the "Scientific Validation" jalon can be promoted to the registry for paper trading or simulation.
+
+---
+
+## 🔍 Audit & Compliance
+
+Every cycle writes a complete record to the `decision_traces` table and is tracked in **MLflow**:
 
 ```json
 {
   "cycle_id": "2024-01-15T14:32:00",
   "stage": "validate",
   "approved": true,
+  "mlflow_run_id": "8b2a3c...",
+  "dvc_data_hash": "e9f1a2...",
   "allowed_trades": [{"action": "buy", "ticker": "AAPL", "quantity": 10}],
   "blocked_trades": [
     {
@@ -97,19 +101,4 @@ Every cycle writes a complete record to the `decision_traces` SQLite table:
 }
 ```
 
-This structure means every trade outcome — executed or blocked — is fully explainable from the database alone, with no LLM re-query required.
-
-## Profile-Level Policy Configuration
-
-Each `profiles/*.yaml` file can override policy parameters:
-
-```yaml
-policy:
-  min_confidence: 0.65        # Layer 1: block all trades if confidence below this
-  stale_data_blocks: true     # Layer 1: block all trades if market data is stale
-  per_ticker_max_fraction:    # Layer 2: per-asset notional cap overrides
-    BTC-USD: 0.15
-    ETH-USD: 0.10
-```
-
-This means the governance rules are version-controlled alongside the portfolio mandate — changes to risk policy are tracked in git.
+This lineage ensures that years later, we can explain exactly why a trade was executed, which model proposed it, and what data justified that decision.

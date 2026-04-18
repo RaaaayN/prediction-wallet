@@ -1,72 +1,53 @@
-# Security and Authentication
+# Institutional Security & Compliance
 
-This document outlines the security architecture and authentication mechanisms introduced in the **Fondation** phase.
+Prediction Wallet is built with a "Security-First" architecture, ensuring that every action is authenticated, every decision is audited, and all sensitive data is protected according to institutional standards.
 
-## API Authentication
+---
 
-The Prediction Wallet API uses a header-based authentication system. It supports both **Persistent DB-backed Users** and **Static Environment Keys**.
+## 🔐 Authentication & Access Control (RBAC)
 
-### User Management (Persistent)
+The platform enforces strict **Role-Based Access Control (RBAC)** across all API and CLI interfaces.
 
-The system maintains a `users` table in the database, allowing for multiple users and service accounts.
-
-- **Storage**: Keys are stored in the `users` table.
-- **Service Accounts**: Users can be flagged as `is_service_account` for programmatic access.
-- **Bootstrapping**: The `python main.py init` command prompts to create an initial Admin user if the database is empty.
-
-### Role-Based Access Control (RBAC)
-
-Three roles are supported:
-
+### Role Hierarchy
 | Role | Permissions |
 |------|-------------|
-| **ADMIN** | Full access to all endpoints (Read + Write + Execute). |
-| **TRADER** | Access to research, idea book, and trade execution. |
-| **VIEWER** | Read-only access to portfolio, positions, and analytics. |
+| **ADMIN** | Full system control, user management, and configuration. |
+| **QUANT** | Access to research, backtesting, model promotion, and DVC/MLflow. |
+| **TRADER** | Access to execution, OMS, and rebalancing cycles. |
+| **VIEWER** | Read-only access to analytics, reports, and portfolio state. |
 
-### Configuration (Backward Compatibility)
+### Authentication Mechanisms
+- **Bearer Tokens**: API requests require an `X-API-KEY` header validated against the persistent PostgreSQL/SQLite `users` table.
+- **Service Accounts**: Dedicated identities for automated CI/CD and monitoring agents.
+- **RBAC Enforcement**: Middleware validates role requirements for every endpoint (e.g., `RequiresRole("QUANT")`).
 
-Static API keys in the `.env` file are still supported for backward compatibility and simple deployments:
+---
 
-```env
-# Static API Keys (fallback if not found in DB)
-API_KEY_ADMIN=your-admin-secret-key
-API_KEY_TRADER=your-trader-secret-key
-API_KEY_VIEWER=your-viewer-secret-key
-```
+## 📝 Immutable Audit Trails
 
-If no keys are configured in the environment AND the database has no users, the API defaults to an **"Opt-in mode"** where all requests are permitted with Super Admin privileges.
+Every action within the platform leaves a permanent, non-repudiable trace.
 
-### Usage
+- **Decision Traces**: Every governed cycle stage (Observe, Decide, Validate, Execute, Audit) is logged with its full payload and justification.
+- **Order Events**: Every state transition in the OMS (Pending → Filled) is recorded.
+- **MLflow Lineage**: Every research experiment is linked to the specific user and code version that executed it.
+- **Access Logs**: All API requests are logged in structured JSON format, including client IP, duration, and status.
 
-#### API Headers
-All authenticated requests must include the `X-API-KEY` header:
-```bash
-curl -H "X-API-KEY: your-admin-secret-key" http://localhost:8000/api/portfolio
-```
+---
 
-#### Web UI
-To use the Web UI with authentication enabled, store your API key in the browser's `localStorage` under the key `prediction_wallet_api_key`. You can do this via the browser console:
-```javascript
-localStorage.setItem('prediction_wallet_api_key', 'your-admin-secret-key');
-location.reload();
-```
+## 🛡️ Secrets & Data Privacy
 
-## Observability
+We follow industry best practices for protecting sensitive information:
 
-The platform includes structured access logging. Every request is logged in JSON format to `stdout`:
+- **Zero-Secret Repository**: No API keys or credentials are ever committed to the repository. We use `.env` files and environment variables managed via `Pydantic Settings`.
+- **Data Encryption**: Recommended use of encrypted volumes for **Parquet Gold** data and database backups.
+- **PII Protection**: The system is designed to handle only financial and operational data; no Personal Identifiable Information (PII) of clients is stored in the core engine.
 
-```json
-{"type": "access", "method": "GET", "path": "/api/portfolio", "status": 200, "duration_ms": 12.45, "client": "127.0.0.1"}
-```
+---
 
-If OpenTelemetry is enabled (`OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_CONSOLE_EXPORTER=1`), requests are also traced as server spans.
+## 🏛️ Compliance Framework (In Spirit)
 
-## CORS Policy
+While this is an open-source project, the architecture is designed to align with the spirit of institutional compliance:
 
-By default, the API allows all origins (`*`) if `ALLOWED_ORIGINS` is not set or set to `*`. In production, it is highly recommended to restrict this to your specific frontend domain.
-
-## Secrets Management
-
-- **No Secrets in Code**: All sensitive keys (AI providers, API keys) are managed via `pydantic-settings` and `.env` files.
-- **Redaction**: Future updates will include automatic redaction of secrets in logs and traces.
+- **SOC2 Alignment**: Focused on Security, Availability, and Confidentiality through rigorous logging and RBAC.
+- **Basel III / FRTB**: Risk models and tail-risk reporting are designed to meet modern banking regulatory standards.
+- **Auditability**: The combination of **DVC**, **MLflow**, and **Event Sourcing** provides a "Compliance-Ready" audit trail for regulators.

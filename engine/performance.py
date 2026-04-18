@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from config import RISK_FREE_RATE
 
@@ -205,6 +206,49 @@ def avg_slippage_bps(trades: list[dict]) -> float:
     return float(np.mean(slippages)) if slippages else 0.0
 
 
+def compute_liquidity_risk(
+    position_size: float,
+    avg_daily_volume: float,
+    max_participation: float = 0.1,
+) -> float:
+    """Compute Time-to-Liquidate in days.
+
+    Args:
+        position_size: quantity of shares/units held
+        avg_daily_volume: average daily traded volume (shares/units)
+        max_participation: max percentage of daily volume to trade (default 10%)
+
+    Returns:
+        Estimated days to liquidate the full position.
+    """
+    if avg_daily_volume <= 0 or max_participation <= 0:
+        return float("inf")
+    return float(position_size / (avg_daily_volume * max_participation))
+
+
+def compute_alpha_beta(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+    rf_daily: float = 0.0,
+) -> tuple[float, float]:
+    """Compute annualized Jensen's Alpha and Beta via linear regression.
+
+    Returns:
+        tuple of (annualized_alpha, beta)
+    """
+    aligned = portfolio_returns.align(benchmark_returns, join="inner")
+    y = aligned[0] - rf_daily
+    x = aligned[1] - rf_daily
+    if y.empty or x.empty or len(y) < 2:
+        return 0.0, 1.0
+    
+    slope, intercept, _, _, _ = stats.linregress(x, y)
+    # Annualize alpha: (1 + intercept)^252 - 1 (approximation) or intercept * 252
+    ann_alpha = float(intercept * 252)
+    beta = float(slope)
+    return ann_alpha, beta
+
+
 def parametric_var(returns: pd.Series, confidence: float = 0.95, portfolio_value: float = 1.0) -> float:
     """Parametric (Gaussian) Value at Risk.
 
@@ -218,7 +262,6 @@ def parametric_var(returns: pd.Series, confidence: float = 0.95, portfolio_value
     """
     if returns.empty or returns.std() == 0:
         return 0.0
-    from scipy import stats
     z = stats.norm.ppf(1 - confidence)
     var_pct = -(returns.mean() + z * returns.std())
     return float(var_pct * portfolio_value)
@@ -304,6 +347,7 @@ def performance_report(
     history: list[dict],
     trades: list[dict],
     benchmark_history: list[dict] | None = None,
+    exposures_history: list[dict] | None = None,
 ) -> dict:
     """Compute a comprehensive performance report.
 
@@ -311,6 +355,7 @@ def performance_report(
         history: portfolio snapshot history [{date, total_value}, ...]
         trades: executed trade list
         benchmark_history: optional benchmark history in same format
+        exposures_history: optional list of exposure dicts over time
 
     Returns:
         Dict with all performance metrics, both gross and net of costs
@@ -350,14 +395,32 @@ def performance_report(
         "avg_slippage_bps": avg_slippage_bps(trades),
     }
 
+    if exposures_history:
+        exp_df = pd.DataFrame(exposures_history)
+        if not exp_df.empty:
+            report["avg_gross_exposure"] = float(exp_df["gross_exposure"].mean()) if "gross_exposure" in exp_df.columns else 1.0
+            report["avg_net_exposure"] = float(exp_df["net_exposure"].mean()) if "net_exposure" in exp_df.columns else 1.0
+            report["max_leverage"] = float(exp_df["leverage_used"].max()) if "leverage_used" in exp_df.columns else 1.0
+    else:
+        report["avg_gross_exposure"] = 1.0
+        report["avg_net_exposure"] = 1.0
+        report["max_leverage"] = 1.0
+
     if benchmark_history:
         bm_values = pd.Series([h["total_value"] for h in benchmark_history])
         bm_returns = bm_values.pct_change().dropna()
         report["tracking_error"] = tracking_error(daily_returns, bm_returns)
         report["benchmark_cumulative_return"] = cumulative_return(benchmark_history)
+        
+        # Add Alpha and Beta
+        alpha, beta = compute_alpha_beta(daily_returns, bm_returns)
+        report["alpha"] = alpha
+        report["beta"] = beta
     else:
         report["tracking_error"] = None
         report["benchmark_cumulative_return"] = None
+        report["alpha"] = 0.0
+        report["beta"] = 1.0
 
     return report
 
