@@ -1,10 +1,13 @@
 """Tests for the Hardening Production phase."""
 
 import pytest
+import sys
+import time
 from fastapi.testclient import TestClient
 from api.main import app
 from services.health_service import HealthService
 from services.back_office_service import BackOfficeService
+from services.market_service import MarketService, market_cb
 from db.schema import init_db
 import config
 import os
@@ -24,6 +27,7 @@ def db_path(tmp_path, monkeypatch):
 def test_health_check(db_path, monkeypatch):
     """Verify health service and endpoint."""
     monkeypatch.setattr(config, "MARKET_DB", db_path)
+    monkeypatch.setitem(sys.modules, "yfinance", object())
     
     svc = HealthService()
     health = svc.get_full_health()
@@ -33,6 +37,18 @@ def test_health_check(db_path, monkeypatch):
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "up"
+
+
+def test_market_health_does_not_require_yfinance(db_path, monkeypatch):
+    """Health checks should stay local even if yfinance is unavailable."""
+    monkeypatch.setattr(config, "MARKET_DB", db_path)
+    monkeypatch.setitem(sys.modules, "yfinance", object())
+
+    svc = HealthService()
+    check = svc.check_market_data()
+
+    assert check["status"] == "up"
+    assert check["provider"] == "local-cache"
 
 def test_backup_logic(db_path, monkeypatch, tmp_path):
     """Verify that backup creates files and handles retention."""
@@ -74,6 +90,31 @@ def test_resilience_retry():
     result = failing_func()
     assert result == "success"
     assert attempts == 3
+
+
+def test_open_circuit_fails_fast_without_retry(monkeypatch, db_path):
+    """An open circuit should bypass retry backoff entirely."""
+    monkeypatch.setattr(config, "MARKET_DB", db_path)
+
+    import utils.resilience as resilience
+    from services import market_service
+
+    original_state = (market_cb.state, market_cb.failures, market_cb.last_failure_time)
+    market_cb.state = "OPEN"
+    market_cb.failures = market_cb.failure_threshold
+    market_cb.last_failure_time = time.time()
+
+    def fail_sleep(_seconds):
+        raise AssertionError("retry backoff should not run when the circuit is open")
+
+    monkeypatch.setattr(resilience.time, "sleep", fail_sleep)
+    monkeypatch.setattr(market_service, "_require_yfinance", lambda: (_ for _ in ()).throw(AssertionError("yfinance should not be called")))
+
+    try:
+        with pytest.raises(RuntimeWarning):
+            MarketService()._download("AAPL", "1d")
+    finally:
+        market_cb.state, market_cb.failures, market_cb.last_failure_time = original_state
 
 def test_status_endpoint(db_path, monkeypatch):
     """Verify consolidated status endpoint."""

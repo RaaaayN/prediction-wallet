@@ -1,6 +1,8 @@
 """Tests for the Back Office and Reporting phase."""
 
 import pytest
+import sqlite3
+from pathlib import Path
 from services.back_office_service import BackOfficeService
 from services.trading_core_service import TradingCoreService
 from db.schema import init_db
@@ -95,3 +97,52 @@ def test_mifir_export(db_path, monkeypatch):
     assert export[0]["symbol"] == "AAPL"
     assert "transaction_id" in export[0]
     assert export[0]["investment_decision"] == "ALGO_PREDICTION_WALLET_V1"
+
+
+def test_backup_logic_postgres_snapshot(tmp_path, monkeypatch):
+    """Verify that Postgres backups snapshot the live tables into SQLite."""
+    import services.back_office_service as bo_module
+
+    monkeypatch.setattr(config, "USE_POSTGRES", True)
+    monkeypatch.setattr(config, "DATABASE_URL", "postgresql://example")
+    reports_dir = str(tmp_path / "reports")
+    monkeypatch.setattr(config, "REPORTS_DIR", reports_dir)
+
+    class FakeCursor:
+        def __init__(self, rows, columns):
+            self._rows = rows
+            self.description = [(column, None, None, None, None, None, None) for column in columns]
+
+        def fetchall(self):
+            return self._rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, query):
+            if "information_schema.tables" in query:
+                return FakeCursor([{"table_name": "positions"}], ["table_name"])
+            if 'SELECT * FROM "positions"' in query:
+                return FakeCursor([{"ticker": "AAPL", "quantity": 2.5}], ["ticker", "quantity"])
+            raise AssertionError(f"Unexpected query: {query}")
+
+    monkeypatch.setattr(bo_module, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(
+        "db.repository.get_trading_core_positions",
+        lambda: [{"ticker": "AAPL", "quantity": 2.5, "price": 100.0}],
+    )
+
+    svc = BackOfficeService(execution_service=object(), market_service=object())
+    result = svc.run_backup()
+
+    backup_path = Path(reports_dir) / "backups"
+    snapshot_file = backup_path / result["db_snapshot"]
+    assert snapshot_file.exists()
+
+    with sqlite3.connect(snapshot_file) as conn:
+        rows = conn.execute('SELECT ticker, quantity FROM "positions"').fetchall()
+    assert rows == [("AAPL", 2.5)]

@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 from typing import Dict, Any
 from db.connection import get_connection
+from db.repository import get_market_data_status
 from config import MARKET_DB
 
 class HealthService:
@@ -22,12 +23,10 @@ class HealthService:
             return {"status": "down", "error": str(e)}
 
     def check_market_data(self) -> Dict[str, Any]:
-        """Verify connectivity to market data providers (simulated)."""
-        import yfinance as yf
+        """Verify local market-data freshness without calling external providers."""
         try:
-            # Simple metadata check for a stable ticker
-            yf.Ticker("AAPL").info
-            return {"status": "up", "provider": "yfinance"}
+            rows = get_market_data_status()
+            return {"status": "up", "provider": "local-cache", "rows": len(rows)}
         except Exception as e:
             return {"status": "down", "error": str(e)}
 

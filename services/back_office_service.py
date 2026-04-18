@@ -6,9 +6,13 @@ from datetime import datetime
 from pathlib import Path
 import json
 import uuid
+import sqlite3
+
+import pandas as pd
 
 from services.execution_service import ExecutionService
 from services.market_service import MarketService
+from db.connection import get_connection
 from utils.time import utc_now_iso
 
 class BackOfficeService:
@@ -147,19 +151,23 @@ class BackOfficeService:
         """Create a compressed snapshot of the database and cold record exports."""
         import shutil
         import os
-        from config import MARKET_DB, REPORTS_DIR
+        import config
         from db.repository import get_trading_core_positions
-        
-        backup_dir = Path(REPORTS_DIR) / "backups"
+
+        backup_dir = Path(config.REPORTS_DIR) / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         
         timestamp = utc_now_iso().replace(":", "-")
         db_backup_name = f"snapshot_{timestamp}.db"
         ledger_backup_name = f"ledger_{timestamp}.json"
-        
+
         # 1. Snapshot DB
-        shutil.copy(str(MARKET_DB), str(backup_dir / db_backup_name))
-        
+        db_backup_path = backup_dir / db_backup_name
+        if config.USE_POSTGRES:
+            self._backup_postgres_database(db_backup_path)
+        else:
+            shutil.copy(str(config.MARKET_DB), str(db_backup_path))
+
         # 2. Export Ledger JSON (Cold record)
         positions = get_trading_core_positions()
         with open(backup_dir / ledger_backup_name, "w") as f:
@@ -182,3 +190,22 @@ class BackOfficeService:
             "ledger_export": ledger_backup_name,
             "total_backups": min(len(all_snapshots), 7)
         }
+
+    def _backup_postgres_database(self, destination: Path) -> None:
+        """Materialize the live Postgres database into a local SQLite snapshot."""
+        with get_connection() as source_conn, sqlite3.connect(destination) as target_conn:
+            tables = source_conn.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                ORDER BY table_name
+                """
+            ).fetchall()
+            for table in tables:
+                table_name = table["table_name"] if isinstance(table, dict) else table[0]
+                cursor = source_conn.execute(f'SELECT * FROM "{table_name}"')
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                rows = cursor.fetchall()
+                frame = pd.DataFrame.from_records(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+                frame.to_sql(table_name, target_conn, if_exists="replace", index=False)
