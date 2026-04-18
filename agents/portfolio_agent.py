@@ -179,16 +179,18 @@ class PortfolioAgentService:
         db_path: str | None = None,
         profile_name: str | None = None,
     ):
-        self.market_gateway = market_gateway or MarketService()
-        self.execution_service = execution_service or ExecutionService()
+        self.profile_name = profile_name
+        self.market_gateway = market_gateway or MarketService(profile_name=profile_name)
+        self.execution_service = execution_service or ExecutionService(profile_name=profile_name)
         self.reporting_service = reporting_service or ReportingService(
             market_service=self.market_gateway,
             execution_service=self.execution_service,
         )
         self.audit_repository = AuditRepositoryAdapter()
-        from portfolio_loader import get_active_profile
-        self.policy_engine = ExecutionPolicyEngine(PolicyConfig.from_profile(get_active_profile()))
-        self.idea_book_service = IdeaBookService()
+        from portfolio_loader import get_active_profile, load_profile
+        active_profile = load_profile(profile_name) if profile_name else get_active_profile()
+        self.policy_engine = ExecutionPolicyEngine(PolicyConfig.from_profile(active_profile))
+        self.idea_book_service = IdeaBookService(profile_name=profile_name)
         self.agent = agent
 
         # Trading Core v1

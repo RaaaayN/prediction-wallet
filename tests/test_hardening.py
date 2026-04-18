@@ -6,9 +6,11 @@ import time
 import yaml
 from fastapi.testclient import TestClient
 from api.main import app
+from portfolio_loader import get_active_profile
 from services.health_service import HealthService
 from services.back_office_service import BackOfficeService
 from services.market_service import MarketService, market_cb
+from services.execution_service import ExecutionService
 from db.schema import init_db
 import config
 import os
@@ -232,3 +234,64 @@ def test_trade_preview_keeps_portfolio_value_consistent(monkeypatch, db_path):
     assert data["portfolio_value"] == 10000.0
     assert data["cash_after"] == 8000.0
     assert data["new_weight"] == 0.1
+
+
+def test_get_active_profile_prefers_runtime_env(monkeypatch):
+    """Runtime profile changes should override the cached settings object."""
+    from settings import settings as app_settings
+
+    monkeypatch.setenv("PORTFOLIO_PROFILE", "growth")
+    monkeypatch.setattr(app_settings, "portfolio_profile", "balanced")
+
+    profile = get_active_profile()
+
+    assert profile["name"] == "growth"
+
+
+def test_execution_service_preserves_side_when_sell_does_not_flip(monkeypatch):
+    """A short-side sell that leaves a positive quantity should stay long-labelled."""
+    service = ExecutionService(profile_name="balanced")
+    service.runtime_context = type(
+        "Ctx",
+        (),
+        {
+            "target_allocation": {"AAPL": 1.0},
+            "initial_capital": 10000.0,
+            "crypto_tickers": set(),
+            "slippage_equities": 0.0,
+            "slippage_crypto": 0.0,
+            "sector_map": {"AAPL": "tech"},
+            "hedge_fund_profile": {"universe": {"AAPL": {}}},
+        },
+    )()
+    saved_portfolios = []
+    service.load_portfolio = lambda: {
+        "positions": {"AAPL": 10.0},
+        "position_sides": {"AAPL": "long"},
+        "average_costs": {"AAPL": 100.0},
+        "position_ideas": {"AAPL": "idea-aapl"},
+        "cash": 5000.0,
+        "peak_value": 10000.0,
+        "history": [],
+    }
+    service.save_portfolio = lambda portfolio: saved_portfolios.append(portfolio.copy())
+    service.trade_log_store = type("TradeLog", (), {"append": lambda self, trade: None})()
+    service.validate_order = lambda *args, **kwargs: None
+    monkeypatch.setattr("services.execution_service.apply_slippage", lambda market_price, *args, **kwargs: market_price)
+
+    result = service.execute_order(
+        {
+            "action": "sell",
+            "ticker": "AAPL",
+            "quantity": 4.0,
+            "reason": "rebalance",
+            "side": "short",
+            "idea_id": "idea-aapl",
+            "sleeve": "core_longs",
+        },
+        market_price=100.0,
+    )
+
+    assert result.success is True
+    assert saved_portfolios[-1]["positions"]["AAPL"] == 6.0
+    assert saved_portfolios[-1]["position_sides"]["AAPL"] == "long"

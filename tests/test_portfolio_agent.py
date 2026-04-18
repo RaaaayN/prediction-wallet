@@ -94,6 +94,54 @@ def test_policy_blocks_trade_outside_plan():
     assert policy.blocked_trades[0].ticker == "TSLA"
 
 
+def test_portfolio_agent_forwards_profile_name(monkeypatch):
+    """Explicit profile selection should flow into all nested legacy services."""
+    import agents.portfolio_agent as portfolio_agent_module
+
+    captured = {}
+
+    class FakeMarketService:
+        def __init__(self, *args, **kwargs):
+            captured["market_profile"] = kwargs.get("profile_name")
+
+    class FakeExecutionService:
+        def __init__(self, *args, **kwargs):
+            captured["execution_profile"] = kwargs.get("profile_name")
+
+    class FakeIdeaBookService:
+        def __init__(self, *args, **kwargs):
+            captured["idea_profile"] = kwargs.get("profile_name")
+
+    class FakeReportingService:
+        def __init__(self, *args, **kwargs):
+            captured["reporting_market"] = kwargs.get("market_service")
+            captured["reporting_execution"] = kwargs.get("execution_service")
+
+    class FakeExecutionPolicyEngine:
+        def __init__(self, profile):
+            captured["policy_profile"] = profile
+
+    monkeypatch.setattr(portfolio_agent_module, "MarketService", FakeMarketService)
+    monkeypatch.setattr(portfolio_agent_module, "ExecutionService", FakeExecutionService)
+    monkeypatch.setattr(portfolio_agent_module, "IdeaBookService", FakeIdeaBookService)
+    monkeypatch.setattr(portfolio_agent_module, "ReportingService", FakeReportingService)
+    monkeypatch.setattr(portfolio_agent_module, "ExecutionPolicyEngine", FakeExecutionPolicyEngine)
+    monkeypatch.setattr(
+        portfolio_agent_module.PolicyConfig,
+        "from_profile",
+        classmethod(lambda cls, profile: profile["name"]),
+    )
+    monkeypatch.setattr(portfolio_agent_module, "TRADING_CORE_ENABLED", False)
+
+    service = portfolio_agent_module.PortfolioAgentService(profile_name="growth")
+
+    assert captured["market_profile"] == "growth"
+    assert captured["execution_profile"] == "growth"
+    assert captured["idea_profile"] == "growth"
+    assert captured["policy_profile"] == "growth"
+    assert service.profile_name == "growth"
+
+
 # ── Explainability fields tests ───────────────────────────────────────────────
 
 def test_execution_result_explainability_fields_populated():

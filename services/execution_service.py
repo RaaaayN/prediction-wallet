@@ -205,12 +205,23 @@ class ExecutionService:
                 portfolio["cash"] += gross
                 new_qty = held - quantity
                 portfolio["positions"][ticker] = new_qty
-                portfolio["position_sides"][ticker] = "short"
                 portfolio["position_ideas"][ticker] = idea_id
-                if held < 0:
-                    portfolio["average_costs"][ticker] = ((abs(held) * average_cost) + gross) / max(abs(new_qty), MIN_ORDER_QUANTITY)
+                if abs(new_qty) < MIN_ORDER_QUANTITY:
+                    portfolio["positions"].pop(ticker, None)
+                    portfolio["position_sides"].pop(ticker, None)
+                    portfolio["average_costs"].pop(ticker, None)
+                    portfolio["position_ideas"].pop(ticker, None)
                 else:
-                    portfolio["average_costs"][ticker] = fill_price
+                    portfolio["position_sides"][ticker] = "short" if new_qty < 0 else "long"
+                    if new_qty < 0:
+                        if held < 0:
+                            portfolio["average_costs"][ticker] = ((abs(held) * average_cost) + gross) / max(abs(new_qty), MIN_ORDER_QUANTITY)
+                        else:
+                            portfolio["average_costs"][ticker] = fill_price
+                    elif held > 0:
+                        portfolio["average_costs"][ticker] = average_cost
+                    else:
+                        portfolio["average_costs"][ticker] = fill_price
                 cost = gross
             else:  # buy to cover
                 if held >= 0:
