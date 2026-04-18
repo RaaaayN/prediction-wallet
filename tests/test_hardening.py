@@ -6,11 +6,13 @@ import time
 import yaml
 from fastapi.testclient import TestClient
 from api.main import app
+from main import build_parser
 from portfolio_loader import get_active_profile
 from services.health_service import HealthService
 from services.back_office_service import BackOfficeService
 from services.market_service import MarketService, market_cb
 from services.execution_service import ExecutionService
+from strategies import available_strategy_names
 from db.schema import init_db
 import config
 import os
@@ -118,6 +120,19 @@ def test_open_circuit_fails_fast_without_retry(monkeypatch, db_path):
             MarketService()._download("AAPL", "1d")
     finally:
         market_cb.state, market_cb.failures, market_cb.last_failure_time = original_state
+
+
+def test_cli_strategy_choices_follow_registry():
+    """CLI strategy validation should reflect the registered strategy names."""
+    parser = build_parser()
+    choices = None
+    for action in parser._actions:
+        if getattr(action, "dest", None) == "strategy":
+            choices = action.choices
+            break
+
+    assert choices is not None
+    assert set(choices) == set(available_strategy_names())
 
 def test_status_endpoint(db_path, monkeypatch):
     """Verify consolidated status endpoint."""

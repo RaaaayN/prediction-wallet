@@ -10,6 +10,7 @@ import sys
 from agents.portfolio_agent import PortfolioAgentService
 from config import AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE
 from runtime_context import build_runtime_context
+from strategies import available_strategy_names
 
 
 def check_api_key():
@@ -164,9 +165,10 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None, pr
 
 
 def build_parser() -> argparse.ArgumentParser:
+    strategy_choices = available_strategy_names()
     parser = argparse.ArgumentParser(description="Governed multi-asset portfolio agent")
     parser.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy", "long_short_equity"], default=None)
-    parser.add_argument("--strategy", choices=["threshold", "calendar"], default="threshold")
+    parser.add_argument("--strategy", choices=strategy_choices, default="threshold")
     parser.add_argument("--mode", choices=["simulate", "paper", "live"], default=EXECUTION_MODE)
     parser.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
     parser.add_argument("--simulate-days", type=int, default=0, metavar="N")
@@ -174,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     for name in ["observe", "decide", "execute", "audit", "run-cycle"]:
         sub = subparsers.add_parser(name)
-        sub.add_argument("--strategy", choices=["threshold", "calendar"], default="threshold")
+        sub.add_argument("--strategy", choices=strategy_choices, default="threshold")
         sub.add_argument("--mode", choices=["simulate", "paper", "live"], default=EXECUTION_MODE)
         sub.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
         sub.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy", "long_short_equity"], default=None)

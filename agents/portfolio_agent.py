@@ -66,6 +66,7 @@ from services.execution_service import ExecutionService
 from services.idea_book_service import IdeaBookService
 from services.market_service import MarketService
 from services.reporting_service import ReportingService
+from strategies import build_strategy
 
 # Trading Core v1
 from trading_core.security_master import SecurityMaster
@@ -75,8 +76,6 @@ from trading_core.ledger import Ledger
 from trading_core.brokers.simulation import SimulationBrokerAdapter
 from trading_core.models import OrderSide, OrderStatus
 
-from strategies.calendar import CalendarStrategy
-from strategies.threshold import ThresholdStrategy
 from utils.time import utc_now_iso, utc_today_str
 from utils.telemetry import otel_enabled, stage_span
 
@@ -180,6 +179,8 @@ class PortfolioAgentService:
         profile_name: str | None = None,
     ):
         self.profile_name = profile_name
+        from portfolio_loader import get_active_profile, load_profile
+        self.profile = load_profile(profile_name) if profile_name else get_active_profile()
         self.market_gateway = market_gateway or MarketService(profile_name=profile_name)
         self.execution_service = execution_service or ExecutionService(profile_name=profile_name)
         self.reporting_service = reporting_service or ReportingService(
@@ -187,9 +188,7 @@ class PortfolioAgentService:
             execution_service=self.execution_service,
         )
         self.audit_repository = AuditRepositoryAdapter()
-        from portfolio_loader import get_active_profile, load_profile
-        active_profile = load_profile(profile_name) if profile_name else get_active_profile()
-        self.policy_engine = ExecutionPolicyEngine(PolicyConfig.from_profile(active_profile))
+        self.policy_engine = ExecutionPolicyEngine(PolicyConfig.from_profile(self.profile))
         self.idea_book_service = IdeaBookService(profile_name=profile_name)
         self.agent = agent
 
@@ -200,12 +199,7 @@ class PortfolioAgentService:
             self.trading_core = None
 
     def _get_strategy(self, strategy_name: str):
-        if strategy_name == "calendar":
-            return CalendarStrategy()
-        from portfolio_loader import get_active_profile
-        profile = get_active_profile()
-        per_asset = profile.get("per_asset_threshold") or {}
-        return ThresholdStrategy(per_asset_threshold=per_asset or None)
+        return build_strategy(strategy_name, self.profile)
 
     def observe(self, strategy_name: str = "threshold", execution_mode: str = "simulate", cycle_id: str | None = None) -> CycleObservation:
         cycle_id = cycle_id or str(uuid.uuid4())[:8]

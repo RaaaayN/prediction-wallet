@@ -3,6 +3,7 @@
 import json
 import tempfile
 
+import pytest
 from pydantic_ai.models.test import TestModel
 
 from agents.models import ExecutionResult, PolicyEvaluation, PolicyViolation, TradeDecision
@@ -140,6 +141,14 @@ def test_portfolio_agent_forwards_profile_name(monkeypatch):
     assert captured["idea_profile"] == "growth"
     assert captured["policy_profile"] == "growth"
     assert service.profile_name == "growth"
+
+
+def test_unknown_strategy_raises(monkeypatch):
+    """Unknown strategy names should fail fast instead of falling back."""
+    service = build_service()
+
+    with pytest.raises(ValueError, match="Unknown strategy"):
+        service._get_strategy("does-not-exist")
 
 
 # ── Explainability fields tests ───────────────────────────────────────────────
