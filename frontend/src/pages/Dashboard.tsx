@@ -1,25 +1,32 @@
 import React, { useEffect, useState } from 'react';
 import { ApiService } from '../api/service';
-import type { PortfolioSnapshot, AgentRun } from '../types';
+import type { PortfolioSnapshot, AgentRun, ReconciliationBreak } from '../types';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
+import { ShieldCheck, ShieldAlert } from 'lucide-react';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
 const Dashboard: React.FC = () => {
   const [portfolio, setPortfolio] = useState<PortfolioSnapshot | null>(null);
   const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [breaks, setBreaks] = useState<ReconciliationBreak[]>([]);
+  const [stress, setStress] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [pfData, runsData] = await Promise.all([
+        const [pfData, runsData, bData, sData] = await Promise.all([
           ApiService.get<PortfolioSnapshot>('/api/portfolio'),
           ApiService.get<AgentRun[]>('/api/runs?limit=20'),
+          ApiService.get<ReconciliationBreak[]>('/api/middle-office/reconcile').catch(() => []),
+          ApiService.get<any[]>('/api/stress').catch(() => []),
         ]);
         setPortfolio(pfData);
         setRuns(runsData);
+        setBreaks(bData || []);
+        setStress(sData || []);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
       } finally {
@@ -119,7 +126,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* LOWER GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="bg-card-bg border border-border rounded-lg p-4">
           <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide mb-3">Last 5 Cycles</h2>
           <div className="flex flex-col gap-2">
@@ -134,6 +141,32 @@ const Dashboard: React.FC = () => {
             ))}
           </div>
         </div>
+
+        <div className="bg-card-bg border border-border rounded-lg p-4">
+          <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide mb-3">Risk & Middle Office</h2>
+          <div className="flex flex-col gap-3">
+             <div className={`p-2 rounded border flex items-center gap-2 text-xs font-bold ${breaks.length === 0 ? 'bg-green/10 border-green/30 text-green' : 'bg-red/10 border-red/30 text-red'}`}>
+               {breaks.length === 0 ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
+               {breaks.length === 0 ? 'RECONCILIATION MATCH' : `${breaks.length} RECON BREAKS`}
+             </div>
+             
+             <div className="flex flex-col gap-1.5">
+               <div className="text-[10px] text-[#8b949e] uppercase font-semibold">Crisis Stress Check</div>
+               {stress.slice(0, 2).map((s, i) => (
+                 <div key={i} className="bg-gray-bg border border-border/40 rounded p-1.5 text-[10px]">
+                   <div className="flex justify-between items-center mb-1">
+                     <span className="font-mono">{s.scenario.replace('_', ' ')}</span>
+                     <span className={s.pnl_pct < 0 ? 'text-red' : 'text-green'}>{(s.pnl_pct * 100).toFixed(1)}%</span>
+                   </div>
+                   <div className="w-full bg-border/20 h-1 rounded-full">
+                     <div className="h-full bg-orange" style={{ width: `${Math.min(Math.abs(s.pnl_pct) * 200, 100)}%` }}></div>
+                   </div>
+                 </div>
+               ))}
+             </div>
+          </div>
+        </div>
+
         <div className="bg-card-bg border border-border rounded-lg p-4">
           <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide mb-3">Kill Switch Status</h2>
           <div className={`p-3 rounded-lg border font-semibold text-sm ${lastRun?.kill_switch ? 'bg-[#3d1a1a] border-red text-red' : 'bg-[#1a4731] border-green text-green'}`}>

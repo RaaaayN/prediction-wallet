@@ -22,8 +22,28 @@ const Operations: React.FC = () => {
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
   const [executing, setExecuting] = useState(false);
   const [recentTrades, setRecentTrades] = useState<ExecutionResult[]>([]);
+  const [stressResults, setStressResults] = useState<any[]>([]);
+  const [stressLoading, setStressLoading] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchStress = async () => {
+    if (!ticker) {
+      setStressResults([]);
+      return;
+    }
+    setStressLoading(true);
+    try {
+      // For now we use the global stress endpoint as a proxy for 'current status'
+      // In a real What-If, we'd pass the proposed trade to the backend.
+      const data = await ApiService.get<any[]>('/api/stress');
+      setStressResults(data);
+    } catch {
+      setStressResults([]);
+    } finally {
+      setStressLoading(false);
+    }
+  };
 
   const fetchPreview = useCallback(() => {
     const qty = parseFloat(quantity);
@@ -314,6 +334,44 @@ const Operations: React.FC = () => {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* Risk Stress Check */}
+          <div className="bg-card-bg border border-border rounded-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide">Pre-Trade Risk Check</h2>
+              <button 
+                onClick={fetchStress} 
+                disabled={stressLoading || !ticker}
+                className="text-[10px] bg-primary/10 border border-primary/30 text-primary px-2 py-0.5 rounded hover:bg-primary/20 disabled:opacity-30"
+              >
+                {stressLoading ? 'Running...' : 'Run Stress Test'}
+              </button>
+            </div>
+            
+            {stressResults.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                {stressResults.map((s, i) => (
+                  <div key={i} className="bg-gray-bg border border-border rounded p-2 text-[11px]">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="font-bold text-[#e6edf3] capitalize">{s.scenario.replace('_', ' ')}</span>
+                      <span className={s.pnl_pct < 0 ? 'text-red' : 'text-green'}>
+                        {(s.pnl_pct * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-[#8b949e] mb-1">{s.description}</div>
+                    <div className="w-full bg-border/30 h-1 rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full ${s.pnl_pct < -0.1 ? 'bg-red' : 'bg-orange'}`} 
+                        style={{ width: `${Math.min(Math.abs(s.pnl_pct) * 200, 100)}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[10px] text-[#8b949e]">Check how the current portfolio holds up under crisis scenarios.</p>
             )}
           </div>
         </div>

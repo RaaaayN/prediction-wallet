@@ -154,3 +154,85 @@ export interface TradeOpinion {
   risk_flags: string[];
   market_context: string;
 }
+
+// ── Trading Core ─────────────────────────────────────────────────────────────
+
+export interface Instrument {
+  instrument_id: string;
+  symbol: string;
+  name: string;
+  asset_class: string;
+  sector?: string;
+  is_active: boolean;
+}
+
+export interface TC_Order {
+  order_id: string;
+  cycle_id: string;
+  symbol: string;
+  side: string;
+  requested_quantity: number;
+  status: string;
+  created_at: string;
+}
+
+export interface TC_Execution {
+  execution_id: string;
+  order_id: string;
+  symbol: string;
+  side: string;
+  quantity: number;
+  market_price: number;
+  fill_price: number;
+  notional: number;
+  fees: number;
+  executed_at: string;
+}
+
+export interface TC_Position {
+  instrument_id: string;
+  symbol: string;
+  quantity: number;
+  avg_cost: number;
+  last_price: number;
+  market_value: number;
+  updated_at: string;
+}
+
+export interface CashMovement {
+  cash_movement_id: string;
+  cycle_id?: string;
+  movement_type: string;
+  amount: number;
+  created_at: string;
+  description?: string;
+}
+
+// ── Middle Office ────────────────────────────────────────────────────────────
+
+export interface ReconciliationBreak {
+  break_type: string;
+  subject: string;
+  legacy_value: number;
+  ledger_value: number;
+  diff: number;
+  severity: string;
+}
+
+export interface TCAReport {
+  cycle_id: string;
+  total_trades: number;
+  total_notional: number;
+  total_slippage_dollars: number;
+  avg_slippage_bps: number;
+  trade_details: Array<{
+    symbol: string;
+    side: string;
+    quantity: number;
+    market_price: number;
+    fill_price: number;
+    slippage_dollars: number;
+    slippage_bps: number;
+    fees: number;
+  }>;
+}

@@ -19,9 +19,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const subTabs = [
     { name: 'Portfolio', path: '/portfolio', icon: <Briefcase size={14} /> },
+    { name: 'Middle Office', path: '/blotter', icon: <Activity size={14} /> },
+    { name: 'Instruments', path: '/workspace', icon: <Zap size={14} /> },
     { name: 'Book Summary', path: '/book', icon: <Layers size={14} /> },
     { name: 'Idea Book', path: '/ideas', icon: <Zap size={14} /> },
-    { name: 'Blotter', path: '/blotter', icon: <Activity size={14} /> },
     { name: 'Risk Detail', path: '/risk', icon: <ShieldAlert size={14} /> },
     { name: 'Regime', path: '/regime', icon: <TrendingUp size={14} /> },
     { name: 'Stress Test', path: '/stress', icon: <Zap size={14} /> },

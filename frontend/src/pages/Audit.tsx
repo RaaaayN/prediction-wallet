@@ -3,43 +3,85 @@ import { Link } from 'react-router-dom';
 import { ApiService } from '../api/service';
 import SectionCard from '../components/SectionCard';
 import CollapsibleRaw from '../components/CollapsibleRaw';
-import type { AgentRun, DecisionTrace, JsonRecord } from '../types';
+import type { AgentRun, DecisionTrace, JsonRecord, ReconciliationBreak, TCAReport } from '../types';
 
 const Audit: React.FC = () => {
   const [traces, setTraces] = useState<DecisionTrace[]>([]);
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [events, setEvents] = useState<JsonRecord[]>([]);
+  const [breaks, setBreaks] = useState<ReconciliationBreak[]>([]);
+  const [tca, setTca] = useState<TCAReport | null>(null);
+  const [tcaLoading, setTcaLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
       try {
-        const [t, r, e] = await Promise.all([
+        const [t, r, e, b] = await Promise.all([
           ApiService.get<DecisionTrace[]>('/api/traces?limit=15'),
           ApiService.get<AgentRun[]>('/api/runs?limit=15'),
           ApiService.get<JsonRecord[]>('/api/events?limit=20'),
+          ApiService.get<ReconciliationBreak[]>('/api/middle-office/reconcile').catch(() => []),
         ]);
         setTraces(t);
         setRuns(r);
         setEvents(e);
+        setBreaks(b || []);
       } catch (ex) {
         setErr(ex instanceof Error ? ex.message : 'Failed to load');
       }
     })();
   }, []);
 
+  const handleSync = async () => {
+    if (!window.confirm('Forcer la synchronisation du state legacy vers le Ledger ?')) return;
+    try {
+      await ApiService.post('/api/middle-office/sync', {});
+      const b = await ApiService.get<ReconciliationBreak[]>('/api/middle-office/reconcile');
+      setBreaks(b);
+      alert('Synchronisation réussie.');
+    } catch (ex) {
+      alert(ex instanceof Error ? ex.message : 'Échec de la synchronisation');
+    }
+  };
+
+  const loadTCA = async (cycleId: string) => {
+    setTcaLoading(true);
+    try {
+      const report = await ApiService.get<TCAReport>(`/api/middle-office/tca/${cycleId}`);
+      setTca(report);
+    } catch (ex) {
+      console.warn('TCA not found', ex);
+      setTca(null);
+    } finally {
+      setTcaLoading(false);
+    }
+  };
+
   if (err) return <div className="text-red text-sm">{err}</div>;
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-[#8b949e]">
-        Audit gouvernance : traces, exécutions et journal d&apos;événements récents. Détail par cycle :{' '}
-        <Link className="text-primary underline" to="/traces">
-          Agent Trace
-        </Link>
-        .
-      </p>
+      <div className="flex justify-between items-center">
+        <p className="text-sm text-[#8b949e]">
+          Audit gouvernance : traces, exécutions et journal d&apos;événements récents.
+        </p>
+        <div className="flex gap-2">
+          {breaks.length > 0 ? (
+            <div className="bg-red/10 border border-red/20 text-red px-3 py-1 rounded text-xs flex items-center gap-2">
+              ⚠️ {breaks.length} Breaks MO
+              <button onClick={handleSync} className="underline font-bold hover:text-red-400">Sync Ledger</button>
+            </div>
+          ) : (
+            <div className="bg-green/10 border border-green/20 text-green px-3 py-1 rounded text-xs">
+              ✓ Middle Office OK
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* ... (Traces Section) */}
         <SectionCard title="Traces (15)" subtitle="Étapes agent par cycle">
           <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
             <table className="w-full text-xs">
@@ -83,7 +125,7 @@ const Audit: React.FC = () => {
                 <tr className="text-left text-[#8b949e]">
                   <th className="py-2 pr-2 font-medium">Cycle</th>
                   <th className="py-2 pr-2 font-medium">Signal</th>
-                  <th className="py-2 pr-2 font-medium">Trades</th>
+                  <th className="py-2 pr-2 font-medium">TCA</th>
                 </tr>
               </thead>
               <tbody>
@@ -102,7 +144,14 @@ const Audit: React.FC = () => {
                         </Link>
                       </td>
                       <td className="py-2 pr-2 font-mono">{fmtSignal(r.signal)}</td>
-                      <td className="py-2 pr-2">{r.trades_count}</td>
+                      <td className="py-2 pr-2">
+                         <button 
+                          onClick={() => loadTCA(r.cycle_id)} 
+                          className="text-primary hover:text-white underline text-[10px]"
+                        >
+                          Analyze
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -155,6 +204,63 @@ const Audit: React.FC = () => {
           <CollapsibleRaw label="JSON events" data={events} />
         </SectionCard>
       </div>
+
+      {(tcaLoading || tca) && (
+        <SectionCard 
+          title={`TCA Report: ${tca?.cycle_id || '...'}`} 
+          subtitle="Transaction Cost Analysis & Slippage"
+        >
+          {tcaLoading ? (
+            <div className="text-xs text-[#8b949e] animate-pulse">Computing metrics...</div>
+          ) : tca ? (
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-bg/50 p-2 rounded border border-border/40">
+                  <div className="text-[10px] text-[#8b949e] uppercase">Total Notional</div>
+                  <div className="text-sm font-mono">${tca.total_notional.toLocaleString()}</div>
+                </div>
+                <div className="bg-bg/50 p-2 rounded border border-border/40">
+                  <div className="text-[10px] text-[#8b949e] uppercase">Slippage Cost</div>
+                  <div className="text-sm font-mono text-red">${tca.total_slippage_dollars.toFixed(2)}</div>
+                </div>
+                <div className="bg-bg/50 p-2 rounded border border-border/40">
+                  <div className="text-[10px] text-[#8b949e] uppercase">Avg Slippage</div>
+                  <div className="text-sm font-mono text-orange">{tca.avg_slippage_bps.toFixed(1)} bps</div>
+                </div>
+                <div className="bg-bg/50 p-2 rounded border border-border/40">
+                  <div className="text-[10px] text-[#8b949e] uppercase">Executions</div>
+                  <div className="text-sm font-mono">{tca.total_trades}</div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="text-left text-[#8b949e] border-b border-border">
+                      <th className="pb-1">Ticker</th>
+                      <th className="pb-1">Side</th>
+                      <th className="pb-1 text-right">Market</th>
+                      <th className="pb-1 text-right">Fill</th>
+                      <th className="pb-1 text-right">Slippage (bps)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tca.trade_details.map((d, i) => (
+                      <tr key={i} className="border-b border-border/40">
+                        <td className="py-1 font-mono font-bold">{d.symbol}</td>
+                        <td className={`py-1 uppercase ${d.side === 'buy' ? 'text-green' : 'text-orange'}`}>{d.side}</td>
+                        <td className="py-1 text-right font-mono">${d.market_price.toFixed(2)}</td>
+                        <td className="py-1 text-right font-mono">${d.fill_price.toFixed(2)}</td>
+                        <td className="py-1 text-right font-mono text-orange">{d.slippage_bps.toFixed(1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+        </SectionCard>
+      )}
     </div>
   );
 };

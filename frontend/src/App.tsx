@@ -6,13 +6,13 @@ import Control from './pages/Control';
 import Portfolio from './pages/Portfolio';
 import Traces from './pages/Traces';
 import NotFound from './pages/NotFound';
-import Workspace from './pages/Workspace';
 import RiskHub from './pages/RiskHub';
 import Analytics from './pages/Analytics';
 import Audit from './pages/Audit';
 import Book from './pages/Book';
 import Ideas from './pages/Ideas';
-import Blotter from './pages/Blotter';
+import MiddleOffice from './pages/MiddleOffice';
+import Instruments from './pages/Instruments';
 import RiskDetail from './pages/RiskDetail';
 import Regime from './pages/Regime';
 import Stress from './pages/Stress';
@@ -35,13 +35,13 @@ const MainApp: React.FC = () => (
         <Route path="/control" element={<Control />} />
         <Route path="/portfolio" element={<Portfolio />} />
         <Route path="/traces" element={<Traces />} />
-        <Route path="/workspace" element={<Workspace />} />
+        <Route path="/workspace" element={<Instruments />} />
         <Route path="/riskhub" element={<RiskHub />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/audit" element={<Audit />} />
         <Route path="/book" element={<Book />} />
         <Route path="/ideas" element={<Ideas />} />
-        <Route path="/blotter" element={<Blotter />} />
+        <Route path="/blotter" element={<MiddleOffice />} />
         <Route path="/risk" element={<RiskDetail />} />
         <Route path="/regime" element={<Regime />} />
         <Route path="/stress" element={<Stress />} />

@@ -45,6 +45,10 @@ export class ApiService {
     return (await resp.json()) as T;
   }
 
+  static async post<T>(path: string, body: unknown): Promise<T> {
+    return ApiService.postJson<T>(path, body);
+  }
+
   static stream(
     path: string,
     body: unknown,
