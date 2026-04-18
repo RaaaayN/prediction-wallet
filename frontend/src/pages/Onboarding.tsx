@@ -65,7 +65,12 @@ const Onboarding: React.FC<Props> = ({ onComplete }) => {
     addLog(`Initializing ${selectedProfile.label}…`, 'cmd');
     ApiService.stream(
       '/api/run/init',
-      { strategy: 'threshold', mode: 'simulate', profile: selectedProfile.name },
+      { 
+        strategy: 'threshold', 
+        mode: 'simulate', 
+        profile: selectedProfile.name,
+        initial_capital: parseFloat(capital)
+      },
       (msg) => {
         const line = msg.line;
         if (typeof line === 'string') {

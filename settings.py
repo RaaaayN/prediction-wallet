@@ -20,10 +20,10 @@ class Settings(BaseSettings):
         default=None,
         description="PostgreSQL URL; unset keeps SQLite at market_db.",
     )
-    market_db: str = "data/market.db"
-    portfolio_file: str = "data/portfolio.json"
-    trades_log: str = "data/trades.log"
-    reports_dir: str = "data/reports"
+    market_db: str = "data/profiles/balanced/market.db"
+    portfolio_file: str = "data/profiles/balanced/portfolio.json"
+    trades_log: str = "data/profiles/balanced/trades.log"
+    reports_dir: str = "data/profiles/balanced/reports"
 
     benchmark_ticker: str = "^GSPC"
     risk_free_rate: float = 0.045

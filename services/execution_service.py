@@ -113,8 +113,9 @@ class ExecutionService:
         price_map.setdefault(ticker, market_price)
         total_value = compute_portfolio_value(portfolio.get("positions", {}), portfolio.get("cash", 0.0), price_map)
         order_notional = quantity * market_price
+        
         if total_value > 0 and order_notional / total_value > MAX_ORDER_FRACTION_OF_PORTFOLIO:
-            return f"Order exceeds max notional limit ({MAX_ORDER_FRACTION_OF_PORTFOLIO:.0%} of portfolio)."
+            return f"Order exceeds max notional limit ({MAX_ORDER_FRACTION_OF_PORTFOLIO:.0%} of portfolio). Notional: {order_notional:.2f}, Portfolio: {total_value:.2f}, Fraction: {order_notional/total_value:.2%}"
 
         return None
 

@@ -28,8 +28,8 @@ def print_json(payload) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
 
-def init_portfolio():
-    from config import INITIAL_CAPITAL, PORTFOLIO_FILE, TARGET_ALLOCATION
+def init_portfolio(force: bool = False, initial_capital: float | None = None):
+    from config import INITIAL_CAPITAL, TARGET_ALLOCATION
     from execution.simulator import TradeSimulator
     from market.fetcher import MarketDataService
     from utils.time import utc_now_iso
@@ -38,34 +38,39 @@ def init_portfolio():
     fetcher = MarketDataService()
     portfolio = sim.load_portfolio()
 
-    if portfolio.get("positions"):
+    if portfolio.get("positions") and not force:
         answer = input("Portfolio already has positions. Reset and reinitialize? [y/N] ").strip().lower()
         if answer != "y":
             print("Cancelled.")
             return
 
+    capital = initial_capital if initial_capital is not None else INITIAL_CAPITAL
+
     clean = {
         "positions": {},
         "position_sides": {},
         "average_costs": {},
-        "cash": INITIAL_CAPITAL,
-        "peak_value": INITIAL_CAPITAL,
+        "cash": capital,
+        "peak_value": capital,
         "last_rebalanced": None,
         "history": [],
         "created_at": utc_now_iso(),
     }
-    os.makedirs(os.path.dirname(PORTFOLIO_FILE), exist_ok=True)
-    with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
-        json.dump(clean, f, indent=2)
+    sim.save_portfolio(clean)
 
     prices = fetcher.get_latest_prices(list(TARGET_ALLOCATION.keys()))
     if sum(TARGET_ALLOCATION.values()) > 0:
         for ticker, weight in TARGET_ALLOCATION.items():
             price = prices.get(ticker, 0)
             if price <= 0:
+                print(f"Skipping {ticker}: No valid price found.")
                 continue
-            quantity = (INITIAL_CAPITAL * weight) / price
-            sim.execute("buy", ticker, quantity, price, reason="Initial portfolio deployment")
+            quantity = (capital * weight) / price
+            res = sim.execute("buy", ticker, quantity, price, reason="Initial portfolio deployment", prices=prices)
+            if res.success:
+                print(f"Allocated {quantity:.4f} {ticker} @ {price:.2f}")
+            else:
+                print(f"Failed to allocate {ticker}: {res.error}")
     print("Portfolio initialized.")
 
 
@@ -85,7 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--agent-backend", choices=["pydantic-ai"], default=AGENT_BACKEND)
         sub.add_argument("--profile", choices=["balanced", "conservative", "growth", "crypto_heavy", "long_short_equity"], default=None)
     subparsers.add_parser("report")
-    subparsers.add_parser("init")
+    init_parser = subparsers.add_parser("init")
+    init_parser.add_argument("--force", action="store_true", help="Overwrite existing portfolio without prompt")
+    init_parser.add_argument("--initial-capital", type=float, help="Override initial capital from profile")
     return parser
 
 
@@ -120,7 +127,10 @@ def main():
     command = args.command or "run-cycle"
 
     if command == "init":
-        init_portfolio()
+        init_portfolio(
+            force=getattr(args, "force", False),
+            initial_capital=getattr(args, "initial_capital", None)
+        )
         return
     if command == "report":
         generate_report_only()

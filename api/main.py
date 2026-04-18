@@ -137,26 +137,30 @@ async def root():
 
 @app.get("/api/portfolio", response_model=PortfolioResponse)
 async def get_portfolio(_: User = Depends(get_current_user)):
-    from config import INITIAL_CAPITAL, PORTFOLIO_FILE
     from services.execution_service import ExecutionService
     from services.market_service import MarketService
     try:
-        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-            data = json.load(f)
+        svc = ExecutionService()
+        data = svc.load_portfolio()
         tickers = list(data.get("positions", {}).keys())
         prices = MarketService().get_latest_prices(tickers) if tickers else {}
-        snapshot = ExecutionService().portfolio_snapshot(prices)
+        snapshot = svc.portfolio_snapshot(prices)
+        
+        initial_capital = svc.runtime_context.initial_capital
         history = data.get("history", [])
-        total_value = snapshot.get("total_value") or (history[-1]["total_value"] if history else data.get("cash", INITIAL_CAPITAL))
-        pnl_dollars = total_value - INITIAL_CAPITAL
+        total_value = snapshot.get("total_value") or (history[-1]["total_value"] if history else data.get("cash", initial_capital))
+        pnl_dollars = total_value - initial_capital
+        
         data.update(snapshot)
         data["total_value"] = total_value
         data.setdefault("pnl_dollars", pnl_dollars)
-        data.setdefault("pnl_pct", pnl_dollars / INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else 0.0)
+        data.setdefault("pnl_pct", pnl_dollars / initial_capital if initial_capital > 0 else 0.0)
         return data
-    except FileNotFoundError:
+    except Exception as exc:
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Portfolio not initialized. Run: python main.py init")
+        if "not initialized" in str(exc).lower():
+             raise HTTPException(status_code=404, detail="Portfolio not initialized. Run: python main.py init")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/snapshots")
@@ -194,8 +198,7 @@ async def get_positions(cycle_id: str | None = Query(None), _: User = Depends(ge
     if cycle_id:
         from db.repository import get_positions_by_cycle
         return get_positions_by_cycle(cycle_id=cycle_id)
-    import json
-    from config import PORTFOLIO_FILE, TARGET_ALLOCATION
+    
     from db.repository import get_latest_positions
     from services.execution_service import ExecutionService
     from services.market_service import MarketService
@@ -205,9 +208,9 @@ async def get_positions(cycle_id: str | None = Query(None), _: User = Depends(ge
         return latest
 
     try:
-        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-            portfolio = json.load(f)
-    except FileNotFoundError:
+        svc = ExecutionService()
+        portfolio = svc.load_portfolio()
+    except Exception:
         return []
 
     positions = portfolio.get("positions", {}) or {}
@@ -216,9 +219,9 @@ async def get_positions(cycle_id: str | None = Query(None), _: User = Depends(ge
 
     tickers = list(positions.keys())
     prices = MarketService().get_latest_prices(tickers)
-    snapshot = ExecutionService().portfolio_snapshot(prices)
+    snapshot = svc.portfolio_snapshot(prices)
     current_weights = snapshot.get("current_weights", {})
-    target_weights = snapshot.get("target_weights", TARGET_ALLOCATION)
+    target_weights = snapshot.get("target_weights", svc.runtime_context.target_allocation)
     drifts = snapshot.get("weight_deviation", {})
     total_value = snapshot.get("total_value", 0.0) or 0.0
     position_sides = portfolio.get("position_sides", {}) or {}
@@ -310,10 +313,11 @@ async def get_tc_cash_movements(
 
 @app.get("/api/backtest")
 async def get_backtest(days: int = Query(90, ge=10, le=365), _: User = Depends(get_current_user)):
-    from config import TARGET_ALLOCATION
     from engine.backtest import run_strategy_comparison
-
-    _prefetch_price_history(list(TARGET_ALLOCATION.keys()), min_days=days + 30)
+    from services.execution_service import ExecutionService
+    
+    svc = ExecutionService()
+    _prefetch_price_history(list(svc.runtime_context.target_allocation.keys()), min_days=days + 30)
     results = run_strategy_comparison(days=days)
     if results is None:
         from fastapi import HTTPException
@@ -326,15 +330,14 @@ async def get_backtest(days: int = Query(90, ge=10, le=365), _: User = Depends(g
 
 @app.get("/api/correlation")
 async def get_correlation(days: int = Query(90, ge=10, le=365), _: User = Depends(get_current_user)):
-    import json
     import pandas as pd
-    from config import PORTFOLIO_FILE
     from engine.performance import rolling_correlation
+    from services.execution_service import ExecutionService
     from services.market_service import MarketService
     try:
-        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-            portfolio = json.load(f)
-    except FileNotFoundError:
+        svc = ExecutionService()
+        portfolio = svc.load_portfolio()
+    except Exception:
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Portfolio not initialized. Run: python main.py init")
     tickers = list(portfolio.get("positions", {}).keys())
@@ -375,14 +378,13 @@ async def get_correlation(days: int = Query(90, ge=10, le=365), _: User = Depend
 
 @app.get("/api/stress")
 async def get_stress(_: User = Depends(get_current_user)):
-    import json
-    from config import PORTFOLIO_FILE
     from engine.stress_testing import run_stress_test_v2
+    from services.execution_service import ExecutionService
     from services.market_service import MarketService
     try:
-        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-            portfolio = json.load(f)
-    except FileNotFoundError:
+        svc = ExecutionService()
+        portfolio = svc.load_portfolio()
+    except Exception:
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Portfolio not initialized. Run: python main.py init")
     tickers = list(portfolio.get("positions", {}).keys())
@@ -395,15 +397,16 @@ async def get_stress(_: User = Depends(get_current_user)):
 @app.get("/api/config", response_model=ConfigResponse)
 async def get_config(_: User = Depends(get_current_user)):
     try:
-        from config import (
-            AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE, HEDGE_FUND_PROFILE, TARGET_ALLOCATION,
-        )
+        from services.execution_service import ExecutionService
+        svc = ExecutionService()
+        ctx = svc.runtime_context
+        from config import AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE
         return {
             "ai_provider": AI_PROVIDER,
             "agent_backend": AGENT_BACKEND,
             "execution_mode": EXECUTION_MODE,
-            "target_allocation": TARGET_ALLOCATION,
-            "hedge_fund_enabled": bool(HEDGE_FUND_PROFILE),
+            "target_allocation": ctx.target_allocation,
+            "hedge_fund_enabled": bool(ctx.hedge_fund_profile),
         }
     except Exception as exc:
         from fastapi import HTTPException
@@ -414,18 +417,18 @@ async def get_config(_: User = Depends(get_current_user)):
 
 @app.get("/api/onboarding/status", response_model=OnboardingStatusResponse)
 async def onboarding_status(_: User = Depends(get_current_user)):
-    import os
-    from config import PORTFOLIO_FILE
+    from services.execution_service import ExecutionService
     try:
-        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-            data = json.load(f)
+        svc = ExecutionService()
+        data = svc.load_portfolio()
         positions = data.get("positions", {})
         return {
             "needs_onboarding": len(positions) == 0,
-            "profile": os.getenv("PORTFOLIO_PROFILE", "balanced"),
+            "profile": svc.runtime_context.profile_name,
             "positions_count": len(positions),
         }
-    except FileNotFoundError:
+    except Exception:
+        import os
         return {"needs_onboarding": True, "profile": os.getenv("PORTFOLIO_PROFILE", "balanced"), "positions_count": 0}
 
 
@@ -685,11 +688,16 @@ async def get_idea_book(
 
 
 def _load_idea_metrics() -> dict[str, dict]:
-    from config import HEDGE_FUND_PROFILE
+    from services.execution_service import ExecutionService
     from market.metrics import PortfolioMetrics
     from services.market_service import MarketService
 
-    tickers = list((HEDGE_FUND_PROFILE.get("universe") or {}).keys())
+    try:
+        svc_exec = ExecutionService()
+        tickers = list((svc_exec.runtime_context.hedge_fund_profile.get("universe") or {}).keys())
+    except Exception:
+        tickers = []
+    
     svc = MarketService()
     metrics: dict[str, dict] = {}
     for ticker in tickers:
@@ -741,36 +749,43 @@ async def promote_idea_book_entry(idea_id: str, req: IdeaPromoteRequest = Body(.
 
 @app.get("/api/exposures")
 async def get_exposures(_: User = Depends(get_current_user)):
-    import json
-    from config import HEDGE_FUND_PROFILE, PORTFOLIO_FILE, SECTOR_MAP
     from engine.hedge_fund import compute_exposures
+    from services.execution_service import ExecutionService
     from services.market_service import MarketService
 
-    with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-        portfolio = json.load(f)
+    try:
+        svc = ExecutionService()
+        portfolio = svc.load_portfolio()
+    except Exception:
+        return {}
+
     tickers = list((portfolio.get("positions") or {}).keys())
     prices = MarketService().get_latest_prices(tickers) if tickers else {}
-    beta_map = {ticker: (HEDGE_FUND_PROFILE.get("universe", {}).get(ticker, {}) or {}).get("beta", 1.0) for ticker in tickers}
+    ctx = svc.runtime_context
+    beta_map = {ticker: (ctx.hedge_fund_profile.get("universe", {}).get(ticker, {}) or {}).get("beta", 1.0) for ticker in tickers}
     return compute_exposures(
         portfolio.get("positions", {}),
         prices,
         portfolio.get("cash", 0.0),
         position_sides=portfolio.get("position_sides", {}),
-        sector_map=SECTOR_MAP,
+        sector_map=ctx.sector_map,
         beta_map=beta_map,
     )
 
 
 @app.get("/api/pnl-attribution")
 async def get_pnl_attribution(_: User = Depends(get_current_user)):
-    import json
-    from config import PORTFOLIO_FILE, SECTOR_MAP
     from db.repository import get_executions, get_idea_book
     from engine.hedge_fund import compute_pnl_attribution
+    from services.execution_service import ExecutionService
     from services.market_service import MarketService
 
-    with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-        portfolio = json.load(f)
+    try:
+        svc = ExecutionService()
+        portfolio = svc.load_portfolio()
+    except Exception:
+        return {}
+    
     tickers = list((portfolio.get("positions") or {}).keys())
     prices = MarketService().get_latest_prices(tickers) if tickers else {}
     executions = get_executions(limit=500)
@@ -782,33 +797,36 @@ async def get_pnl_attribution(_: User = Depends(get_current_user)):
         position_sides=portfolio.get("position_sides", {}),
         executions=executions.to_dict(orient="records") if not executions.empty else [],
         idea_lookup=idea_lookup,
-        sector_map=SECTOR_MAP,
+        sector_map=svc.runtime_context.sector_map,
     )
 
 
 @app.get("/api/book-risk")
 async def get_book_risk(_: User = Depends(get_current_user)):
-    import json
-    from config import HEDGE_FUND_PROFILE, PORTFOLIO_FILE, SECTOR_MAP
     from engine.hedge_fund import classify_book_risk, compute_exposures
-    from portfolio_loader import get_active_profile
+    from services.execution_service import ExecutionService
     from services.market_service import MarketService
     from agents.policies import PolicyConfig
 
-    with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-        portfolio = json.load(f)
+    try:
+        svc = ExecutionService()
+        portfolio = svc.load_portfolio()
+    except Exception:
+        return {}
+        
     tickers = list((portfolio.get("positions") or {}).keys())
     prices = MarketService().get_latest_prices(tickers) if tickers else {}
-    universe = HEDGE_FUND_PROFILE.get("universe") or {}
+    ctx = svc.runtime_context
+    universe = ctx.hedge_fund_profile.get("universe") or {}
     exposure = compute_exposures(
         portfolio.get("positions", {}),
         prices,
         portfolio.get("cash", 0.0),
         position_sides=portfolio.get("position_sides", {}),
-        sector_map=SECTOR_MAP,
+        sector_map=ctx.sector_map,
         beta_map={ticker: (meta or {}).get("beta", 1.0) for ticker, meta in universe.items()},
     )
-    policy = PolicyConfig.from_profile(get_active_profile())
+    policy = PolicyConfig.from_profile(ctx.profile)
     return classify_book_risk(
         exposure,
         gross_limit=policy.gross_exposure_limit,
@@ -842,6 +860,7 @@ class RunRequest(BaseModel):
     strategy: str = "threshold"
     mode: str = "simulate"
     profile: str | None = None
+    initial_capital: float | None = None
 
 
 VALID_STEPS = {"observe", "decide", "execute", "audit", "run-cycle", "report", "init"}
@@ -853,8 +872,15 @@ async def run_step(step: str, req: RunRequest = RunRequest(), _: User = Depends(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Unknown step '{step}'")
 
-    if step in ("report", "init"):
-        args = ["main.py", step]
+    if step == "init":
+        args = ["main.py"]
+        if req.profile:
+            args += ["--profile", req.profile]
+        args += ["init", "--force"]
+        if req.initial_capital:
+            args += ["--initial-capital", str(req.initial_capital)]
+    elif step == "report":
+        args = ["main.py", "report"]
     else:
         args = build_cycle_args(step, req.strategy, req.mode, req.profile)
 
@@ -870,15 +896,14 @@ async def run_step(step: str, req: RunRequest = RunRequest(), _: User = Depends(
 
 @app.get("/api/monte-carlo")
 async def get_monte_carlo(paths: int = Query(5000, ge=100, le=20000), _: User = Depends(get_current_user)):
-    import json
     import numpy as np
-    from config import PORTFOLIO_FILE
     from engine.monte_carlo import run_monte_carlo
+    from services.execution_service import ExecutionService
     from services.market_service import MarketService
     try:
-        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-            portfolio = json.load(f)
-    except FileNotFoundError:
+        svc = ExecutionService()
+        portfolio = svc.load_portfolio()
+    except Exception:
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Portfolio not initialized.")
     tickers = list(portfolio.get("positions", {}).keys())
@@ -915,13 +940,12 @@ async def get_monte_carlo(paths: int = Query(5000, ge=100, le=20000), _: User = 
 
 @app.get("/api/regime")
 async def get_regime(days: int = Query(180, ge=30, le=365), _: User = Depends(get_current_user)):
-    import json
-    from config import PORTFOLIO_FILE
     from engine.regime import get_current_regime
+    from services.execution_service import ExecutionService
     try:
-        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
-            portfolio = json.load(f)
-    except FileNotFoundError:
+        svc = ExecutionService()
+        portfolio = svc.load_portfolio()
+    except Exception:
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Portfolio not initialized.")
     tickers = list(portfolio.get("positions", {}).keys())

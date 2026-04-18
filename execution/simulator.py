@@ -34,6 +34,7 @@ class TradeSimulator:
         market_price: float,
         reason: str = "",
         cycle_id: str = "",
+        prices: dict[str, float] | None = None,
     ) -> TradeResult:
         return self._service.execute_order(
             {
@@ -44,6 +45,7 @@ class TradeSimulator:
             },
             market_price=market_price,
             cycle_id=cycle_id,
+            prices=prices,
         )
 
     def get_trade_history(self) -> list[dict]:
