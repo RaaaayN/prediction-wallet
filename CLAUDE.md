@@ -74,3 +74,10 @@ pytest tests/ -v
 - chaque étape observe/decide/validate/execute/audit est tracée dans `decision_traces`
 - le kill switch (drawdown > 10%) est déterministe et bloque toute exécution
 - les décisions critiques ne dépendent jamais d'un texte libre non validé
+
+## Roadmap snapshot
+
+- **Fondation**: la gouvernance applicative est déjà en place ou amorcée dans le code (`agents/policies.py`, traces enrichies, init DB durci, repository clarifié), mais IAM/OIDC, RBAC, API Gateway, secrets/KMS et CI/CD restent à construire.
+- **Trading core**: le dépôt couvre un noyau de simulation/paper trading gouverné (`services/market_service.py`, `services/execution_service.py`, `engine/orders.py`), mais il manque encore le security master, le market data hub contractuel, le ledger canonique, l'OMS/EMS et les connecteurs broker.
+- **Risk & middle office**: les briques d'analyse de risque et d'audit existent déjà en partie, mais la réconciliation, le TCA industrialisé, les workflows d'exception et le reporting réglementaire restent au backlog.
+- Le document de référence pour suivre l'écart entre cible et réel est `deep-research-report (1).md`; les rapports d'équipe dans `docs/team/` donnent le détail d'implémentation courant.

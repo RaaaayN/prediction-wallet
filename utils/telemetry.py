@@ -42,3 +42,20 @@ def stage_span(name: str, **attributes) -> Iterator[None]:
 
 def otel_enabled() -> bool:
     return _OTEL_ENABLED
+
+
+@contextmanager
+def trace_request(method: str, path: str, **attributes) -> Iterator[None]:
+    """Wrap an API request in an OTel span when available."""
+    if _TRACER is None:
+        yield
+        return
+
+    name = f"{method} {path}"
+    with _TRACER.start_as_current_span(name, kind=trace.SpanKind.SERVER) as span:
+        span.set_attribute("http.method", method)
+        span.set_attribute("http.target", path)
+        for key, value in attributes.items():
+            if value is not None:
+                span.set_attribute(key, value)
+        yield

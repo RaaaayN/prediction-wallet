@@ -27,6 +27,13 @@ REPORTS_DIR: str = settings.reports_dir
 MAX_TRADES_PER_CYCLE: int = settings.max_trades_per_cycle
 MAX_ORDER_FRACTION_OF_PORTFOLIO: float = settings.max_order_fraction_of_portfolio
 MARKET_DATA_TTL_SECONDS: int = settings.market_data_ttl_seconds
+
+# Security (Fondation)
+API_KEY_ADMIN: str = settings.api_key_admin
+API_KEY_TRADER: str = settings.api_key_trader
+API_KEY_VIEWER: str = settings.api_key_viewer
+ALLOWED_ORIGINS: list[str] = [o.strip() for o in settings.allowed_origins.split(",")]
+
 AGENT_BACKEND: str = settings.agent_backend
 EXECUTION_MODE: str = settings.execution_mode
 MCP_PROFILE: str = settings.mcp_profile

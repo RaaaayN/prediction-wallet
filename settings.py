@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     max_trades_per_cycle: int = Field(default=8)
     max_order_fraction_of_portfolio: float = Field(default=0.35)
     market_data_ttl_seconds: int = Field(default=900)
+
+    # Security & API Auth (Fondation phase)
+    # If no keys are set, the system defaults to "Super Admin" mode (Opt-in)
+    api_key_admin: str = Field(default="", env="API_KEY_ADMIN")
+    api_key_trader: str = Field(default="", env="API_KEY_TRADER")
+    api_key_viewer: str = Field(default="", env="API_KEY_VIEWER")
+    allowed_origins: str = Field(default="*", description="Comma-separated list of allowed CORS origins")
+
     agent_backend: str = Field(default="pydantic-ai")
     execution_mode: str = Field(default="simulate")
     mcp_profile: str = Field(default="none")

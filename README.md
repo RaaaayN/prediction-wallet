@@ -201,6 +201,8 @@ Portfolio profiles (`profiles/*.yaml`) define target allocations, drift threshol
 - [API Reference](docs/api.md) — Endpoints and JSON schemas
 - [Governance Model](docs/GOVERNANCE.md) — Policy engine walkthrough
 - [Risk Model](docs/RISK_MODEL.md) — VaR, stress tests, kill switch logic
+- [Roadmap and implementation status](deep-research-report%20%281%29.md) — Target architecture plus current progress on Fondation, Trading Core, and next phases
+- [Team reports](docs/team/lead-report.md) — Living implementation notes and status rollups across backend, strategy, and UI
 - [Documentation Index](docs/INDEX.md) — Full doc map
 
 ---

@@ -25,6 +25,12 @@ else
 fi
 
 if [[ "$SQLITE_ONLY" == true ]]; then
+  if grep -qE '^[[:space:]]*DATABASE_URL=' .env 2>/dev/null; then
+    echo "==> Mode --sqlite : suppression de DATABASE_URL existant dans .env"
+    tmp_env="$(mktemp)"
+    grep -vE '^[[:space:]]*DATABASE_URL=' .env > "$tmp_env"
+    mv "$tmp_env" .env
+  fi
   echo "==> Mode --sqlite : Docker ignoré, pas de DATABASE_URL ajouté."
 else
   echo "==> Démarrage PostgreSQL (docker compose)"

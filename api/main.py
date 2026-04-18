@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from time import perf_counter
 
-from fastapi import Body, FastAPI, Query
+from fastapi import Body, FastAPI, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,6 +17,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.runner import build_cycle_args, stream_command
+from api.auth import Role, get_current_user, requires_role
+from api.models import (
+    ConfigResponse, PortfolioResponse, PositionRow, 
+    MarketStatusResponse, OnboardingStatusResponse
+)
+from config import ALLOWED_ORIGINS
+from utils.telemetry import trace_request
 
 
 def _prefetch_price_history(tickers: list[str], *, min_days: int, period: str = "2y") -> None:
@@ -42,10 +50,35 @@ app = FastAPI(title="Prediction Wallet API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """Structured JSON logging and OTel tracing for each request."""
+    start_time = perf_counter()
+    method = request.method
+    path = request.url.path
+    
+    with trace_request(method, path):
+        response = await call_next(request)
+        duration_ms = round((perf_counter() - start_time) * 1000, 2)
+        
+        # Structured log line
+        log_record = {
+            "type": "access",
+            "method": method,
+            "path": path,
+            "status": response.status_code,
+            "duration_ms": duration_ms,
+            "client": request.client.host if request.client else "unknown"
+        }
+        print(json.dumps(log_record))
+        
+        return response
 
 
 class IdeaGenerationRequest(BaseModel):
@@ -96,8 +129,8 @@ async def root():
 
 # ── data endpoints ────────────────────────────────────────────────────────────
 
-@app.get("/api/portfolio")
-async def get_portfolio():
+@app.get("/api/portfolio", response_model=PortfolioResponse)
+async def get_portfolio(_: User = Depends(get_current_user)):
     from config import INITIAL_CAPITAL, PORTFOLIO_FILE
     from services.execution_service import ExecutionService
     from services.market_service import MarketService
@@ -116,23 +149,24 @@ async def get_portfolio():
         data.setdefault("pnl_pct", pnl_dollars / INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else 0.0)
         return data
     except FileNotFoundError:
-        return {"error": "Portfolio not initialized. Run: python main.py init"}
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Portfolio not initialized. Run: python main.py init")
 
 
 @app.get("/api/snapshots")
-async def get_snapshots(limit: int = Query(60, ge=1, le=500)):
+async def get_snapshots(limit: int = Query(60, ge=1, le=500), _: User = Depends(get_current_user)):
     from db.repository import get_snapshots as _get_snapshots
     return _get_snapshots(limit=limit)
 
 
 @app.get("/api/runs")
-async def get_runs(limit: int = Query(20, ge=1, le=200)):
+async def get_runs(limit: int = Query(20, ge=1, le=200), _: User = Depends(get_current_user)):
     from db.repository import get_agent_runs
     return get_agent_runs(limit=limit)
 
 
 @app.get("/api/executions")
-async def get_executions(limit: int = Query(50, ge=1, le=500)):
+async def get_executions(limit: int = Query(50, ge=1, le=500), _: User = Depends(get_current_user)):
     from db.repository import get_executions as _get_executions
     df = _get_executions(limit=limit)
     return df.to_dict(orient="records") if not df.empty else []
@@ -142,14 +176,15 @@ async def get_executions(limit: int = Query(50, ge=1, le=500)):
 async def get_traces(
     limit: int = Query(100, ge=1, le=500),
     cycle_id: str | None = Query(None),
+    _: User = Depends(get_current_user),
 ):
     from db.repository import get_decision_traces
     traces = get_decision_traces(limit=limit, cycle_id=cycle_id)
     return list(reversed(traces)) if cycle_id else traces  # cycle view: ASC; global: DESC
 
 
-@app.get("/api/positions")
-async def get_positions(cycle_id: str | None = Query(None)):
+@app.get("/api/positions", response_model=list[PositionRow])
+async def get_positions(cycle_id: str | None = Query(None), _: User = Depends(get_current_user)):
     if cycle_id:
         from db.repository import get_positions_by_cycle
         return get_positions_by_cycle(cycle_id=cycle_id)
@@ -206,14 +241,14 @@ async def get_positions(cycle_id: str | None = Query(None)):
     return rows
 
 
-@app.get("/api/market-status")
-async def get_market_status():
+@app.get("/api/market-status", response_model=MarketStatusResponse)
+async def get_market_status(_: User = Depends(get_current_user)):
     from db.repository import get_market_data_status
     return get_market_data_status()
 
 
 @app.get("/api/backtest")
-async def get_backtest(days: int = Query(90, ge=10, le=365)):
+async def get_backtest(days: int = Query(90, ge=10, le=365), _: User = Depends(get_current_user)):
     from config import TARGET_ALLOCATION
     from engine.backtest import run_strategy_comparison
 
@@ -229,7 +264,7 @@ async def get_backtest(days: int = Query(90, ge=10, le=365)):
 
 
 @app.get("/api/correlation")
-async def get_correlation(days: int = Query(90, ge=10, le=365)):
+async def get_correlation(days: int = Query(90, ge=10, le=365), _: User = Depends(get_current_user)):
     import json
     import pandas as pd
     from config import PORTFOLIO_FILE
@@ -278,7 +313,7 @@ async def get_correlation(days: int = Query(90, ge=10, le=365)):
 
 
 @app.get("/api/stress")
-async def get_stress():
+async def get_stress(_: User = Depends(get_current_user)):
     import json
     from config import PORTFOLIO_FILE
     from engine.backtest import run_stress_test
@@ -296,8 +331,8 @@ async def get_stress():
     return run_stress_test(portfolio, prices)
 
 
-@app.get("/api/config")
-async def get_config():
+@app.get("/api/config", response_model=ConfigResponse)
+async def get_config(_: User = Depends(get_current_user)):
     try:
         from config import (
             AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE, HEDGE_FUND_PROFILE, TARGET_ALLOCATION,
@@ -310,13 +345,14 @@ async def get_config():
             "hedge_fund_enabled": bool(HEDGE_FUND_PROFILE),
         }
     except Exception as exc:
-        return {"error": str(exc)}
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ── onboarding ────────────────────────────────────────────────────────────────
 
-@app.get("/api/onboarding/status")
-async def onboarding_status():
+@app.get("/api/onboarding/status", response_model=OnboardingStatusResponse)
+async def onboarding_status(_: User = Depends(get_current_user)):
     import os
     from config import PORTFOLIO_FILE
     try:
@@ -333,7 +369,7 @@ async def onboarding_status():
 
 
 @app.get("/api/onboarding/profiles")
-async def onboarding_profiles():
+async def onboarding_profiles(_: User = Depends(get_current_user)):
     from portfolio_loader import load_profile
 
     PROFILE_METADATA = {
@@ -416,7 +452,7 @@ class TradeExecuteRequest(BaseModel):
 
 
 @app.post("/api/trade/preview")
-async def trade_preview(req: TradePreviewRequest):
+async def trade_preview(req: TradePreviewRequest, _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     from fastapi import HTTPException
     from services.execution_service import ExecutionService
     from services.market_service import MarketService
@@ -462,7 +498,7 @@ async def trade_preview(req: TradePreviewRequest):
 
 
 @app.post("/api/trade/opinion")
-async def trade_opinion(req: TradeOpinionRequest):
+async def trade_opinion(req: TradeOpinionRequest, _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     import re
     from services.execution_service import ExecutionService
     from services.market_service import MarketService
@@ -534,7 +570,7 @@ async def trade_opinion(req: TradeOpinionRequest):
 
 
 @app.post("/api/trade/execute")
-async def trade_execute(req: TradeExecuteRequest):
+async def trade_execute(req: TradeExecuteRequest, _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     from dataclasses import asdict
     from fastapi import HTTPException
     from services.execution_service import ExecutionService
@@ -576,6 +612,7 @@ async def get_idea_book(
     status: str | None = Query(None),
     review_status: str | None = Query(None),
     llm_generated: bool | None = Query(None),
+    _: User = Depends(get_current_user),
 ):
     from services.idea_book_service import IdeaBookService
 
@@ -603,7 +640,7 @@ def _load_idea_metrics() -> dict[str, dict]:
 
 
 @app.post("/api/idea-book/generate")
-async def generate_idea_book_candidates(req: IdeaGenerationRequest = Body(...)):
+async def generate_idea_book_candidates(req: IdeaGenerationRequest = Body(...), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     from services.idea_book_service import IdeaBookService
 
     svc = IdeaBookService()
@@ -616,7 +653,7 @@ async def generate_idea_book_candidates(req: IdeaGenerationRequest = Body(...)):
 
 
 @app.post("/api/idea-book/{idea_id}/review")
-async def review_idea_book_entry(idea_id: str, req: IdeaReviewRequest = Body(...)):
+async def review_idea_book_entry(idea_id: str, req: IdeaReviewRequest = Body(...), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     from fastapi import HTTPException
     from services.idea_book_service import IdeaBookService
 
@@ -629,7 +666,7 @@ async def review_idea_book_entry(idea_id: str, req: IdeaReviewRequest = Body(...
 
 
 @app.post("/api/idea-book/{idea_id}/promote")
-async def promote_idea_book_entry(idea_id: str, req: IdeaPromoteRequest = Body(...)):
+async def promote_idea_book_entry(idea_id: str, req: IdeaPromoteRequest = Body(...), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     from fastapi import HTTPException
     from services.idea_book_service import IdeaBookService
 
@@ -642,7 +679,7 @@ async def promote_idea_book_entry(idea_id: str, req: IdeaPromoteRequest = Body(.
 
 
 @app.get("/api/exposures")
-async def get_exposures():
+async def get_exposures(_: User = Depends(get_current_user)):
     import json
     from config import HEDGE_FUND_PROFILE, PORTFOLIO_FILE, SECTOR_MAP
     from engine.hedge_fund import compute_exposures
@@ -664,7 +701,7 @@ async def get_exposures():
 
 
 @app.get("/api/pnl-attribution")
-async def get_pnl_attribution():
+async def get_pnl_attribution(_: User = Depends(get_current_user)):
     import json
     from config import PORTFOLIO_FILE, SECTOR_MAP
     from db.repository import get_executions, get_idea_book
@@ -689,7 +726,7 @@ async def get_pnl_attribution():
 
 
 @app.get("/api/book-risk")
-async def get_book_risk():
+async def get_book_risk(_: User = Depends(get_current_user)):
     import json
     from config import HEDGE_FUND_PROFILE, PORTFOLIO_FILE, SECTOR_MAP
     from engine.hedge_fund import classify_book_risk, compute_exposures
@@ -727,7 +764,7 @@ async def get_book_risk():
 
 
 @app.get("/api/book-summary")
-async def get_book_summary():
+async def get_book_summary(_: User = Depends(get_current_user)):
     exposure = await get_exposures()
     risk = await get_book_risk()
     attribution = await get_pnl_attribution()
@@ -750,7 +787,7 @@ VALID_STEPS = {"observe", "decide", "execute", "audit", "run-cycle", "report", "
 
 
 @app.post("/api/run/{step}")
-async def run_step(step: str, req: RunRequest = RunRequest()):
+async def run_step(step: str, req: RunRequest = RunRequest(), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     if step not in VALID_STEPS:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Unknown step '{step}'")
@@ -771,7 +808,7 @@ async def run_step(step: str, req: RunRequest = RunRequest()):
 
 
 @app.get("/api/monte-carlo")
-async def get_monte_carlo(paths: int = Query(5000, ge=100, le=20000)):
+async def get_monte_carlo(paths: int = Query(5000, ge=100, le=20000), _: User = Depends(get_current_user)):
     import json
     import numpy as np
     from config import PORTFOLIO_FILE
@@ -816,7 +853,7 @@ async def get_monte_carlo(paths: int = Query(5000, ge=100, le=20000)):
 
 
 @app.get("/api/regime")
-async def get_regime(days: int = Query(180, ge=30, le=365)):
+async def get_regime(days: int = Query(180, ge=30, le=365), _: User = Depends(get_current_user)):
     import json
     from config import PORTFOLIO_FILE
     from engine.regime import get_current_regime
@@ -834,7 +871,7 @@ async def get_regime(days: int = Query(180, ge=30, le=365)):
 
 
 @app.get("/api/events")
-async def get_events(cycle_id: str | None = Query(None), limit: int = Query(100, ge=1, le=500)):
+async def get_events(cycle_id: str | None = Query(None), limit: int = Query(100, ge=1, le=500), _: User = Depends(get_current_user)):
     from db.events import get_events as _get_events, get_recent_events
     if cycle_id:
         return _get_events(cycle_id)
@@ -842,7 +879,7 @@ async def get_events(cycle_id: str | None = Query(None), limit: int = Query(100,
 
 
 @app.get("/api/events/replay/{cycle_id}")
-async def replay_cycle(cycle_id: str):
+async def replay_cycle(cycle_id: str, _: User = Depends(get_current_user)):
     from db.events import replay_cycle as _replay
     return _replay(cycle_id)
 

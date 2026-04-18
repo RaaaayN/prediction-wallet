@@ -14,8 +14,19 @@ export class ApiError extends Error {
 }
 
 export class ApiService {
+  private static getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const apiKey = localStorage.getItem('prediction_wallet_api_key');
+    if (apiKey) {
+      headers['X-API-KEY'] = apiKey;
+    }
+    return headers;
+  }
+
   static async get<T>(path: string): Promise<T> {
-    const resp = await fetch(`${API_BASE}${path}`);
+    const resp = await fetch(`${API_BASE}${path}`, {
+      headers: ApiService.getHeaders(),
+    });
     if (!resp.ok) {
       throw new ApiError(`API Error: ${resp.status} ${resp.statusText}`, resp.status, resp.statusText);
     }
@@ -25,7 +36,7 @@ export class ApiService {
   static async postJson<T>(path: string, body: unknown): Promise<T> {
     const resp = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: ApiService.getHeaders(),
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
@@ -42,7 +53,7 @@ export class ApiService {
   ): void {
     void fetch(`${API_BASE}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: ApiService.getHeaders(),
       body: JSON.stringify(body),
     })
       .then(async (resp) => {

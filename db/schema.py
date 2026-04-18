@@ -284,6 +284,14 @@ POSTGRES_STATEMENTS: list[str] = [
         invalidation_rule  TEXT NOT NULL,
         status             TEXT NOT NULL,
         sleeve             TEXT DEFAULT 'core_longs',
+        edge_source        TEXT DEFAULT '',
+        why_now            TEXT DEFAULT '',
+        key_risk           TEXT DEFAULT '',
+        supporting_signals TEXT DEFAULT '[]',
+        evidence_quality   TEXT DEFAULT 'medium',
+        review_status      TEXT DEFAULT 'approved',
+        origin_cycle_id    TEXT,
+        llm_generated      INTEGER DEFAULT 0,
         source             TEXT DEFAULT 'profile_seed',
         crowded_score      DOUBLE PRECISION DEFAULT 0.0,
         short_squeeze_risk INTEGER DEFAULT 0,
@@ -351,6 +359,23 @@ def _init_postgres() -> None:
     with psycopg.connect(url) as conn:
         for stmt in POSTGRES_STATEMENTS:
             conn.execute(stmt.strip())
+        
+        # Apply migrations for Postgres too
+        migrations = (
+            _AGENT_RUNS_MIGRATIONS 
+            + _EXECUTIONS_MIGRATIONS 
+            + _DECISION_TRACES_MIGRATIONS 
+            + _POSITIONS_MIGRATIONS 
+            + _IDEA_BOOK_MIGRATIONS
+        )
+        for stmt in migrations:
+            try:
+                # PostgreSQL uses slightly different syntax for some ALTER TABLE
+                # but 'ADD COLUMN IF NOT EXISTS' is available in PG 9.6+
+                pg_stmt = stmt.replace("ADD COLUMN", "ADD COLUMN IF NOT EXISTS")
+                conn.execute(pg_stmt)
+            except Exception:
+                pass
         conn.commit()
 
 

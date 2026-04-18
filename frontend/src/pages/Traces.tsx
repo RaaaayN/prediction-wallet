@@ -17,7 +17,10 @@ const Traces: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const data = await ApiService.get<DecisionTrace[]>('/api/traces?limit=100');
+        const path = cycleFromUrl
+          ? `/api/traces?cycle=${encodeURIComponent(cycleFromUrl)}&limit=500`
+          : '/api/traces?limit=100';
+        const data = await ApiService.get<DecisionTrace[]>(path);
         setTraces(data);
       } catch (err) {
         console.error('Error fetching traces:', err);
@@ -26,7 +29,7 @@ const Traces: React.FC = () => {
       }
     };
     fetchData();
-  }, []);
+  }, [cycleFromUrl]);
 
   const toggleExpand = (id: number) => {
     setExpandedId(expandedId === id ? null : id);
