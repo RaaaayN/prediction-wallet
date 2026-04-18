@@ -240,15 +240,55 @@ async def get_executions(limit: int = Query(50, ge=1, le=500), _: User = Depends
     return df.to_dict(orient="records") if not df.empty else []
 
 
-@app.get("/api/traces")
-async def get_traces(
+@app.get("/api/audit/traces")
+async def get_traces_api(
     limit: int = Query(100, ge=1, le=500),
     cycle_id: str | None = Query(None),
     _: User = Depends(get_current_user),
 ):
     from db.repository import get_decision_traces
     traces = get_decision_traces(limit=limit, cycle_id=cycle_id)
-    return list(reversed(traces)) if cycle_id else traces  # cycle view: ASC; global: DESC
+    return {"traces": list(reversed(traces)) if cycle_id else traces}
+
+
+@app.get("/api/audit/governance")
+async def get_governance_api(profile: str | None = Query(None), _: User = Depends(get_current_user)):
+    from services.governance_service import GovernanceService
+    gov = GovernanceService(profile_name=profile or "balanced")
+    return gov.generate_governance_report()
+
+
+class BacktestRequest(BaseModel):
+    strategy_name: str
+    days: int
+
+
+@app.post("/api/runner/backtest")
+async def run_backtest_api(req: BacktestRequest, profile: str | None = Query(None), _: User = Depends(get_current_user)):
+    from engine.backtest_v2 import EventDrivenBacktester
+    from services.mlflow_service import MLflowService
+    
+    # Optional: use profile-specific data lake if implemented
+    tester = EventDrivenBacktester(days=req.days)
+    result = tester.run(strategy_type=req.strategy_name)
+    
+    # Log to MLflow
+    mlflow_svc = MLflowService()
+    mlflow_svc.log_backtest(result, {
+        "strategy_type": req.strategy_name,
+        "days": req.days,
+        "profile": profile or "balanced"
+    })
+    
+    # Convert result to dict for JSON
+    return {
+        "strategy_name": result.strategy_name,
+        "metrics": result.metrics,
+        "history": result.history,
+        "trades": result.trades,
+        "risk_violations": result.risk_violations,
+        "data_hash": result.data_hash
+    }
 
 
 @app.get("/api/positions", response_model=list[PositionRow])
@@ -405,6 +445,13 @@ async def get_backtest(days: int = Query(90, ge=10, le=365), _: User = Depends(g
             detail="Insufficient market data for backtest. Check network / yfinance, then retry.",
         )
     return results
+
+
+@app.post("/api/runner/observe")
+async def observe_api(req: RunRequest, profile: str | None = Query(None), _: User = Depends(get_current_user)):
+    from agents.portfolio_agent import PortfolioAgentService
+    svc = PortfolioAgentService(profile_name=profile)
+    return svc.observe(strategy_name=req.strategy, execution_mode=req.mode)
 
 
 @app.get("/api/correlation")
