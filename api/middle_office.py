@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, Query, HTTPException
 from api.auth import Role, User, requires_role
 from services.middle_office_service import MiddleOfficeService, ReconciliationBreak, TCAReport
+from services.back_office_service import BackOfficeService
 
 router = APIRouter(prefix="/api/middle-office", tags=["Middle Office"])
 
@@ -59,3 +60,26 @@ async def get_tca(cycle_id: str, _: User = Depends(requires_role([Role.VIEWER, R
     if not report.total_trades and cycle_id != "manual":
         raise HTTPException(status_code=404, detail=f"No executions found for cycle {cycle_id}")
     return report
+
+# --- Back Office & Regulatory Reporting ---
+
+@router.get("/nav/history")
+async def get_nav_history_api(_: User = Depends(requires_role([Role.VIEWER, Role.TRADER, Role.ADMIN]))):
+    """View history of Net Asset Value (NAV) runs."""
+    from db.repository import get_nav_history
+    return get_nav_history()
+
+@router.post("/nav/calculate")
+async def run_nav_calculation(_: User = Depends(requires_role([Role.ADMIN]))):
+    """Trigger a new NAV calculation based on current ledger and prices."""
+    svc = BackOfficeService()
+    return svc.calculate_daily_nav()
+
+@router.get("/reports/mifir/{cycle_id}")
+async def get_mifir_report(cycle_id: str, _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
+    """Generate a regulatory MiFIR-compliant transaction record for a cycle."""
+    svc = BackOfficeService()
+    export = svc.get_regulatory_mifir_export(cycle_id)
+    if not export:
+        raise HTTPException(status_code=404, detail=f"No transactions found for cycle {cycle_id}")
+    return export

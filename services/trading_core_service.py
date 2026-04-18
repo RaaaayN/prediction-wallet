@@ -34,7 +34,7 @@ class TradingCoreService:
         self.ledger.load_from_db()
 
     def execute_order(self, cycle_id: str, symbol: str, side: OrderSide, quantity: float, reason: Optional[str] = None) -> Execution:
-        """Complete order lifecycle: Create -> Validate -> Submit -> Execute -> Apply to Ledger."""
+        """Complete order lifecycle: Create -> Validate -> Submit -> Execute -> Apply to Ledger -> Record Journal."""
         # 1. Market Price Snapshot
         market_price = self.market_data_handler.get_market_price(symbol)
         from db.repository import save_market_price
@@ -61,6 +61,11 @@ class TradingCoreService:
 
         # 4. Ledger: Apply
         self.ledger.apply_execution(execution, cycle_id=cycle_id)
+
+        # 5. Back Office: Journal Entry
+        from services.back_office_service import BackOfficeService
+        bo_svc = BackOfficeService(execution_service=None, market_service=self.market_service)
+        bo_svc.record_trade_journal(execution.model_dump(), cycle_id=cycle_id)
         
         return execution
 

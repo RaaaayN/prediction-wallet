@@ -767,6 +767,98 @@ def get_tca_report(
 
 
 # ---------------------------------------------------------------------------
+# Back Office / Accounting Repository Functions
+# ---------------------------------------------------------------------------
+
+def save_journal_entry(
+    entry: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    """Record a formal accounting journal entry."""
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    if "entry_id" not in entry:
+        entry["entry_id"] = str(uuid.uuid4())[:13]
+    if "timestamp" not in entry:
+        entry["timestamp"] = utc_now_iso()
+    
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q("""
+                INSERT INTO accounting_journals (entry_id, timestamp, cycle_id, account_code, side, amount, description, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """),
+            (
+                entry["entry_id"],
+                entry["timestamp"],
+                entry.get("cycle_id"),
+                entry["account_code"],
+                entry["side"],
+                entry["amount"],
+                entry.get("description"),
+                json.dumps(entry.get("metadata_json", {})),
+            ),
+        )
+        conn.commit()
+
+
+def save_nav_run(
+    nav_data: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    """Persist a NAV calculation run."""
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    ex = excluded_qualifier()
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q(f"""
+                INSERT INTO nav_history (as_of_date, timestamp, total_value, cash_balance, market_value, unrealized_pnl, realized_pnl, nav_per_share, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (as_of_date) DO UPDATE SET
+                    timestamp = {ex}.timestamp,
+                    total_value = {ex}.total_value,
+                    cash_balance = {ex}.cash_balance,
+                    market_value = {ex}.market_value,
+                    unrealized_pnl = {ex}.unrealized_pnl,
+                    realized_pnl = {ex}.realized_pnl,
+                    nav_per_share = {ex}.nav_per_share,
+                    status = {ex}.status
+            """),
+            (
+                nav_data["as_of_date"],
+                nav_data.get("timestamp") or utc_now_iso(),
+                nav_data["total_value"],
+                nav_data["cash_balance"],
+                nav_data["market_value"],
+                nav_data["unrealized_pnl"],
+                nav_data["realized_pnl"],
+                nav_data.get("nav_per_share", 1.0),
+                nav_data.get("status", "tentative"),
+            ),
+        )
+        conn.commit()
+
+
+def get_nav_history(
+    limit: int = 100,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    """Retrieve NAV history."""
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    with get_connection(resolved) as conn:
+        rows = conn.execute(q("SELECT * FROM nav_history ORDER BY as_of_date DESC LIMIT ?"), (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Trading Core v1 Repository Functions
 # ---------------------------------------------------------------------------
 

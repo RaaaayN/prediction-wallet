@@ -273,6 +273,29 @@ CREATE TABLE IF NOT EXISTS tca_reports (
     details_json           TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS accounting_journals (
+    entry_id      TEXT PRIMARY KEY,
+    timestamp     TEXT NOT NULL,
+    cycle_id      TEXT,
+    account_code  TEXT NOT NULL, -- e.g., 'CASH', 'EQUITY', 'P&L'
+    side          TEXT NOT NULL, -- 'DEBIT', 'CREDIT'
+    amount        REAL NOT NULL,
+    description   TEXT,
+    metadata_json TEXT DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS nav_history (
+    as_of_date    TEXT PRIMARY KEY, -- 'YYYY-MM-DD'
+    timestamp     TEXT NOT NULL,
+    total_value   REAL NOT NULL,
+    cash_balance  REAL NOT NULL,
+    market_value  REAL NOT NULL,
+    unrealized_pnl REAL NOT NULL,
+    realized_pnl   REAL NOT NULL,
+    nav_per_share  REAL DEFAULT 1.0, -- Simplified
+    status         TEXT DEFAULT 'tentative' -- 'tentative', 'final'
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_cycle_id ON orders(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_order_events_order_id ON order_events(order_id);
 CREATE INDEX IF NOT EXISTS idx_trade_executions_v2_order_id ON trade_executions_v2(order_id);
@@ -567,6 +590,31 @@ POSTGRES_STATEMENTS: list[str] = [
         total_slippage_dollars DOUBLE PRECISION NOT NULL,
         avg_slippage_bps       DOUBLE PRECISION NOT NULL,
         details_json           TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS accounting_journals (
+        entry_id      TEXT PRIMARY KEY,
+        timestamp     TEXT NOT NULL,
+        cycle_id      TEXT,
+        account_code  TEXT NOT NULL,
+        side          TEXT NOT NULL,
+        amount        DOUBLE PRECISION NOT NULL,
+        description   TEXT,
+        metadata_json TEXT DEFAULT '{}'
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS nav_history (
+        as_of_date    TEXT PRIMARY KEY,
+        timestamp     TEXT NOT NULL,
+        total_value   DOUBLE PRECISION NOT NULL,
+        cash_balance  DOUBLE PRECISION NOT NULL,
+        market_value  DOUBLE PRECISION NOT NULL,
+        unrealized_pnl DOUBLE PRECISION NOT NULL,
+        realized_pnl   DOUBLE PRECISION NOT NULL,
+        nav_per_share  DOUBLE PRECISION DEFAULT 1.0,
+        status         TEXT DEFAULT 'tentative'
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_orders_cycle_id ON orders(cycle_id)",
