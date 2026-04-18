@@ -3,6 +3,7 @@
 import pytest
 import sys
 import time
+import yaml
 from fastapi.testclient import TestClient
 from api.main import app
 from services.health_service import HealthService
@@ -128,3 +129,106 @@ def test_status_endpoint(db_path, monkeypatch):
     data = response.json()
     assert "health" in data
     assert "backups" in data
+
+
+def test_update_settings_writes_active_profile(monkeypatch, tmp_path):
+    """Profile-specific risk settings should be written to the selected profile file."""
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    balanced_path = profiles_dir / "balanced.yaml"
+    growth_path = profiles_dir / "growth.yaml"
+
+    balanced_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "balanced",
+                "initial_capital": 100000,
+                "drift_threshold": 0.05,
+                "kill_switch_drawdown": 0.10,
+                "slippage_equities": 0.001,
+                "slippage_crypto": 0.002,
+                "target_allocation": {"AAPL": 1.0},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    growth_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "growth",
+                "initial_capital": 100000,
+                "drift_threshold": 0.07,
+                "kill_switch_drawdown": 0.14,
+                "slippage_equities": 0.001,
+                "slippage_crypto": 0.002,
+                "target_allocation": {"AAPL": 1.0},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config, "API_KEY_ADMIN", "admin-test")
+
+    from settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "portfolio_profile", "balanced")
+
+    response = client.post(
+        "/api/settings",
+        json={
+            "portfolio_profile": "growth",
+            "drift_threshold": 0.21,
+            "kill_switch_drawdown": 0.44,
+        },
+        headers={"X-API-KEY": "admin-test"},
+    )
+    assert response.status_code == 200
+
+    balanced = yaml.safe_load(balanced_path.read_text(encoding="utf-8"))
+    growth = yaml.safe_load(growth_path.read_text(encoding="utf-8"))
+
+    assert balanced["drift_threshold"] == 0.05
+    assert balanced["kill_switch_drawdown"] == 0.10
+    assert growth["drift_threshold"] == 0.21
+    assert growth["kill_switch_drawdown"] == 0.44
+
+
+def test_trade_preview_keeps_portfolio_value_consistent(monkeypatch, db_path):
+    """Trade preview should preserve total book value apart from trading costs."""
+    monkeypatch.setattr(config, "MARKET_DB", db_path)
+    monkeypatch.setattr(config, "API_KEY_ADMIN", "admin-test")
+    monkeypatch.setattr(config, "API_KEY_TRADER", "")
+    monkeypatch.setattr(config, "API_KEY_VIEWER", "")
+
+    class FakeExecutionService:
+        def load_portfolio(self):
+            return {"positions": {"MSFT": 10.0}, "cash": 9000.0}
+
+        def portfolio_snapshot(self, price_map):
+            return {
+                "total_value": 10000.0,
+                "cash": 9000.0,
+                "current_weights": {"AAPL": 0.0},
+            }
+
+    class FakeMarketService:
+        def get_latest_prices(self, tickers):
+            return {ticker: 100.0 for ticker in tickers}
+
+    monkeypatch.setattr("services.execution_service.ExecutionService", FakeExecutionService)
+    monkeypatch.setattr("services.market_service.MarketService", FakeMarketService)
+
+    response = client.post(
+        "/api/trade/preview",
+        json={"action": "buy", "ticker": "AAPL", "quantity": 10.0},
+        headers={"X-API-KEY": "admin-test"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["portfolio_value"] == 10000.0
+    assert data["cash_after"] == 8000.0
+    assert data["new_weight"] == 0.1

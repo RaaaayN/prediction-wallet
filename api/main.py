@@ -663,6 +663,7 @@ async def update_app_settings(req: SettingsUpdateRequest, _: User = Depends(requ
             set_key(env_file, "TRADING_CORE_ENABLED", str(req.trading_core_enabled).lower())
         if req.portfolio_profile is not None:
             set_key(env_file, "PORTFOLIO_PROFILE", req.portfolio_profile)
+            settings.portfolio_profile = req.portfolio_profile
         if req.max_trades_per_cycle is not None:
             set_key(env_file, "MAX_TRADES_PER_CYCLE", str(req.max_trades_per_cycle))
         if req.max_order_fraction_of_portfolio is not None:
@@ -676,7 +677,7 @@ async def update_app_settings(req: SettingsUpdateRequest, _: User = Depends(requ
 
         # Update profile YAML for risk settings
         if req.drift_threshold is not None or req.kill_switch_drawdown is not None:
-            profile_name = settings.portfolio_profile
+            profile_name = req.portfolio_profile or settings.portfolio_profile
             profile_path = Path("profiles") / f"{profile_name}.yaml"
             if profile_path.exists():
                 with open(profile_path, "r", encoding="utf-8") as f:
@@ -750,7 +751,8 @@ async def trade_preview(req: TradePreviewRequest, _: User = Depends(requires_rol
         new_holding = current_holding - req.quantity
         cash_after = cash + estimated_cost
 
-    new_portfolio_value = portfolio_value + (cash_after - cash)
+    other_holdings_value = portfolio_value - cash - (current_holding * current_price)
+    new_portfolio_value = cash_after + other_holdings_value + (new_holding * current_price)
     new_weight = (new_holding * current_price / new_portfolio_value) if new_portfolio_value > 0 else 0.0
 
     return {

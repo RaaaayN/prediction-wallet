@@ -17,19 +17,6 @@ class User(BaseModel):
     is_service_account: bool = False
 
 async def get_current_user(x_api_key: str | None = Header(None)) -> User:
-    # 1. Fallback for "Opt-in mode" (no keys configured anywhere)
-    if not x_api_key and not config.API_KEY_ADMIN and not config.API_KEY_TRADER and not config.API_KEY_VIEWER:
-        # Check if database has any users
-        from db.repository import get_connection, q
-        try:
-            with get_connection(config.MARKET_DB) as conn:
-                count = conn.execute(q("SELECT COUNT(*) FROM users")).fetchone()[0]
-                if count == 0:
-                    return User(username="system_admin", role=Role.ADMIN)
-        except Exception:
-            # Table might not exist yet if init wasn't run
-            return User(username="system_admin", role=Role.ADMIN)
-
     if not x_api_key:
         raise HTTPException(status_code=401, detail="X-API-KEY header missing")
     
