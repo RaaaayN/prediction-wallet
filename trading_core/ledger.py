@@ -29,7 +29,8 @@ class Ledger:
         # 2. Load Cash (sum of all movements)
         movements = get_trading_core_cash_movements(db_path=self.db_path, profile_name=self.profile_name)
         self._cash_movements = [CashMovement(**m) for m in movements]
-        self._cash = sum(m.amount for m in self._cash_movements)
+        if self._cash_movements:
+            self._cash = sum(m.amount for m in self._cash_movements)
 
     def apply_execution(self, execution: Execution, cycle_id: Optional[str] = None):
         """Update positions and cash based on a trade execution and persist to DB."""

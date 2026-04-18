@@ -9,6 +9,7 @@ import sys
 
 from agents.portfolio_agent import PortfolioAgentService
 from config import AGENT_BACKEND, AI_PROVIDER, EXECUTION_MODE
+from runtime_context import build_runtime_context
 
 
 def check_api_key():
@@ -28,15 +29,16 @@ def print_json(payload) -> None:
     print(json.dumps(payload, indent=2, default=str))
 
 
-def init_portfolio(force: bool = False, initial_capital: float | None = None):
+def init_portfolio(force: bool = False, initial_capital: float | None = None, profile_name: str | None = None):
     from config import INITIAL_CAPITAL, TARGET_ALLOCATION
     from execution.simulator import TradeSimulator
     from market.fetcher import MarketDataService
     from utils.time import utc_now_iso
     from db.repository import reset_db_state, save_snapshot
 
-    sim = TradeSimulator()
-    fetcher = MarketDataService()
+    runtime_context = build_runtime_context(profile_name)
+    sim = TradeSimulator(profile_name=runtime_context.profile_name)
+    fetcher = MarketDataService(db_path=runtime_context.market_db)
     portfolio = sim.load_portfolio()
 
     if portfolio.get("positions") and not force:
@@ -48,7 +50,7 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None):
     capital = initial_capital if initial_capital is not None else INITIAL_CAPITAL
 
     # 1. Reset Database State
-    reset_db_state()
+    reset_db_state(db_path=runtime_context.market_db, profile_name=runtime_context.profile_name)
 
     # 2. Reset JSON Portfolio
     clean = {
@@ -83,7 +85,7 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None):
     cycle_id = f"init-{utc_now_iso()[:10]}"
     
     # Save legacy snapshot
-    save_snapshot(final_portfolio, prices, cycle_id)
+    save_snapshot(final_portfolio, prices, cycle_id, runtime_context=runtime_context)
     
     # Sync to Trading Core position_ledger (canonical truth)
     try:
@@ -93,9 +95,9 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None):
         import uuid
         
         # Bootstrap Security Master & Instruments
-        sm = SecurityMaster()
+        sm = SecurityMaster(db_path=runtime_context.market_db, profile_name=runtime_context.profile_name)
         sm.bootstrap(existing_positions=final_portfolio.get("positions", {}))
-        upsert_instruments([inst.model_dump() for inst in sm.list_instruments()])
+        upsert_instruments([inst.model_dump() for inst in sm.list_instruments()], db_path=runtime_context.market_db, profile_name=runtime_context.profile_name)
         
         # Create canonical Ledger positions
         tc_positions = []
@@ -112,7 +114,7 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None):
                 updated_at=utc_now_iso()
             ).model_dump())
         
-        save_position_ledger(tc_positions)
+        save_position_ledger(tc_positions, db_path=runtime_context.market_db, profile_name=runtime_context.profile_name)
         
         # Record initial capital deposit in Trading Core ledger
         deposit = CashMovement(
@@ -123,7 +125,7 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None):
             created_at=utc_now_iso(),
             description="Initial capital deposit"
         )
-        save_cash_movement(deposit.model_dump())
+        save_cash_movement(deposit.model_dump(), db_path=runtime_context.market_db, profile_name=runtime_context.profile_name)
         
     except Exception as e:
         print(f"Warning: Failed to sync to Trading Core ledger: {e}")
@@ -131,9 +133,8 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None):
     # 5. Bootstrap Admin User (IAM Fondation)
     try:
         from db.repository import create_user, get_connection, q
-        from config import MARKET_DB
         import uuid
-        with get_connection(MARKET_DB) as conn:
+        with get_connection(runtime_context.market_db) as conn:
             user_count = conn.execute(q("SELECT COUNT(*) FROM users")).fetchone()[0]
         
         if user_count == 0:
@@ -152,7 +153,7 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None):
                     "role": "admin",
                     "is_active": 1,
                     "is_service_account": 0
-                })
+                }, db_path=runtime_context.market_db, profile_name=runtime_context.profile_name)
                 print(f"Admin user '{username}' created successfully.")
             else:
                 print("Skipping admin creation. System will use static keys or opt-in mode.")
@@ -217,7 +218,8 @@ def main():
     if command == "init":
         init_portfolio(
             force=getattr(args, "force", False),
-            initial_capital=getattr(args, "initial_capital", None)
+            initial_capital=getattr(args, "initial_capital", None),
+            profile_name=args.profile,
         )
         return
     if command == "report":

@@ -6,6 +6,7 @@ from services.trading_core_service import TradingCoreService
 from db.schema import init_db
 import config
 from trading_core.models import OrderSide
+from execution.persistence import PortfolioStore
 
 @pytest.fixture
 def db_path(tmp_path, monkeypatch):
@@ -15,6 +16,13 @@ def db_path(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "MARKET_DB", db_file)
     init_db(db_file)
     return db_file
+
+@pytest.fixture(autouse=True)
+def empty_legacy_portfolio(monkeypatch):
+    monkeypatch.setattr(
+        "services.execution_service.ExecutionService.load_portfolio",
+        lambda self: PortfolioStore.default_portfolio(config.INITIAL_CAPITAL),
+    )
 
 def test_trade_journal_recording(db_path, monkeypatch):
     """Verify that execute_order automatically triggers journal entries."""

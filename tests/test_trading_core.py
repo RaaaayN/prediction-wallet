@@ -10,12 +10,21 @@ from trading_core.models import (
 from services.trading_core_service import TradingCoreService
 from db.schema import init_db
 import config
+from trading_core.ledger import Ledger
+from execution.persistence import PortfolioStore
 
 @pytest.fixture
 def db_path(tmp_path):
     db_file = str(tmp_path / "test_trading_core.db")
     init_db(db_file)
     return db_file
+
+@pytest.fixture(autouse=True)
+def empty_legacy_portfolio(monkeypatch):
+    monkeypatch.setattr(
+        "services.execution_service.ExecutionService.load_portfolio",
+        lambda self: PortfolioStore.default_portfolio(config.INITIAL_CAPITAL),
+    )
 
 def test_trading_core_service_lifecycle(db_path, monkeypatch):
     """Test full cycle: Order -> Execution -> Ledger -> Persistence."""
@@ -55,6 +64,43 @@ def test_trading_core_service_lifecycle(db_path, monkeypatch):
     assert len(movements) == 1
     assert movements[0]["movement_type"] == "trade_buy"
     assert movements[0]["amount"] < 0
+
+def test_ledger_preserves_initial_cash_when_empty(db_path, monkeypatch):
+    monkeypatch.setattr(config, "MARKET_DB", db_path)
+    monkeypatch.setattr(config, "USE_POSTGRES", False)
+
+    ledger = Ledger(initial_cash=12345.0, db_path=db_path)
+    ledger.load_from_db()
+
+    assert ledger.get_cash() == pytest.approx(12345.0)
+
+def test_trading_core_bootstraps_legacy_portfolio_when_db_empty(db_path, monkeypatch):
+    monkeypatch.setattr(config, "MARKET_DB", db_path)
+    monkeypatch.setattr(config, "INITIAL_CAPITAL", 10000.0)
+    monkeypatch.setattr(config, "USE_POSTGRES", False)
+    monkeypatch.setattr(
+        "services.execution_service.ExecutionService.load_portfolio",
+        lambda self: {
+            "positions": {"AAPL": 10.0},
+            "cash": 2500.0,
+            "average_costs": {"AAPL": 150.0},
+        },
+    )
+
+    tc = TradingCoreService(db_path=db_path)
+
+    assert tc.get_cash() == pytest.approx(2500.0)
+    assert len(tc.get_positions()) == 1
+    assert tc.get_positions()[0].symbol == "AAPL"
+
+    from db.repository import get_trading_core_positions, get_trading_core_cash_movements
+
+    positions = get_trading_core_positions(db_path=db_path)
+    movements = get_trading_core_cash_movements(db_path=db_path)
+    assert len(positions) == 1
+    assert positions[0]["quantity"] == 10.0
+    assert len(movements) == 1
+    assert movements[0]["amount"] == pytest.approx(2500.0)
 
 def test_trading_core_restarts_with_state(db_path, monkeypatch):
     """Test that TradingCoreService reloads its state from the DB."""
