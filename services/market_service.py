@@ -14,6 +14,7 @@ from runtime_context import build_runtime_context, reset_profile_market_cache
 from settings import settings
 from utils.time import utc_now_iso
 from utils.resilience import retry, CircuitBreaker
+from services.data_lake_service import DataLakeService
 
 market_cb = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
 
@@ -188,6 +189,23 @@ class MarketService:
             if price > 0:
                 prices[ticker] = price
         return prices
+
+    def sync_to_lake(self, tickers: list[str]) -> dict[str, str]:
+        """Sync current database cache to the Parquet Data Lake (Bronze/Silver)."""
+        lake = DataLakeService()
+        synced = {}
+        for ticker in tickers:
+            df = self._load_from_db(ticker)
+            if df is not None and not df.empty:
+                # Bronze is raw (no indicators)
+                raw_cols = ["Open", "High", "Low", "Close", "Volume"]
+                raw_df = df[[c for c in raw_cols if c in df.columns]]
+                lake.save_bronze(ticker, raw_df)
+                
+                # Silver has all indicators
+                lake.save_silver(ticker, df)
+                synced[ticker] = "synced"
+        return synced
 
     def get_refresh_status(self) -> list[dict]:
         try:

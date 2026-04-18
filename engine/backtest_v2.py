@@ -29,6 +29,7 @@ class BacktestResult:
     trades: List[dict]
     metrics: dict
     exposures: List[dict]
+    data_hash: Optional[str] = None
 
 class EventDrivenBacktester:
     def __init__(
@@ -37,15 +38,37 @@ class EventDrivenBacktester:
         initial_capital: float = INITIAL_CAPITAL,
         commission_fixed: float = 0.0,
         commission_bps: float = 0.0,
+        gold_dataset_name: Optional[str] = None,
     ):
         self.days = days
         self.initial_capital = initial_capital
         self.commission_fixed = commission_fixed
         self.commission_bps = commission_bps
         self.market_svc = MarketDataService()
+        self.gold_dataset_name = gold_dataset_name
+        self.data_hash = None
         
     def _get_data(self, tickers: List[str]) -> pd.DataFrame:
         """Fetch and align data for all tickers."""
+        from services.data_lake_service import DataLakeService
+        lake = DataLakeService()
+        
+        if self.gold_dataset_name:
+            gold_data = lake.load_gold(self.gold_dataset_name)
+            if gold_data:
+                # Recompute hash for traceability
+                import hashlib
+                from pathlib import Path
+                self.data_hash = lake._compute_dataset_hash(lake.gold_path / self.gold_dataset_name)
+                
+                # Combine into prices and volumes
+                price_data = {t: df["Close"] for t, df in gold_data.items() if "Close" in df.columns}
+                volume_data = {t: df["Volume"] for t, df in gold_data.items() if "Volume" in df.columns}
+                
+                combined_prices = pd.DataFrame(price_data).dropna()
+                combined_volumes = pd.DataFrame(volume_data).reindex(combined_prices.index).fillna(0)
+                return combined_prices, combined_volumes
+
         price_data = {}
         volume_data = {}
         
@@ -167,7 +190,8 @@ class EventDrivenBacktester:
             history=history,
             trades=trades,
             metrics=metrics,
-            exposures=exposures_history
+            exposures=exposures_history,
+            data_hash=self.data_hash
         )
 
     def _apply_orders(self, portfolio: dict, orders: list, prices: dict, timestamp: datetime) -> list:
