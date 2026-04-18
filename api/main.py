@@ -193,29 +193,41 @@ async def get_traces(
 
 @app.get("/api/positions", response_model=list[PositionRow])
 async def get_positions(cycle_id: str | None = Query(None), _: User = Depends(get_current_user)):
-    if cycle_id:
-        from db.repository import get_positions_by_cycle
-        return get_positions_by_cycle(cycle_id=cycle_id)
-    
-    from db.repository import get_latest_positions
+    from db.repository import get_positions_by_cycle, get_latest_positions, get_trading_core_positions
     from services.execution_service import ExecutionService
     from services.market_service import MarketService
 
-    latest = get_latest_positions()
-    if latest:
-        return latest
-
+    if cycle_id:
+        return get_positions_by_cycle(cycle_id=cycle_id)
+    
+    # 1. Try modern position_ledger (canonical truth)
+    tc_positions = get_trading_core_positions()
+    
+    # 2. Try legacy positions table as fallback
+    legacy_positions = get_latest_positions() if not tc_positions else []
+    
+    # 3. Last fallback: live JSON (useful right after init)
+    svc = ExecutionService()
     try:
-        svc = ExecutionService()
         portfolio = svc.load_portfolio()
     except Exception:
+        portfolio = {}
+
+    positions_map = portfolio.get("positions", {}) or {}
+    
+    # Normalize data source
+    if tc_positions:
+        # Map Trading Core positions (symbol -> qty)
+        positions_map = {p["symbol"]: p["quantity"] for p in tc_positions}
+    elif legacy_positions:
+        # Map legacy DB positions
+        positions_map = {p["ticker"]: p["quantity"] for p in legacy_positions}
+
+    if not positions_map:
         return []
 
-    positions = portfolio.get("positions", {}) or {}
-    if not positions:
-        return []
-
-    tickers = list(positions.keys())
+    # Compute fresh snapshot for weights/drifts
+    tickers = list(positions_map.keys())
     prices = MarketService().get_latest_prices(tickers)
     snapshot = svc.portfolio_snapshot(prices)
     current_weights = snapshot.get("current_weights", {})
@@ -227,9 +239,18 @@ async def get_positions(cycle_id: str | None = Query(None), _: User = Depends(ge
 
     rows = []
     for ticker in sorted(tickers):
-        quantity = float(positions.get(ticker, 0.0))
+        quantity = float(positions_map.get(ticker, 0.0))
         price = float(prices.get(ticker, 0.0))
         value = quantity * price
+        
+        # Determine side: prefer ledger if available, else JSON, else infer
+        side = "long"
+        if tc_positions:
+             # In v1 TC, quantity < 0 implies short
+             side = "short" if quantity < 0 else "long"
+        else:
+             side = position_sides.get(ticker, "short" if quantity < 0 else "long")
+
         rows.append(
             {
                 "ticker": ticker,
@@ -239,7 +260,7 @@ async def get_positions(cycle_id: str | None = Query(None), _: User = Depends(ge
                 "weight": float(current_weights.get(ticker, 0.0)),
                 "target_weight": float(target_weights.get(ticker, 0.0)),
                 "drift": float(drifts.get(ticker, 0.0)),
-                "side": position_sides.get(ticker, "short" if quantity < 0 else "long"),
+                "side": side,
                 "idea_id": position_ideas.get(ticker),
                 "gross_exposure": abs(value) / total_value if total_value > 0 else 0.0,
                 "net_exposure": value / total_value if total_value > 0 else 0.0,

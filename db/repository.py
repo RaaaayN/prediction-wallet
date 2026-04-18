@@ -46,6 +46,29 @@ def _row_pk(row: Any, key: str = "id") -> int:
     return int(row[key])
 
 
+def reset_db_state(
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    """Clear all portfolio snapshots, positions, ledger, executions, etc."""
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    with get_connection(resolved) as conn:
+        # Delete in order to respect foreign keys
+        conn.execute("DELETE FROM cash_movements")
+        conn.execute("DELETE FROM trade_executions_v2")
+        conn.execute("DELETE FROM order_events")
+        conn.execute("DELETE FROM orders")
+        conn.execute("DELETE FROM positions")
+        conn.execute("DELETE FROM portfolio_snapshots")
+        conn.execute("DELETE FROM executions")
+        conn.execute("DELETE FROM position_ledger")
+        conn.execute("DELETE FROM agent_runs")
+        conn.execute("DELETE FROM cycle_events")
+        conn.commit()
+
+
 def save_snapshot(
     portfolio: dict,
     prices: dict,
