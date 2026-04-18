@@ -32,14 +32,32 @@ app = FastAPI(title="Prediction Wallet API", version="1.0.0")
 
 app.include_router(middle_office_router)
 
-def _prefetch_price_history(tickers: list[str], *, min_days: int, period: str = "2y") -> None:
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _prefetch_price_history(tickers: list[str], *, min_days: int, period: str = "2y") -> None:
+    """Warm the market cache for tickers when OHLCV is missing (yfinance on first hit)."""
+    if not tickers:
+        return
+    from services.market_service import MarketService
+
+    svc = MarketService()
+    need: list[str] = []
+    for t in tickers:
+        hist = svc.get_historical(t, days=min_days + 90)
+        if hist is None or hist.empty or "Close" not in hist.columns:
+            need.append(t)
+    if not need:
+        return
+    try:
+        svc.fetch_and_store(need, period=period, force=False)
+    except Exception:
+        pass
 
 
 @app.middleware("http")
@@ -78,16 +96,6 @@ class IdeaReviewRequest(BaseModel):
 
 class IdeaPromoteRequest(BaseModel):
     status: str
-
-
-# ── static UI ─────────────────────────────────────────────────────────────────
-
-FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
-FRONTEND_INDEX = FRONTEND_DIST / "index.html"
-FRONTEND_ASSETS = FRONTEND_DIST / "assets"
-LEGACY_UI_DIR = PROJECT_ROOT / "ui"
-UI_REACT_DIST = PROJECT_ROOT / "ui-react" / "dist"
-UI_REACT_INDEX = UI_REACT_DIST / "index.html"
 UI_REACT_ASSETS = UI_REACT_DIST / "assets"
 
 if LEGACY_UI_DIR.is_dir():
