@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from contextlib import contextmanager
 from typing import Any
 
@@ -659,6 +660,110 @@ def create_user(
             ),
         )
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Middle Office Repository Functions
+# ---------------------------------------------------------------------------
+
+def save_reconciliation_run(
+    run_data: dict,
+    breaks: list[dict],
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    """Save a reconciliation run and its associated breaks."""
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q("INSERT INTO reconciliation_runs (run_id, timestamp, status, total_breaks) VALUES (?, ?, ?, ?)"),
+            (run_data["run_id"], run_data["timestamp"], run_data["status"], run_data["total_breaks"]),
+        )
+        for b in breaks:
+            conn.execute(
+                q("""
+                    INSERT INTO reconciliation_breaks (break_id, run_id, break_type, subject, legacy_value, ledger_value, diff, severity)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """),
+                (
+                    b.get("break_id") or str(uuid.uuid4())[:13],
+                    run_data["run_id"],
+                    b["break_type"],
+                    b["subject"],
+                    b.get("legacy_value"),
+                    b.get("ledger_value"),
+                    b.get("diff"),
+                    b.get("severity", "error"),
+                ),
+            )
+        conn.commit()
+
+
+def get_latest_reconciliation_run(
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> dict | None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    with get_connection(resolved) as conn:
+        row = conn.execute(q("SELECT * FROM reconciliation_runs ORDER BY timestamp DESC LIMIT 1")).fetchone()
+    return dict(row) if row else None
+
+
+def save_tca_report(
+    tca_data: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    """Persist a TCA report."""
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    ex = excluded_qualifier()
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q(f"""
+                INSERT INTO tca_reports (cycle_id, timestamp, total_trades, total_notional, total_slippage_dollars, avg_slippage_bps, details_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (cycle_id) DO UPDATE SET
+                    timestamp = {ex}.timestamp,
+                    total_trades = {ex}.total_trades,
+                    total_notional = {ex}.total_notional,
+                    total_slippage_dollars = {ex}.total_slippage_dollars,
+                    avg_slippage_bps = {ex}.avg_slippage_bps,
+                    details_json = {ex}.details_json
+            """),
+            (
+                tca_data["cycle_id"],
+                tca_data.get("timestamp") or utc_now_iso(),
+                tca_data["total_trades"],
+                tca_data["total_notional"],
+                tca_data["total_slippage_dollars"],
+                tca_data["avg_slippage_bps"],
+                json.dumps(tca_data["trade_details"]),
+            ),
+        )
+        conn.commit()
+
+
+def get_tca_report(
+    cycle_id: str,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> dict | None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    with get_connection(resolved) as conn:
+        row = conn.execute(q("SELECT * FROM tca_reports WHERE cycle_id = ?"), (cycle_id,)).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    data["trade_details"] = json.loads(data.pop("details_json"))
+    return data
 
 
 # ---------------------------------------------------------------------------

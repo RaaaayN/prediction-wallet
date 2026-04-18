@@ -33,8 +33,9 @@ class MiddleOfficeService:
         self.execution_service = execution_service or ExecutionService()
 
     def reconcile_holdings(self) -> List[ReconciliationBreak]:
-        """Compare legacy portfolio.json state against the Trading Core Ledger."""
-        from db.repository import get_trading_core_positions, get_trading_core_cash_movements
+        """Compare legacy portfolio.json state against the Trading Core Ledger and persist results."""
+        from db.repository import get_trading_core_positions, get_trading_core_cash_movements, save_reconciliation_run
+        import uuid
         
         legacy_portfolio = self.execution_service.load_portfolio()
         legacy_positions = legacy_portfolio.get("positions", {})
@@ -71,6 +72,16 @@ class MiddleOfficeService:
                     diff=legacy_qty - ledger_qty
                 ))
 
+        # Persistence
+        run_id = f"recon_{uuid.uuid4().hex[:12]}"
+        run_data = {
+            "run_id": run_id,
+            "timestamp": utc_now_iso(),
+            "status": "success" if not breaks else "failure",
+            "total_breaks": len(breaks)
+        }
+        save_reconciliation_run(run_data, [b.model_dump() for b in breaks])
+
         return breaks
 
     def sync_legacy_to_ledger(self):
@@ -99,9 +110,15 @@ class MiddleOfficeService:
         return {"status": "synced", "positions_count": len(new_positions), "cash": ledger_cash}
 
     def generate_tca_report(self, cycle_id: str) -> TCAReport:
-        """Compute Transaction Cost Analysis for a specific cycle."""
-        from db.repository import get_trading_core_executions
+        """Compute Transaction Cost Analysis for a specific cycle and persist results."""
+        from db.repository import get_trading_core_executions, get_tca_report, save_tca_report
 
+        # 1. Try to load existing
+        existing = get_tca_report(cycle_id)
+        if existing:
+            return TCAReport(**existing)
+
+        # 2. Compute if not found
         executions = get_trading_core_executions(cycle_id=cycle_id)
         
         total_notional = 0.0
@@ -130,7 +147,7 @@ class MiddleOfficeService:
             
         avg_bps = (total_slippage / (total_notional - total_slippage) * 10000) if (total_notional - total_slippage) > 0 else 0.0
         
-        return TCAReport(
+        report = TCAReport(
             cycle_id=cycle_id,
             total_trades=len(executions),
             total_notional=total_notional,
@@ -138,3 +155,9 @@ class MiddleOfficeService:
             avg_slippage_bps=avg_bps,
             trade_details=details
         )
+
+        # 3. Persist
+        if report.total_trades > 0 or cycle_id == "manual":
+            save_tca_report(report.model_dump())
+
+        return report

@@ -245,6 +245,34 @@ CREATE TABLE IF NOT EXISTS users (
     created_at         TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS reconciliation_runs (
+    run_id       TEXT PRIMARY KEY,
+    timestamp    TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    total_breaks INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reconciliation_breaks (
+    break_id     TEXT PRIMARY KEY,
+    run_id       TEXT NOT NULL REFERENCES reconciliation_runs(run_id),
+    break_type   TEXT NOT NULL,
+    subject      TEXT NOT NULL,
+    legacy_value REAL,
+    ledger_value REAL,
+    diff         REAL,
+    severity     TEXT DEFAULT 'error'
+);
+
+CREATE TABLE IF NOT EXISTS tca_reports (
+    cycle_id               TEXT PRIMARY KEY,
+    timestamp              TEXT NOT NULL,
+    total_trades           INTEGER NOT NULL,
+    total_notional         REAL NOT NULL,
+    total_slippage_dollars REAL NOT NULL,
+    avg_slippage_bps       REAL NOT NULL,
+    details_json           TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_cycle_id ON orders(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_order_events_order_id ON order_events(order_id);
 CREATE INDEX IF NOT EXISTS idx_trade_executions_v2_order_id ON trade_executions_v2(order_id);
@@ -508,6 +536,37 @@ POSTGRES_STATEMENTS: list[str] = [
         is_active          INTEGER DEFAULT 1,
         is_service_account INTEGER DEFAULT 0,
         created_at         TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reconciliation_runs (
+        run_id       TEXT PRIMARY KEY,
+        timestamp    TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        total_breaks INTEGER NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reconciliation_breaks (
+        break_id     TEXT PRIMARY KEY,
+        run_id       TEXT NOT NULL REFERENCES reconciliation_runs(run_id),
+        break_type   TEXT NOT NULL,
+        subject      TEXT NOT NULL,
+        legacy_value DOUBLE PRECISION,
+        ledger_value DOUBLE PRECISION,
+        diff         DOUBLE PRECISION,
+        severity     TEXT DEFAULT 'error'
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS tca_reports (
+        cycle_id               TEXT PRIMARY KEY,
+        timestamp              TEXT NOT NULL,
+        total_trades           INTEGER NOT NULL,
+        total_notional         DOUBLE PRECISION NOT NULL,
+        total_slippage_dollars DOUBLE PRECISION NOT NULL,
+        avg_slippage_bps       DOUBLE PRECISION NOT NULL,
+        details_json           TEXT NOT NULL
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_orders_cycle_id ON orders(cycle_id)",
