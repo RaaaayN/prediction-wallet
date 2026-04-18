@@ -96,6 +96,16 @@ class IdeaReviewRequest(BaseModel):
 
 class IdeaPromoteRequest(BaseModel):
     status: str
+
+
+# ── static UI ─────────────────────────────────────────────────────────────────
+
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+FRONTEND_ASSETS = FRONTEND_DIST / "assets"
+LEGACY_UI_DIR = PROJECT_ROOT / "ui"
+UI_REACT_DIST = PROJECT_ROOT / "ui-react" / "dist"
+UI_REACT_INDEX = UI_REACT_DIST / "index.html"
 UI_REACT_ASSETS = UI_REACT_DIST / "assets"
 
 if LEGACY_UI_DIR.is_dir():
