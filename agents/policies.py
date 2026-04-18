@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from config import HEDGE_FUND_PROFILE, MAX_ORDER_FRACTION_OF_PORTFOLIO, MAX_SECTOR_CONCENTRATION, MAX_TRADES_PER_CYCLE, SECTOR_MAP, TARGET_ALLOCATION
 from agents.models import PolicyEvaluation, PolicyViolation, RejectedTrade, RiskStatus, TradeDecision, TradeProposal
 from engine.hedge_fund import compute_exposures
-from engine.portfolio import compute_sector_exposure
 
 
 @dataclass
@@ -151,6 +150,11 @@ class ExecutionPolicyEngine:
             sector_map=SECTOR_MAP,
             beta_map=beta_map,
         )
+        projected_positions = dict(current_positions)
+        projected_sides = dict(current_sides)
+        projected_exposure = current_exposure
+        projected_sector_gross = dict(current_exposure.get("sector_gross", {}))
+        projected_cash = float(current_cash)
         for trade in decision.approved_trades:
             key = (trade.action, trade.ticker, round(float(trade.quantity), 6))
             if trade.ticker not in TARGET_ALLOCATION:
@@ -213,11 +217,8 @@ class ExecutionPolicyEngine:
             # Sells always pass — they reduce concentration.
             sector = SECTOR_MAP.get(trade.ticker)
             if sector and trade.action == "buy":
-                current_exposure = compute_sector_exposure(
-                    observation.portfolio.current_weights, SECTOR_MAP
-                )
                 added_weight = (price * float(trade.quantity)) / total_value if total_value > 0 else 0.0
-                projected = current_exposure.get(sector, 0.0) + added_weight
+                projected = projected_sector_gross.get(sector, 0.0) + added_weight
                 if projected > MAX_SECTOR_CONCENTRATION:
                     blocked.append(
                         RejectedTrade(
@@ -230,18 +231,18 @@ class ExecutionPolicyEngine:
                     )
                     continue
 
-            projected_positions = dict(current_positions)
-            projected_sides = dict(current_sides)
             signed_quantity = float(trade.quantity)
             price = observation.market.prices.get(trade.ticker, 0.0)
-            signed_value = signed_quantity * price
             trade_side = getattr(trade, "side", "long")
+            signed_value = signed_quantity * price
             if trade_side == "short":
                 if trade.action == "sell":
                     projected_positions[trade.ticker] = projected_positions.get(trade.ticker, 0.0) - signed_quantity
                     projected_sides[trade.ticker] = "short"
+                    projected_cash += signed_value
                 else:
                     projected_positions[trade.ticker] = projected_positions.get(trade.ticker, 0.0) + signed_quantity
+                    projected_cash -= signed_value
                     if abs(projected_positions[trade.ticker]) < 1e-6:
                         projected_positions.pop(trade.ticker, None)
                         projected_sides.pop(trade.ticker, None)
@@ -249,19 +250,22 @@ class ExecutionPolicyEngine:
                 if trade.action == "buy":
                     projected_positions[trade.ticker] = projected_positions.get(trade.ticker, 0.0) + signed_quantity
                     projected_sides[trade.ticker] = "long"
+                    projected_cash -= signed_value
                 else:
                     projected_positions[trade.ticker] = projected_positions.get(trade.ticker, 0.0) - signed_quantity
+                    projected_cash += signed_value
                     if abs(projected_positions[trade.ticker]) < 1e-6:
                         projected_positions.pop(trade.ticker, None)
                         projected_sides.pop(trade.ticker, None)
             projected_exposure = compute_exposures(
                 projected_positions,
                 observation.market.prices,
-                current_cash,
+                projected_cash,
                 position_sides=projected_sides,
                 sector_map=SECTOR_MAP,
                 beta_map={ticker: (HEDGE_FUND_PROFILE.get("universe", {}).get(ticker, {}) or {}).get("beta", 1.0) for ticker in projected_positions},
             )
+            projected_sector_gross = dict(projected_exposure.get("sector_gross", {}))
             gross = projected_exposure.get("gross_exposure", 0.0)
             net = projected_exposure.get("net_exposure", 0.0)
             if self._config.gross_exposure_limit is not None and gross > self._config.gross_exposure_limit:

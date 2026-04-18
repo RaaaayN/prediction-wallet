@@ -292,6 +292,22 @@ class TestToleranceBandOrders:
         # Just verify the parameter doesn't break normal execution
         assert isinstance(orders, list)
 
+    def test_liquidates_positions_removed_from_target(self):
+        portfolio = {
+            "positions": {"AAPL": 5.0, "MSFT": 2.5, "GOOGL": 3.0},
+            "cash": 0.0,
+        }
+        prices = {"AAPL": 100.0, "MSFT": 200.0, "GOOGL": 150.0}
+        target = {"AAPL": 0.5, "MSFT": 0.5}
+
+        orders = generate_rebalance_orders(portfolio, prices, target, min_drift=0.0, min_notional=0.0)
+
+        liquidation = [order for order in orders if order["ticker"] == "GOOGL"]
+        assert liquidation
+        assert liquidation[0]["action"] == "sell"
+        assert liquidation[0]["quantity"] == 3.0
+        assert "Liquidate" in liquidation[0]["reason"]
+
 
 # ---------------------------------------------------------------------------
 # TestAvgSlippageBps (P10 fix)

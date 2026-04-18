@@ -33,6 +33,31 @@ def generate_rebalance_orders(
         return []
 
     orders = []
+    target_tickers = set(target)
+
+    # First liquidate holdings that are no longer part of the active allocation.
+    for ticker, quantity in positions.items():
+        if ticker in target_tickers:
+            continue
+        price = prices.get(ticker, 0.0)
+        if price <= 0:
+            continue
+        current_value = market_values.get(ticker, 0.0)
+        if abs(current_value) / total < min_drift:
+            continue
+        if abs(quantity) * price < min_notional:
+            continue
+        action = "sell" if quantity > 0 else "buy"
+        orders.append({
+            "action": action,
+            "ticker": ticker,
+            "quantity": round(abs(quantity), 6),
+            "reason": (
+                f"Liquidate {ticker}: removed from active target allocation "
+                f"(current weight {current_value / total:.1%})"
+            ),
+        })
+
     for ticker, target_weight in target.items():
         current_value = market_values.get(ticker, 0.0)
         current_weight = current_value / total

@@ -239,6 +239,29 @@ def test_sufficient_confidence_passes_through():
     assert len(result.allowed_trades) == 1
 
 
+def test_sector_limit_accounts_for_prior_allowed_trades():
+    """Later buys should see exposure added by earlier allowed buys in the same cycle."""
+    eng = ExecutionPolicyEngine(PolicyConfig())
+    aapl = _make_trade(ticker="AAPL", quantity=60.0)
+    msft = _make_trade(ticker="MSFT", quantity=60.0)
+    obs = _make_obs(
+        prices={"AAPL": 100.0, "MSFT": 100.0},
+        trade_plan=[aapl, msft],
+        total_value=100_000.0,
+    )
+    obs.portfolio.positions = {"AAPL": 450.0}
+    obs.portfolio.position_sides = {"AAPL": "long"}
+    obs.portfolio.cash = 55_000.0
+    decision = _make_decision([aapl, msft])
+
+    result = eng.evaluate(decision, obs, "simulate")
+
+    assert result.approved is True
+    assert [trade.ticker for trade in result.allowed_trades] == ["AAPL"]
+    assert [trade.ticker for trade in result.blocked_trades] == ["MSFT"]
+    assert "Sector concentration limit" in result.blocked_trades[0].rejection_reason
+
+
 def test_stale_data_blocks_all_trades_when_enabled():
     """stale_data_blocks=True + data_freshness='stale' → all trades soft-blocked."""
     cfg = PolicyConfig(stale_data_blocks=True)
