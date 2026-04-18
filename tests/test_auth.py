@@ -20,6 +20,19 @@ def test_auth_opt_in_no_keys():
     finally:
         monkeypatch.undo()
 
+def test_auth_db_lookup_error_fails_closed(monkeypatch):
+    monkeypatch.setattr(config, "API_KEY_ADMIN", "")
+    monkeypatch.setattr(config, "API_KEY_TRADER", "")
+    monkeypatch.setattr(config, "API_KEY_VIEWER", "")
+
+    def raise_db_error():
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("db.repository.get_user_by_api_key", raise_db_error)
+
+    response = client.get("/api/config", headers={"X-API-KEY": "db-key"})
+    assert response.status_code == 503
+
 @pytest.mark.skipif(os.getenv("GITHUB_ACTIONS") == "true", reason="Skiping auth enforcement tests in CI if env is not clean")
 def test_auth_enforcement(monkeypatch):
     monkeypatch.setattr(config, "API_KEY_ADMIN", "admin-key")

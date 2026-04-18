@@ -17,32 +17,15 @@ class User(BaseModel):
     is_service_account: bool = False
 
 async def get_current_user(x_api_key: str | None = Header(None)) -> User:
-    # 1. Check for "Opt-in / Super Admin" mode: if no keys are configured
-    # we allow all requests as ADMIN for ease of initial setup.
-    no_keys_configured = not (config.API_KEY_ADMIN or config.API_KEY_TRADER or config.API_KEY_VIEWER)
-    
-    if no_keys_configured:
-        # Check if DB has any users. If no users in DB either, it's Super Admin mode.
-        from db.repository import get_connection
-        try:
-            with get_connection() as conn:
-                # Ensure table exists
-                conn.execute("CREATE TABLE IF NOT EXISTS users (username TEXT, api_key TEXT, role TEXT, is_active INTEGER, is_service_account INTEGER)")
-                user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            if user_count == 0:
-                # print("DEBUG: Auth in Super Admin mode (no keys in config, no users in DB)")
-                return User(username="super_admin", role=Role.ADMIN)
-        except Exception as e:
-            # print(f"DEBUG: Auth error checking users, defaulting to Super Admin: {e}")
-            return User(username="super_admin", role=Role.ADMIN)
-
     if not x_api_key:
-        # print("DEBUG: Auth failed - X-API-KEY header missing and not in Super Admin mode")
         raise HTTPException(status_code=401, detail="X-API-KEY header missing")
     
     # 2. Check Database for persistent users
     from db.repository import get_user_by_api_key
-    db_user = get_user_by_api_key(x_api_key)
+    try:
+        db_user = get_user_by_api_key(x_api_key)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Authentication service unavailable") from exc
     if db_user:
         return User(
             username=db_user["username"],

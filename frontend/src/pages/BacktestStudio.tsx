@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { PlayCircle, Loader2, FlaskConical } from "lucide-react";
-import { apiClient } from "@/api/client";
+import { PlayCircle, Loader2, FlaskConical, AlertCircle } from "lucide-react";
 import { useStore } from "@/store/useStore";
-import { useMutation } from "@tanstack/react-query";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import { useRunBacktest } from "@/api/queries";
 
 export function BacktestStudio() {
   const profile = useStore((state) => state.profile);
@@ -13,40 +12,19 @@ export function BacktestStudio() {
   const [days, setDays] = useState(90);
   const [results, setResults] = useState<any>(null);
 
-  const runBacktest = useMutation({
-    mutationFn: async () => {
-      // We will proxy to the CLI or the endpoint if it exists. 
-      // Assuming a dedicated runner/backtest endpoint is added or mock it.
-      try {
-        const { data } = await apiClient.post(`/runner/backtest?profile=${profile}`, {
-          strategy_name: strategy,
-          days,
-        });
-        return data;
-      } catch (err) {
-        // Mock fallback if endpoint doesn't exist yet
-        await new Promise(r => setTimeout(r, 2000));
-        return {
-          strategy_name: strategy,
-          metrics: {
-            annualized_return: 0.18,
-            sharpe: 1.4,
-            max_drawdown: -0.06,
-            alpha: 0.04,
-            beta: 0.95
-          },
-          history: Array.from({length: 90}).map((_, i) => ({
-            date: new Date(Date.now() - (90-i)*86400000).toISOString().split('T')[0],
-            total_value: 100000 * (1 + (i*0.002)) * (1 + (Math.random()*0.02 - 0.01))
-          })),
-          data_hash: "a8b9f7c32e1...",
-          n_trades: 12,
-          n_risk_violations: 0
-        };
+  const runBacktest = useRunBacktest();
+
+  const handleRunBacktest = () => {
+    setResults(null);
+    runBacktest.mutate(
+      { strategy, days, profile },
+      {
+        onSuccess: (data) => setResults(data),
       }
-    },
-    onSuccess: (data) => setResults(data)
-  });
+    );
+  };
+
+  const errorMessage = runBacktest.error instanceof Error ? runBacktest.error.message : null;
 
   return (
     <div className="space-y-6">
@@ -89,29 +67,43 @@ export function BacktestStudio() {
 
             <Button 
               className="w-full mt-4" 
-              onClick={() => runBacktest.mutate()}
+              onClick={handleRunBacktest}
               disabled={runBacktest.isPending}
             >
               {runBacktest.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
               Run Simulation
             </Button>
+            {errorMessage && (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>Backtest failed: {errorMessage}</span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
         {results ? (
           <div className="space-y-6">
-            <div className="grid gap-4 grid-cols-3">
+            <div className="grid gap-4 grid-cols-5">
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Ann. Return</CardTitle></CardHeader>
-                <CardContent><span className="text-2xl font-bold text-emerald-500">{(results.metrics.annualized_return * 100).toFixed(2)}%</span></CardContent>
+                <CardHeader className="pb-2 px-4"><CardTitle className="text-[10px] uppercase text-muted-foreground">Ann. Return</CardTitle></CardHeader>
+                <CardContent className="px-4 pb-4"><span className="text-lg font-bold text-emerald-500">{(results.metrics.annualized_return * 100).toFixed(2)}%</span></CardContent>
               </Card>
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Sharpe Ratio</CardTitle></CardHeader>
-                <CardContent><span className="text-2xl font-bold">{results.metrics.sharpe.toFixed(2)}</span></CardContent>
+                <CardHeader className="pb-2 px-4"><CardTitle className="text-[10px] uppercase text-muted-foreground">Sharpe</CardTitle></CardHeader>
+                <CardContent className="px-4 pb-4"><span className="text-lg font-bold">{results.metrics.sharpe.toFixed(2)}</span></CardContent>
               </Card>
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Max Drawdown</CardTitle></CardHeader>
-                <CardContent><span className="text-2xl font-bold text-destructive">{(results.metrics.max_drawdown * 100).toFixed(2)}%</span></CardContent>
+                <CardHeader className="pb-2 px-4"><CardTitle className="text-[10px] uppercase text-muted-foreground">Max DD</CardTitle></CardHeader>
+                <CardContent className="px-4 pb-4"><span className="text-lg font-bold text-destructive">{(results.metrics.max_drawdown * 100).toFixed(2)}%</span></CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2 px-4"><CardTitle className="text-[10px] uppercase text-muted-foreground">Alpha (Ann.)</CardTitle></CardHeader>
+                <CardContent className="px-4 pb-4"><span className="text-lg font-bold text-emerald-400">{(results.metrics.alpha * 100).toFixed(2)}%</span></CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2 px-4"><CardTitle className="text-[10px] uppercase text-muted-foreground">Beta</CardTitle></CardHeader>
+                <CardContent className="px-4 pb-4"><span className="text-lg font-bold text-amber-400">{results.metrics.beta.toFixed(2)}</span></CardContent>
               </Card>
             </div>
 

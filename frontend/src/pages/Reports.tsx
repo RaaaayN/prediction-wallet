@@ -1,25 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { FileText } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { apiClient } from "@/api/client";
+import { FileText, AlertCircle } from "lucide-react";
 import { useStore } from "@/store/useStore";
+import { useGovernanceReport } from "@/api/queries";
 
 export function Reports() {
   const profile = useStore((state) => state.profile);
-  
-  const { data, isLoading } = useQuery({
-    queryKey: ["governance", profile],
-    queryFn: async () => {
-      try {
-        const res = await apiClient.get(`/audit/governance?profile=${profile}`);
-        return res.data;
-      } catch {
-        return null;
-      }
-    },
-    retry: false
-  });
+  const { data, isLoading, error } = useGovernanceReport(profile);
+  const errorMessage = error instanceof Error ? error.message : null;
 
   return (
     <div className="space-y-6">
@@ -39,6 +27,11 @@ export function Reports() {
         <CardContent>
           {isLoading ? (
             <div className="animate-pulse text-muted-foreground">Loading governance data...</div>
+          ) : errorMessage ? (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>Governance report unavailable: {errorMessage}</span>
+            </div>
           ) : data ? (
             <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
