@@ -6,6 +6,7 @@
 - [Security and Authentication](SECURITY.md) — API Keys, RBAC, and observability
 - [Governance Model](GOVERNANCE.md) — 3-layer policy engine: how and why trades are validated or blocked
 - [Risk Model](RISK_MODEL.md) — VaR, CVaR, stress testing, kill switch, slippage model
+- [Trading Core v1](TRADING_CORE.md) — Formal OMS, Ledger, and Instrument models
 
 ## Team Reports
 

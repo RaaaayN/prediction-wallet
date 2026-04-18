@@ -89,7 +89,9 @@ CREATE TABLE IF NOT EXISTS decision_traces (
     provider        TEXT,
     agent_backend   TEXT,
     execution_mode  TEXT,
-    created_at      TEXT NOT NULL
+    created_at      TEXT NOT NULL,
+    event_type      TEXT,
+    tags            TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_cycle_id ON portfolio_snapshots(cycle_id);
@@ -144,8 +146,101 @@ CREATE TABLE IF NOT EXISTS idea_book (
 );
 CREATE INDEX IF NOT EXISTS idx_idea_book_status ON idea_book(status);
 CREATE INDEX IF NOT EXISTS idx_idea_book_ticker ON idea_book(ticker);
-"""
 
+-- Trading Core v1
+CREATE TABLE IF NOT EXISTS instruments (
+    instrument_id TEXT PRIMARY KEY,
+    symbol        TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    asset_class   TEXT NOT NULL,
+    quote_currency TEXT DEFAULT 'USD',
+    exchange      TEXT,
+    sector        TEXT,
+    is_active     INTEGER DEFAULT 1,
+    metadata_json TEXT DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS market_prices (
+    instrument_id TEXT NOT NULL REFERENCES instruments(instrument_id),
+    symbol        TEXT NOT NULL,
+    as_of         TEXT NOT NULL,
+    price         REAL NOT NULL,
+    source        TEXT NOT NULL,
+    freshness     TEXT NOT NULL,
+    is_stale      INTEGER DEFAULT 0,
+    status        TEXT DEFAULT 'ok',
+    PRIMARY KEY (instrument_id, as_of)
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    order_id           TEXT PRIMARY KEY,
+    cycle_id           TEXT NOT NULL,
+    instrument_id      TEXT NOT NULL REFERENCES instruments(instrument_id),
+    symbol             TEXT NOT NULL,
+    side               TEXT NOT NULL,
+    order_type         TEXT DEFAULT 'market',
+    requested_quantity REAL NOT NULL,
+    status             TEXT NOT NULL,
+    broker_adapter     TEXT DEFAULT 'simulation',
+    reason             TEXT,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS order_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id     TEXT NOT NULL REFERENCES orders(order_id),
+    from_status  TEXT,
+    to_status    TEXT NOT NULL,
+    event_type   TEXT NOT NULL,
+    payload_json TEXT DEFAULT '{}',
+    created_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS trade_executions_v2 (
+    execution_id    TEXT PRIMARY KEY,
+    order_id        TEXT NOT NULL REFERENCES orders(order_id),
+    instrument_id   TEXT NOT NULL REFERENCES instruments(instrument_id),
+    symbol          TEXT NOT NULL,
+    side            TEXT NOT NULL,
+    quantity        REAL NOT NULL,
+    market_price    REAL NOT NULL,
+    fill_price      REAL NOT NULL,
+    notional        REAL NOT NULL,
+    fees            REAL DEFAULT 0.0,
+    slippage        REAL DEFAULT 0.0,
+    executed_at     TEXT NOT NULL,
+    venue           TEXT DEFAULT 'simulation',
+    simulation_mode INTEGER DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS position_ledger (
+    instrument_id TEXT PRIMARY KEY REFERENCES instruments(instrument_id),
+    symbol        TEXT NOT NULL,
+    quantity      REAL NOT NULL,
+    avg_cost      REAL NOT NULL,
+    last_price    REAL NOT NULL,
+    market_value  REAL NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cash_movements (
+    cash_movement_id TEXT PRIMARY KEY,
+    cycle_id         TEXT,
+    order_id         TEXT REFERENCES orders(order_id),
+    execution_id     TEXT REFERENCES trade_executions_v2(execution_id),
+    movement_type    TEXT NOT NULL,
+    amount           REAL NOT NULL,
+    currency         TEXT DEFAULT 'USD',
+    created_at       TEXT NOT NULL,
+    description      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_cycle_id ON orders(cycle_id);
+CREATE INDEX IF NOT EXISTS idx_order_events_order_id ON order_events(order_id);
+CREATE INDEX IF NOT EXISTS idx_trade_executions_v2_order_id ON trade_executions_v2(order_id);
+CREATE INDEX IF NOT EXISTS idx_cash_movements_cycle_id ON cash_movements(cycle_id);
+"""
 
 POSTGRES_STATEMENTS: list[str] = [
     """
@@ -301,6 +396,105 @@ POSTGRES_STATEMENTS: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_idea_book_status ON idea_book(status)",
     "CREATE INDEX IF NOT EXISTS idx_idea_book_ticker ON idea_book(ticker)",
+    """
+    CREATE TABLE IF NOT EXISTS instruments (
+        instrument_id TEXT PRIMARY KEY,
+        symbol        TEXT NOT NULL,
+        name          TEXT NOT NULL,
+        asset_class   TEXT NOT NULL,
+        quote_currency TEXT DEFAULT 'USD',
+        exchange      TEXT,
+        sector        TEXT,
+        is_active     INTEGER DEFAULT 1,
+        metadata_json TEXT DEFAULT '{}'
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS market_prices (
+        instrument_id TEXT NOT NULL REFERENCES instruments(instrument_id),
+        symbol        TEXT NOT NULL,
+        as_of         TEXT NOT NULL,
+        price         DOUBLE PRECISION NOT NULL,
+        source        TEXT NOT NULL,
+        freshness     TEXT NOT NULL,
+        is_stale      INTEGER DEFAULT 0,
+        status        TEXT DEFAULT 'ok',
+        PRIMARY KEY (instrument_id, as_of)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS orders (
+        order_id           TEXT PRIMARY KEY,
+        cycle_id           TEXT NOT NULL,
+        instrument_id      TEXT NOT NULL REFERENCES instruments(instrument_id),
+        symbol             TEXT NOT NULL,
+        side               TEXT NOT NULL,
+        order_type         TEXT DEFAULT 'market',
+        requested_quantity DOUBLE PRECISION NOT NULL,
+        status             TEXT NOT NULL,
+        broker_adapter     TEXT DEFAULT 'simulation',
+        reason             TEXT,
+        created_at         TEXT NOT NULL,
+        updated_at         TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS order_events (
+        id           SERIAL PRIMARY KEY,
+        order_id     TEXT NOT NULL REFERENCES orders(order_id),
+        from_status  TEXT,
+        to_status    TEXT NOT NULL,
+        event_type   TEXT NOT NULL,
+        payload_json TEXT DEFAULT '{}',
+        created_at   TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS trade_executions_v2 (
+        execution_id    TEXT PRIMARY KEY,
+        order_id        TEXT NOT NULL REFERENCES orders(order_id),
+        instrument_id   TEXT NOT NULL REFERENCES instruments(instrument_id),
+        symbol          TEXT NOT NULL,
+        side            TEXT NOT NULL,
+        quantity        DOUBLE PRECISION NOT NULL,
+        market_price    DOUBLE PRECISION NOT NULL,
+        fill_price      DOUBLE PRECISION NOT NULL,
+        notional        DOUBLE PRECISION NOT NULL,
+        fees            DOUBLE PRECISION DEFAULT 0.0,
+        slippage        DOUBLE PRECISION DEFAULT 0.0,
+        executed_at     TEXT NOT NULL,
+        venue           TEXT DEFAULT 'simulation',
+        simulation_mode INTEGER DEFAULT 1
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS position_ledger (
+        instrument_id TEXT PRIMARY KEY REFERENCES instruments(instrument_id),
+        symbol        TEXT NOT NULL,
+        quantity      DOUBLE PRECISION NOT NULL,
+        avg_cost      DOUBLE PRECISION NOT NULL,
+        last_price    DOUBLE PRECISION NOT NULL,
+        market_value  DOUBLE PRECISION NOT NULL,
+        updated_at    TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS cash_movements (
+        cash_movement_id TEXT PRIMARY KEY,
+        cycle_id         TEXT,
+        order_id         TEXT REFERENCES orders(order_id),
+        execution_id     TEXT REFERENCES trade_executions_v2(execution_id),
+        movement_type    TEXT NOT NULL,
+        amount           DOUBLE PRECISION NOT NULL,
+        currency         TEXT DEFAULT 'USD',
+        created_at       TEXT NOT NULL,
+        description      TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_orders_cycle_id ON orders(cycle_id)",
+    "CREATE INDEX IF NOT EXISTS idx_order_events_order_id ON order_events(order_id)",
+    "CREATE INDEX IF NOT EXISTS idx_trade_executions_v2_order_id ON trade_executions_v2(order_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cash_movements_cycle_id ON cash_movements(cycle_id)",
 ]
 
 

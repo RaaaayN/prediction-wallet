@@ -34,6 +34,8 @@ API_KEY_TRADER: str = settings.api_key_trader
 API_KEY_VIEWER: str = settings.api_key_viewer
 ALLOWED_ORIGINS: list[str] = [o.strip() for o in settings.allowed_origins.split(",")]
 
+TRADING_CORE_ENABLED: bool = settings.trading_core_enabled
+
 AGENT_BACKEND: str = settings.agent_backend
 EXECUTION_MODE: str = settings.execution_mode
 MCP_PROFILE: str = settings.mcp_profile

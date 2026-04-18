@@ -1,28 +1,16 @@
 {
-  "positions": {},
-  "position_sides": {},
-  "average_costs": {},
-  "position_ideas": {},
-  "cash": 100000.0,
-  "peak_value": 100000.0,
-  "last_rebalanced": null,
-  "history": [
-    {
-      "date": "2026-04-18T14:29:14.219304+00:00",
-      "total_value": 100000.0
-    },
-    {
-      "date": "2026-04-18T14:29:40.306819+00:00",
-      "total_value": 100000.0
-    },
-    {
-      "date": "2026-04-18T14:31:39.185949+00:00",
-      "total_value": 100000.0
-    },
-    {
-      "date": "2026-04-18T14:32:57.893275+00:00",
-      "total_value": 100000.0
-    }
-  ],
-  "created_at": "2026-04-17T21:16:51.698474+00:00"
+  "positions": {
+    "AAPL": 11.0
+  },
+  "cash": 9729.499759002685,
+  "average_costs": {
+    "AAPL": 160.95456736339221
+  },
+  "position_sides": {
+    "AAPL": "long"
+  },
+  "position_ideas": {
+    "AAPL": null
+  },
+  "last_rebalanced": "2026-04-18T14:57:26.865366+00:00"
 }

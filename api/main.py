@@ -20,7 +20,9 @@ from api.runner import build_cycle_args, stream_command
 from api.auth import Role, User, get_current_user, requires_role
 from api.models import (
     ConfigResponse, PortfolioResponse, PositionRow, 
-    MarketStatusResponse, OnboardingStatusResponse
+    MarketStatusResponse, OnboardingStatusResponse,
+    InstrumentRow, TradingCoreOrderRow, TradingCoreExecutionRow,
+    TradingCorePositionRow, CashMovementRow
 )
 from config import ALLOWED_ORIGINS
 from utils.telemetry import trace_request
@@ -248,8 +250,58 @@ async def get_market_status(_: User = Depends(get_current_user)):
     rows = get_market_data_status()
     return {
         "tickers": [row["ticker"] for row in rows],
-        "last_refresh": {row["ticker"]: row.get("refreshed_at") for row in rows},
+        "last_refresh": {row["ticker"]: row["refreshed_at"] for row in rows},
     }
+
+# ── trading-core ──────────────────────────────────────────────────────────────
+
+@app.get("/api/trading-core/instruments", response_model=list[InstrumentRow])
+async def get_tc_instruments(_: User = Depends(requires_role([Role.VIEWER, Role.TRADER, Role.ADMIN]))):
+    """List all known instruments in the Trading Core."""
+    from db.repository import get_trading_core_instruments
+    return get_trading_core_instruments()
+
+
+@app.get("/api/trading-core/positions", response_model=list[TradingCorePositionRow])
+async def get_tc_positions(_: User = Depends(requires_role([Role.VIEWER, Role.TRADER, Role.ADMIN]))):
+    """Get active aggregate positions from the Trading Core ledger."""
+    from db.repository import get_trading_core_positions
+    return get_trading_core_positions()
+
+
+@app.get("/api/trading-core/orders", response_model=list[TradingCoreOrderRow])
+async def get_tc_orders(
+    cycle_id: str | None = Query(None),
+    limit: int = 100,
+    _: User = Depends(requires_role([Role.VIEWER, Role.TRADER, Role.ADMIN])),
+):
+    """Get recent orders, optionally filtered by cycle_id."""
+    from db.repository import get_trading_core_orders
+    return get_trading_core_orders(cycle_id=cycle_id, limit=limit)
+
+
+@app.get("/api/trading-core/executions", response_model=list[TradingCoreExecutionRow])
+async def get_tc_executions(
+    cycle_id: str | None = Query(None),
+    order_id: str | None = Query(None),
+    limit: int = 100,
+    _: User = Depends(requires_role([Role.VIEWER, Role.TRADER, Role.ADMIN])),
+):
+    """Get recent executions, optionally filtered by cycle_id or order_id."""
+    from db.repository import get_trading_core_executions
+    return get_trading_core_executions(cycle_id=cycle_id, order_id=order_id, limit=limit)
+
+
+@app.get("/api/trading-core/cash-movements", response_model=list[CashMovementRow])
+async def get_tc_cash_movements(
+    cycle_id: str | None = Query(None),
+    limit: int = 100,
+    _: User = Depends(requires_role([Role.VIEWER, Role.TRADER, Role.ADMIN])),
+):
+    """Get cash movement history from the Trading Core ledger."""
+    from db.repository import get_trading_core_cash_movements
+    return get_trading_core_cash_movements(cycle_id=cycle_id, limit=limit)
+
 
 
 @app.get("/api/backtest")

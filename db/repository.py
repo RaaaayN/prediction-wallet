@@ -579,3 +579,374 @@ def update_idea_book_entry(
         )
         conn.commit()
     return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Trading Core v1 Repository Functions
+# ---------------------------------------------------------------------------
+
+def upsert_instruments(
+    instruments: list[dict],
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    ex = excluded_qualifier()
+    sql = f"""
+        INSERT INTO instruments (instrument_id, symbol, name, asset_class, quote_currency, exchange, sector, is_active, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (instrument_id) DO UPDATE SET
+            symbol = {ex}.symbol,
+            name = {ex}.name,
+            asset_class = {ex}.asset_class,
+            quote_currency = {ex}.quote_currency,
+            exchange = {ex}.exchange,
+            sector = {ex}.sector,
+            is_active = {ex}.is_active,
+            metadata_json = {ex}.metadata_json
+    """
+    with get_connection(resolved) as conn:
+        for inst in instruments:
+            conn.execute(
+                q(sql),
+                (
+                    inst.get("instrument_id"),
+                    inst.get("symbol"),
+                    inst.get("name"),
+                    inst.get("asset_class"),
+                    inst.get("quote_currency", "USD"),
+                    inst.get("exchange"),
+                    inst.get("sector"),
+                    int(inst.get("is_active", True)),
+                    json.dumps(inst.get("metadata_json", {})),
+                ),
+            )
+        conn.commit()
+
+
+def save_market_price(
+    price: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    ex = excluded_qualifier()
+    sql = f"""
+        INSERT INTO market_prices (instrument_id, symbol, as_of, price, source, freshness, is_stale, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (instrument_id, as_of) DO UPDATE SET
+            price = {ex}.price,
+            source = {ex}.source,
+            freshness = {ex}.freshness,
+            is_stale = {ex}.is_stale,
+            status = {ex}.status
+    """
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q(sql),
+            (
+                price.get("instrument_id"),
+                price.get("symbol"),
+                price.get("as_of"),
+                price.get("price"),
+                price.get("source"),
+                price.get("freshness"),
+                int(price.get("is_stale", False)),
+                price.get("status", "ok"),
+            ),
+        )
+        conn.commit()
+
+
+def save_order(
+    order: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    ex = excluded_qualifier()
+    sql = f"""
+        INSERT INTO orders (order_id, cycle_id, instrument_id, symbol, side, order_type, requested_quantity, status, broker_adapter, reason, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (order_id) DO UPDATE SET
+            status = {ex}.status,
+            updated_at = {ex}.updated_at,
+            reason = {ex}.reason
+    """
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q(sql),
+            (
+                order.get("order_id"),
+                order.get("cycle_id"),
+                order.get("instrument_id"),
+                order.get("symbol"),
+                order.get("side"),
+                order.get("order_type", "market"),
+                order.get("requested_quantity"),
+                order.get("status"),
+                order.get("broker_adapter", "simulation"),
+                order.get("reason"),
+                order.get("created_at"),
+                order.get("updated_at"),
+            ),
+        )
+        conn.commit()
+
+
+def save_order_event(
+    order_id: str,
+    to_status: str,
+    event_type: str,
+    payload: dict | None = None,
+    from_status: str | None = None,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    sql = """
+        INSERT INTO order_events (order_id, from_status, to_status, event_type, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q(sql),
+            (
+                order_id,
+                from_status,
+                to_status,
+                event_type,
+                json.dumps(payload or {}),
+                utc_now_iso(),
+            ),
+        )
+        conn.commit()
+
+
+def save_trade_execution_v2(
+    execution: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    sql = """
+        INSERT INTO trade_executions_v2 (execution_id, order_id, instrument_id, symbol, side, quantity, market_price, fill_price, notional, fees, slippage, executed_at, venue, simulation_mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (execution_id) DO NOTHING
+    """
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q(sql),
+            (
+                execution.get("execution_id"),
+                execution.get("order_id"),
+                execution.get("instrument_id"),
+                execution.get("symbol"),
+                execution.get("side"),
+                execution.get("quantity"),
+                execution.get("market_price"),
+                execution.get("fill_price"),
+                execution.get("notional"),
+                execution.get("fees", 0.0),
+                execution.get("slippage", 0.0),
+                execution.get("executed_at"),
+                execution.get("venue", "simulation"),
+                int(execution.get("simulation_mode", True)),
+            ),
+        )
+        conn.commit()
+
+
+def save_position_ledger(
+    positions: list[dict],
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    ex = excluded_qualifier()
+    sql = f"""
+        INSERT INTO position_ledger (instrument_id, symbol, quantity, avg_cost, last_price, market_value, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (instrument_id) DO UPDATE SET
+            quantity = {ex}.quantity,
+            avg_cost = {ex}.avg_cost,
+            last_price = {ex}.last_price,
+            market_value = {ex}.market_value,
+            updated_at = {ex}.updated_at
+    """
+    with get_connection(resolved) as conn:
+        # First, clear instruments no longer in the list (if this is a full sync)
+        # For incremental updates, we'd only insert/update. 
+        # Plan says "Position canonique est agrégée par instrument".
+        for pos in positions:
+            conn.execute(
+                q(sql),
+                (
+                    pos.get("instrument_id"),
+                    pos.get("symbol"),
+                    pos.get("quantity"),
+                    pos.get("avg_cost"),
+                    pos.get("last_price"),
+                    pos.get("market_value"),
+                    pos.get("updated_at"),
+                ),
+            )
+        # Delete positions that are zero or were not in the update (optional, based on usage)
+        conn.execute(q("DELETE FROM position_ledger WHERE quantity = 0"))
+        conn.commit()
+
+
+def save_cash_movement(
+    movement: dict,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> None:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    sql = """
+        INSERT INTO cash_movements (cash_movement_id, cycle_id, order_id, execution_id, movement_type, amount, currency, created_at, description)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    with get_connection(resolved) as conn:
+        conn.execute(
+            q(sql),
+            (
+                movement.get("cash_movement_id"),
+                movement.get("cycle_id"),
+                movement.get("order_id"),
+                movement.get("execution_id"),
+                movement.get("movement_type"),
+                movement.get("amount"),
+                movement.get("currency", "USD"),
+                movement.get("created_at"),
+                movement.get("description"),
+            ),
+        )
+        conn.commit()
+
+
+def get_trading_core_instruments(
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    try:
+        with get_connection(resolved) as conn:
+            rows = conn.execute(q("SELECT * FROM instruments ORDER BY symbol ASC")).fetchall()
+        payload = [dict(r) for r in rows]
+        for row in payload:
+            if row.get("metadata_json"):
+                row["metadata_json"] = json.loads(row["metadata_json"])
+        return payload
+    except Exception:
+        return []
+
+
+def get_trading_core_positions(
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    try:
+        with get_connection(resolved) as conn:
+            rows = conn.execute(q("SELECT * FROM position_ledger ORDER BY symbol ASC")).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def get_trading_core_orders(
+    cycle_id: str | None = None,
+    limit: int = 100,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    try:
+        with get_connection(resolved) as conn:
+            if cycle_id:
+                rows = conn.execute(
+                    q("SELECT * FROM orders WHERE cycle_id = ? ORDER BY created_at DESC LIMIT ?"),
+                    (cycle_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(q("SELECT * FROM orders ORDER BY created_at DESC LIMIT ?"), (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def get_trading_core_executions(
+    order_id: str | None = None,
+    cycle_id: str | None = None,
+    limit: int = 100,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    try:
+        with get_connection(resolved) as conn:
+            if order_id:
+                rows = conn.execute(
+                    q("SELECT * FROM trade_executions_v2 WHERE order_id = ? ORDER BY executed_at DESC LIMIT ?"),
+                    (order_id, limit),
+                ).fetchall()
+            elif cycle_id:
+                rows = conn.execute(
+                    q("""
+                        SELECT e.* FROM trade_executions_v2 e
+                        JOIN orders o ON e.order_id = o.order_id
+                        WHERE o.cycle_id = ?
+                        ORDER BY e.executed_at DESC LIMIT ?
+                    """),
+                    (cycle_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(q("SELECT * FROM trade_executions_v2 ORDER BY executed_at DESC LIMIT ?"), (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def get_trading_core_cash_movements(
+    cycle_id: str | None = None,
+    limit: int = 100,
+    db_path: str | None = None,
+    *,
+    runtime_context=None,
+    profile_name: str | None = None,
+) -> list[dict]:
+    resolved = _resolve_db_path(db_path, runtime_context=runtime_context, profile_name=profile_name)
+    try:
+        with get_connection(resolved) as conn:
+            if cycle_id:
+                rows = conn.execute(
+                    q("SELECT * FROM cash_movements WHERE cycle_id = ? ORDER BY created_at DESC LIMIT ?"),
+                    (cycle_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(q("SELECT * FROM cash_movements ORDER BY created_at DESC LIMIT ?"), (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []

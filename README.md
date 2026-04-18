@@ -176,6 +176,7 @@ Via `.env` or environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AI_PROVIDER` | `gemini` | `gemini` or `anthropic` |
+| `TRADING_CORE_ENABLED` | `false` | Enable formal OMS and Ledger |
 | `PORTFOLIO_PROFILE` | `balanced` | Active portfolio profile |
 | `EXECUTION_MODE` | `simulate` | `simulate` or `paper` |
 | `DATABASE_URL` | _(empty)_ | Set to use PostgreSQL (see `docker-compose.yml` example in `.env.example`) |

@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     api_key_viewer: str = Field(default="", env="API_KEY_VIEWER")
     allowed_origins: str = Field(default="*", description="Comma-separated list of allowed CORS origins")
 
+    trading_core_enabled: bool = Field(default=False, env="TRADING_CORE_ENABLED")
+
     agent_backend: str = Field(default="pydantic-ai")
     execution_mode: str = Field(default="simulate")
     mcp_profile: str = Field(default="none")
