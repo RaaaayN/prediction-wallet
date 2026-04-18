@@ -313,6 +313,264 @@ async def get_config():
         return {"error": str(exc)}
 
 
+# ── onboarding ────────────────────────────────────────────────────────────────
+
+@app.get("/api/onboarding/status")
+async def onboarding_status():
+    import os
+    from config import PORTFOLIO_FILE
+    try:
+        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        positions = data.get("positions", {})
+        return {
+            "needs_onboarding": len(positions) == 0,
+            "profile": os.getenv("PORTFOLIO_PROFILE", "balanced"),
+            "positions_count": len(positions),
+        }
+    except FileNotFoundError:
+        return {"needs_onboarding": True, "profile": os.getenv("PORTFOLIO_PROFILE", "balanced"), "positions_count": 0}
+
+
+@app.get("/api/onboarding/profiles")
+async def onboarding_profiles():
+    from portfolio_loader import load_profile
+
+    PROFILE_METADATA = {
+        "balanced": {
+            "label": "Balanced Fund",
+            "risk_level": "Medium",
+            "strategy_type": "Multi-Asset Balanced",
+            "typical_aum": "$100K+",
+            "description": "Diversified multi-asset portfolio blending equities, bonds, and crypto for risk-adjusted returns.",
+        },
+        "conservative": {
+            "label": "Conservative Income",
+            "risk_level": "Low",
+            "strategy_type": "Bond-Tilted Conservative",
+            "typical_aum": "$250K+",
+            "description": "Capital preservation focus with heavy allocation to investment-grade bonds and blue-chip equities.",
+        },
+        "growth": {
+            "label": "Growth Equity",
+            "risk_level": "High",
+            "strategy_type": "Equity Growth",
+            "typical_aum": "$100K+",
+            "description": "High-conviction equity strategy targeting long-term capital appreciation via secular growth themes.",
+        },
+        "crypto_heavy": {
+            "label": "Digital Asset Blend",
+            "risk_level": "Very High",
+            "strategy_type": "Digital Asset Blend",
+            "typical_aum": "$50K+",
+            "description": "Aggressive exposure to digital assets alongside tech equities for maximum upside potential.",
+        },
+        "long_short_equity": {
+            "label": "Long/Short Equity",
+            "risk_level": "High",
+            "strategy_type": "Long/Short Equity Hedge Fund",
+            "typical_aum": "$1M+",
+            "description": "Institutional-grade L/S strategy with gross/net exposure controls, sleeves, and alpha generation via shorting.",
+        },
+    }
+
+    result = []
+    for name, meta in PROFILE_METADATA.items():
+        try:
+            profile = load_profile(name)
+            result.append({
+                "name": name,
+                "label": meta["label"],
+                "description": meta["description"],
+                "risk_level": meta["risk_level"],
+                "strategy_type": meta["strategy_type"],
+                "typical_aum": meta["typical_aum"],
+                "initial_capital": profile.get("initial_capital", 100000),
+                "tickers": list(profile.get("target_allocation", {}).keys()),
+            })
+        except Exception:
+            pass
+    return result
+
+
+# ── manual trade endpoints ─────────────────────────────────────────────────────
+
+class TradePreviewRequest(BaseModel):
+    action: str
+    ticker: str
+    quantity: float
+
+
+class TradeOpinionRequest(BaseModel):
+    action: str
+    ticker: str
+    quantity: float
+    current_price: float
+
+
+class TradeExecuteRequest(BaseModel):
+    action: str
+    ticker: str
+    quantity: float
+    reason: str | None = "Manual trade"
+
+
+@app.post("/api/trade/preview")
+async def trade_preview(req: TradePreviewRequest):
+    from fastapi import HTTPException
+    from services.execution_service import ExecutionService
+    from services.market_service import MarketService
+
+    svc = ExecutionService()
+    portfolio = svc.load_portfolio()
+    positions = portfolio.get("positions", {})
+    try:
+        price_map = MarketService().get_latest_prices(list(positions.keys()) + [req.ticker])
+    except Exception:
+        price_map = {}
+    current_price = price_map.get(req.ticker)
+    if not current_price or current_price <= 0:
+        raise HTTPException(status_code=422, detail=f"Could not fetch price for ticker '{req.ticker}'")
+
+    snapshot = svc.portfolio_snapshot(price_map)
+    portfolio_value = snapshot["total_value"]
+    cash = snapshot["cash"]
+    current_holding = float(positions.get(req.ticker, 0.0))
+    current_weight = snapshot["current_weights"].get(req.ticker, 0.0)
+
+    estimated_cost = req.quantity * current_price
+    if req.action == "buy":
+        new_holding = current_holding + req.quantity
+        cash_after = cash - estimated_cost
+    else:
+        new_holding = current_holding - req.quantity
+        cash_after = cash + estimated_cost
+
+    new_portfolio_value = portfolio_value + (cash_after - cash)
+    new_weight = (new_holding * current_price / new_portfolio_value) if new_portfolio_value > 0 else 0.0
+
+    return {
+        "current_price": current_price,
+        "estimated_cost": round(estimated_cost, 2),
+        "current_holding": current_holding,
+        "current_weight": round(current_weight, 4),
+        "new_weight": round(new_weight, 4),
+        "cash_after": round(cash_after, 2),
+        "portfolio_value": round(portfolio_value, 2),
+        "available_cash": round(cash, 2),
+    }
+
+
+@app.post("/api/trade/opinion")
+async def trade_opinion(req: TradeOpinionRequest):
+    import re
+    from services.execution_service import ExecutionService
+    from services.market_service import MarketService
+
+    svc = ExecutionService()
+    portfolio = svc.load_portfolio()
+    positions = portfolio.get("positions", {})
+    try:
+        price_map = MarketService().get_latest_prices(list(positions.keys()) + [req.ticker])
+    except Exception:
+        price_map = {}
+    snapshot = svc.portfolio_snapshot(price_map)
+
+    top_positions = sorted(positions.items(), key=lambda x: -abs(float(x[1])))[:5]
+    top_str = ", ".join(f"{t}={v:.0f}sh" for t, v in top_positions)
+
+    prompt = (
+        f"You are a portfolio risk analyst at a hedge fund. Evaluate this proposed manual trade:\n\n"
+        f"Action: {req.action.upper()} {req.quantity} shares of {req.ticker} at ${req.current_price:.2f}\n"
+        f"Estimated notional: ${req.quantity * req.current_price:,.0f}\n"
+        f"Portfolio value: ${snapshot['total_value']:,.0f}\n"
+        f"Available cash: ${snapshot['cash']:,.0f}\n"
+        f"Current {req.ticker} weight: {snapshot['current_weights'].get(req.ticker, 0.0):.1%}\n"
+        f"Top positions: {top_str or 'none'}\n\n"
+        f"Respond ONLY with valid JSON (no markdown, no explanation outside JSON):\n"
+        f'{{"recommendation": "APPROVE" or "CAUTION" or "REJECT", '
+        f'"rationale": "2-3 sentence analysis", '
+        f'"confidence": 0.0-1.0, '
+        f'"risk_flags": ["list", "of", "risks"], '
+        f'"market_context": "1 sentence market note"}}'
+    )
+
+    fallback = {
+        "recommendation": "CAUTION",
+        "rationale": "AI opinion unavailable. Proceed with caution.",
+        "confidence": 0.5,
+        "risk_flags": [],
+        "market_context": "",
+    }
+
+    try:
+        from config import AI_PROVIDER
+        if AI_PROVIDER == "anthropic":
+            import anthropic as _anthropic
+            from settings import Settings
+            s = Settings()
+            client = _anthropic.Anthropic(api_key=s.anthropic_api_key)
+            msg = client.messages.create(
+                model=s.claude_model,
+                max_tokens=512,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = msg.content[0].text
+        else:
+            import google.generativeai as genai
+            from settings import Settings
+            s = Settings()
+            genai.configure(api_key=s.gemini_api_key)
+            model = genai.GenerativeModel(s.gemini_model)
+            raw = model.generate_content(prompt).text
+
+        json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+        return fallback
+    except Exception as exc:
+        fallback["rationale"] = f"AI opinion unavailable: {exc}"
+        return fallback
+
+
+@app.post("/api/trade/execute")
+async def trade_execute(req: TradeExecuteRequest):
+    from dataclasses import asdict
+    from fastapi import HTTPException
+    from services.execution_service import ExecutionService
+    from services.market_service import MarketService
+    from db.repository import save_execution
+    from utils.time import utc_now_iso
+
+    svc = ExecutionService()
+    portfolio = svc.load_portfolio()
+    positions = portfolio.get("positions", {})
+    try:
+        price_map = MarketService().get_latest_prices(list(positions.keys()) + [req.ticker])
+    except Exception:
+        price_map = {}
+    current_price = price_map.get(req.ticker)
+    if not current_price or current_price <= 0:
+        raise HTTPException(status_code=422, detail=f"Could not fetch price for ticker '{req.ticker}'")
+
+    from datetime import date
+    cycle_id = f"manual-{date.today().isoformat()}"
+    order = {
+        "action": req.action,
+        "ticker": req.ticker,
+        "quantity": float(req.quantity),
+        "reason": req.reason or "Manual trade",
+        "side": "long",
+        "sleeve": "manual",
+    }
+    result = svc.execute_order(order, current_price, prices=price_map, cycle_id=cycle_id, allow_unallocated=True)
+    try:
+        save_execution(asdict(result), cycle_id)
+    except Exception:
+        pass
+    return asdict(result)
+
+
 @app.get("/api/idea-book")
 async def get_idea_book(
     status: str | None = Query(None),

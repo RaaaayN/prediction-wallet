@@ -96,8 +96,9 @@ class ExecutionService:
         market_price: float,
         prices: dict[str, float] | None = None,
         trades_this_cycle: int = 0,
+        bypass_allocation_check: bool = False,
     ) -> str | None:
-        if ticker not in self.runtime_context.target_allocation:
+        if not bypass_allocation_check and ticker not in self.runtime_context.target_allocation:
             return f"Ticker '{ticker}' is not in the active target allocation."
         if action not in {"buy", "sell"}:
             return f"Unsupported action '{action}'."
@@ -124,6 +125,7 @@ class ExecutionService:
         prices: dict[str, float] | None = None,
         cycle_id: str = "",
         trades_this_cycle: int = 0,
+        allow_unallocated: bool = False,
     ) -> TradeResult:
         action = order["action"]
         ticker = order["ticker"]
@@ -147,6 +149,7 @@ class ExecutionService:
             market_price,
             prices=portfolio_prices,
             trades_this_cycle=trades_this_cycle,
+            bypass_allocation_check=allow_unallocated,
         )
         timestamp = utc_now_iso()
         beta_map = {

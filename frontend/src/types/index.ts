@@ -118,3 +118,39 @@ export interface SnapshotRow {
 }
 
 export type JsonRecord = Record<string, unknown>;
+
+export interface OnboardingStatus {
+  needs_onboarding: boolean;
+  profile: string;
+  positions_count: number;
+}
+
+export interface OnboardingProfile {
+  name: string;
+  label: string;
+  description: string;
+  risk_level: 'Low' | 'Medium' | 'High' | 'Very High';
+  strategy_type: string;
+  typical_aum: string;
+  initial_capital: number;
+  tickers: string[];
+}
+
+export interface TradePreview {
+  current_price: number;
+  estimated_cost: number;
+  current_holding: number;
+  current_weight: number;
+  new_weight: number;
+  cash_after: number;
+  portfolio_value: number;
+  available_cash: number;
+}
+
+export interface TradeOpinion {
+  recommendation: 'APPROVE' | 'CAUTION' | 'REJECT';
+  rationale: string;
+  confidence: number;
+  risk_flags: string[];
+  market_context: string;
+}

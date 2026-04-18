@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
@@ -22,37 +22,62 @@ import MonteCarlo from './pages/MonteCarlo';
 import Backtest from './pages/Backtest';
 import Correlation from './pages/Correlation';
 import Runs from './pages/Runs';
+import Operations from './pages/Operations';
+import Onboarding from './pages/Onboarding';
+import { ApiService } from './api/service';
+import type { OnboardingStatus } from './types';
+
+const MainApp: React.FC = () => (
+  <Router>
+    <Layout>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/control" element={<Control />} />
+        <Route path="/portfolio" element={<Portfolio />} />
+        <Route path="/traces" element={<Traces />} />
+        <Route path="/workspace" element={<Workspace />} />
+        <Route path="/riskhub" element={<RiskHub />} />
+        <Route path="/analytics" element={<Analytics />} />
+        <Route path="/audit" element={<Audit />} />
+        <Route path="/book" element={<Book />} />
+        <Route path="/ideas" element={<Ideas />} />
+        <Route path="/blotter" element={<Blotter />} />
+        <Route path="/risk" element={<RiskDetail />} />
+        <Route path="/regime" element={<Regime />} />
+        <Route path="/stress" element={<Stress />} />
+        <Route path="/perf" element={<Perf />} />
+        <Route path="/history" element={<History />} />
+        <Route path="/montecarlo" element={<MonteCarlo />} />
+        <Route path="/backtest" element={<Backtest />} />
+        <Route path="/correlation" element={<Correlation />} />
+        <Route path="/runs" element={<Runs />} />
+        <Route path="/operations" element={<Operations />} />
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </Layout>
+  </Router>
+);
 
 const App: React.FC = () => {
-  return (
-    <Router>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/control" element={<Control />} />
-          <Route path="/portfolio" element={<Portfolio />} />
-          <Route path="/traces" element={<Traces />} />
-          <Route path="/workspace" element={<Workspace />} />
-          <Route path="/riskhub" element={<RiskHub />} />
-          <Route path="/analytics" element={<Analytics />} />
-          <Route path="/audit" element={<Audit />} />
-          <Route path="/book" element={<Book />} />
-          <Route path="/ideas" element={<Ideas />} />
-          <Route path="/blotter" element={<Blotter />} />
-          <Route path="/risk" element={<RiskDetail />} />
-          <Route path="/regime" element={<Regime />} />
-          <Route path="/stress" element={<Stress />} />
-          <Route path="/perf" element={<Perf />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/montecarlo" element={<MonteCarlo />} />
-          <Route path="/backtest" element={<Backtest />} />
-          <Route path="/correlation" element={<Correlation />} />
-          <Route path="/runs" element={<Runs />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </Layout>
-    </Router>
-  );
+  const [status, setStatus] = useState<OnboardingStatus | null>(null);
+
+  useEffect(() => {
+    ApiService.get<OnboardingStatus>('/api/onboarding/status')
+      .then(setStatus)
+      .catch(() => setStatus({ needs_onboarding: false, profile: 'balanced', positions_count: 0 }));
+  }, []);
+
+  if (!status) return null;
+
+  if (status.needs_onboarding) {
+    return (
+      <Onboarding
+        onComplete={() => setStatus({ ...status, needs_onboarding: false })}
+      />
+    );
+  }
+
+  return <MainApp />;
 };
 
 export default App;

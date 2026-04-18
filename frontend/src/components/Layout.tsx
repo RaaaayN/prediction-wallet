@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Terminal, Briefcase, ShieldAlert, BarChart3, History, BookOpen, Activity, Zap, TrendingUp, Layers, Fingerprint, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, Terminal, Briefcase, ShieldAlert, BarChart3, History, BookOpen, Activity, Zap, TrendingUp, Layers, Fingerprint, ClipboardList, Repeat2 } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -14,6 +14,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     { name: 'Risk', path: '/riskhub', icon: <ShieldAlert size={18} /> },
     { name: 'Analytics', path: '/analytics', icon: <BarChart3 size={18} /> },
     { name: 'Audit', path: '/audit', icon: <ClipboardList size={18} /> },
+    { name: 'Operations', path: '/operations', icon: <Repeat2 size={18} /> },
   ];
 
   const subTabs = [
