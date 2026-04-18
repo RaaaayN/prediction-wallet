@@ -1,13 +1,18 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ApiService } from '../api/service';
 import type { DecisionTrace } from '../types';
 import { ChevronDown, ChevronUp, Fingerprint, Clock, Activity, Brain, ShieldCheck, Zap, ClipboardList } from 'lucide-react';
 
 const Traces: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const cycleFromUrl = searchParams.get('cycle') ?? '';
+  const [typedFilter, setTypedFilter] = useState('');
   const [traces, setTraces] = useState<DecisionTrace[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [filter, setFilter] = useState('');
+
+  const filter = cycleFromUrl || typedFilter;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -27,9 +32,10 @@ const Traces: React.FC = () => {
     setExpandedId(expandedId === id ? null : id);
   };
 
-  const filteredTraces = traces.filter(t => 
-    t.cycle_id.toLowerCase().includes(filter.toLowerCase()) ||
-    t.stage.toLowerCase().includes(filter.toLowerCase())
+  const filterLower = filter.trim().toLowerCase();
+  const filteredTraces = traces.filter(
+    (t) =>
+      t.cycle_id.toLowerCase().includes(filterLower) || t.stage.toLowerCase().includes(filterLower),
   );
 
   const getStageIcon = (stage: string) => {
@@ -64,7 +70,17 @@ const Traces: React.FC = () => {
           type="text"
           placeholder="Filter by cycle ID or stage..."
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (cycleFromUrl) {
+              const next = new URLSearchParams(searchParams);
+              next.delete('cycle');
+              setSearchParams(next, { replace: true });
+              setTypedFilter(v);
+            } else {
+              setTypedFilter(v);
+            }
+          }}
           className="bg-card-bg border border-border rounded px-3 py-1.5 text-sm flex-1 max-w-sm focus:border-primary outline-none"
         />
       </div>

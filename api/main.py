@@ -17,6 +17,27 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.runner import build_cycle_args, stream_command
 
+
+def _prefetch_price_history(tickers: list[str], *, min_days: int, period: str = "2y") -> None:
+    """Warm the market cache for tickers when OHLCV is missing (yfinance on first hit)."""
+    if not tickers:
+        return
+    from services.market_service import MarketService
+
+    svc = MarketService()
+    need: list[str] = []
+    for t in tickers:
+        hist = svc.get_historical(t, days=min_days + 90)
+        if hist is None or hist.empty or "Close" not in hist.columns:
+            need.append(t)
+    if not need:
+        return
+    try:
+        svc.fetch_and_store(need, period=period, force=False)
+    except Exception:
+        pass
+
+
 app = FastAPI(title="Prediction Wallet API", version="1.0.0")
 
 app.add_middleware(
@@ -193,11 +214,17 @@ async def get_market_status():
 
 @app.get("/api/backtest")
 async def get_backtest(days: int = Query(90, ge=10, le=365)):
+    from config import TARGET_ALLOCATION
     from engine.backtest import run_strategy_comparison
+
+    _prefetch_price_history(list(TARGET_ALLOCATION.keys()), min_days=days + 30)
     results = run_strategy_comparison(days=days)
     if results is None:
         from fastapi import HTTPException
-        raise HTTPException(status_code=503, detail="Insufficient market data for backtest.")
+        raise HTTPException(
+            status_code=503,
+            detail="Insufficient market data for backtest. Check network / yfinance, then retry.",
+        )
     return results
 
 
@@ -216,8 +243,14 @@ async def get_correlation(days: int = Query(90, ge=10, le=365)):
         raise HTTPException(status_code=503, detail="Portfolio not initialized. Run: python main.py init")
     tickers = list(portfolio.get("positions", {}).keys())
     if not tickers:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=503, detail="Portfolio has no positions.")
+        return {
+            "tickers": [],
+            "matrix": [],
+            "days": days,
+            "n_obs": 0,
+            "detail": "Portfolio has no holdings yet. Run: uv run python main.py init (requires yfinance).",
+        }
+    _prefetch_price_history(tickers, min_days=days)
     svc = MarketService()
     price_series: dict[str, "pd.Series"] = {}
     for ticker in tickers:
@@ -226,7 +259,10 @@ async def get_correlation(days: int = Query(90, ge=10, le=365)):
             price_series[ticker] = hist["Close"]
     if len(price_series) < 2:
         from fastapi import HTTPException
-        raise HTTPException(status_code=503, detail="Insufficient market data for correlation.")
+        raise HTTPException(
+            status_code=503,
+            detail="Insufficient market data for correlation after prefetch. Check network / yfinance.",
+        )
     prices_df = pd.DataFrame(price_series).dropna()
     returns_df = prices_df.pct_change().dropna()
     corr = rolling_correlation(returns_df, window=min(days, len(returns_df)))
@@ -254,9 +290,8 @@ async def get_stress():
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Portfolio not initialized. Run: python main.py init")
     tickers = list(portfolio.get("positions", {}).keys())
-    if not tickers:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=503, detail="Portfolio has no positions.")
+    if tickers:
+        _prefetch_price_history(tickers, min_days=30)
     prices = MarketService().get_latest_prices(tickers)
     return run_stress_test(portfolio, prices)
 

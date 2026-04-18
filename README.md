@@ -81,9 +81,6 @@ profiles/
   conservative.yaml    — 60% bonds, 40% equities, no crypto
   growth.yaml          — 70% equities, 20% bonds, 10% crypto
   crypto_heavy.yaml    — 40% equities, 20% bonds, 40% crypto
-
-ui/
-  index.html           — HTML/JS single-page UI (SSE streaming, all tabs)
 ```
 
 ---
@@ -112,6 +109,17 @@ cd frontend && npm ci && npm run build && cd ..
 uvicorn api.main:app --reload
 # Open http://localhost:8000
 ```
+
+### Setup automatisé (recommandé)
+
+Prérequis : [Docker](https://docs.docker.com/get-docker/), [uv](https://docs.astral.sh/uv/), Node.js 20+.
+
+```bash
+./scripts/setup.sh          # Postgres (docker compose) + DATABASE_URL + uv + schéma DB + main.py init + build frontend
+./scripts/setup.sh --sqlite # Sans Docker : SQLite sous data/ (pas de DATABASE_URL ajouté)
+```
+
+Puis lance l’API : `uvicorn api.main:app --reload` et ouvre `http://localhost:8000`.
 
 ---
 

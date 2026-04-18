@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { ApiService } from '../api/service';
-import JsonPanel from '../components/JsonPanel';
-import type { JsonRecord, PortfolioSnapshot, SnapshotRow } from '../types';
+import SectionCard from '../components/SectionCard';
+import StatCard from '../components/StatCard';
+import CollapsibleRaw from '../components/CollapsibleRaw';
+import type { PortfolioSnapshot, SnapshotRow } from '../types';
 
 const Perf: React.FC = () => {
   const [snapshots, setSnapshots] = useState<SnapshotRow[]>([]);
@@ -25,19 +27,28 @@ const Perf: React.FC = () => {
 
   if (err) return <div className="text-red text-sm">{err}</div>;
 
-  const summary: JsonRecord = {
-    current_total: portfolio?.total_value,
-    snapshot_count: snapshots.length,
-    first_ts: snapshots[0]?.timestamp,
-    last_ts: snapshots[snapshots.length - 1]?.timestamp,
-  };
+  const last = snapshots[snapshots.length - 1];
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <JsonPanel title="Performance snapshot" data={summary} />
-      <JsonPanel title="Snapshots (120)" data={snapshots} />
+    <div className="flex flex-col gap-6">
+      <SectionCard title="Performance (snapshots)" subtitle="Valeur et drawdown récents">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <StatCard
+            label="Valeur actuelle"
+            value={portfolio?.total_value != null ? fmtUsd(portfolio.total_value) : '—'}
+          />
+          <StatCard label="P&amp;L %" value={portfolio?.pnl_pct != null ? `${(portfolio.pnl_pct * 100).toFixed(2)}%` : '—'} />
+          <StatCard label="Snapshots" value={String(snapshots.length)} />
+          <StatCard label="DD dernier" value={typeof last?.drawdown === 'number' ? `${(last.drawdown * 100).toFixed(2)}%` : '—'} />
+        </div>
+        <CollapsibleRaw label="Série snapshots (extrait)" data={snapshots.slice(-20)} />
+      </SectionCard>
     </div>
   );
 };
+
+function fmtUsd(n: number): string {
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+}
 
 export default Perf;

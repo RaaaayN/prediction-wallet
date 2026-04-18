@@ -1,16 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { ApiService } from '../api/service';
-import JsonPanel from '../components/JsonPanel';
-import type { JsonRecord } from '../types';
+import StressScenariosView from '../components/StressScenariosView';
 
 const Stress: React.FC = () => {
-  const [data, setData] = useState<JsonRecord | null>(null);
+  const [data, setData] = useState<unknown>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
       try {
-        setData(await ApiService.get<JsonRecord>('/api/stress'));
+        setData(await ApiService.get<unknown>('/api/stress'));
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Failed to load');
       }
@@ -18,7 +17,7 @@ const Stress: React.FC = () => {
   }, []);
 
   if (err) return <div className="text-red text-sm">{err}</div>;
-  return <JsonPanel title="Stress scenarios" data={data} />;
+  return <StressScenariosView rows={data} />;
 };
 
 export default Stress;

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ApiService } from '../api/service';
-import JsonPanel from '../components/JsonPanel';
+import BookSummaryView from '../components/BookSummaryView';
 import type { JsonRecord } from '../types';
 
 const Book: React.FC = () => {
@@ -18,7 +18,7 @@ const Book: React.FC = () => {
   }, []);
 
   if (err) return <div className="text-red text-sm">{err}</div>;
-  return <JsonPanel title="Book summary" data={data} />;
+  return <BookSummaryView summary={data} />;
 };
 
 export default Book;

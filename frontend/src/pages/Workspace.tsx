@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiService } from '../api/service';
-import JsonPanel from '../components/JsonPanel';
+import BookSummaryView from '../components/BookSummaryView';
+import ConfigStrip from '../components/ConfigStrip';
 import type { JsonRecord } from '../types';
 
 const Workspace: React.FC = () => {
@@ -27,17 +28,24 @@ const Workspace: React.FC = () => {
   if (err) return <div className="text-red text-sm">{err}</div>;
 
   return (
-    <div className="flex flex-col gap-4">
-      <p className="text-sm text-[#8b949e]">
-        Hedge-fund book view: exposures, risk classification, and P&amp;L attribution. Open{' '}
-        <Link className="text-primary underline" to="/book">Book Summary</Link>,{' '}
-        <Link className="text-primary underline" to="/ideas">Idea Book</Link>, or{' '}
-        <Link className="text-primary underline" to="/blotter">Blotter</Link>.
+    <div className="flex flex-col gap-6">
+      <p className="text-sm text-[#8b949e] leading-relaxed">
+        Vue <strong className="text-[#e6edf3]">livre hedge fund</strong> : expositions, risque et attribution. Enchaîne avec{' '}
+        <Link className="text-primary hover:underline" to="/ideas">
+          Idea Book
+        </Link>
+        ,{' '}
+        <Link className="text-primary hover:underline" to="/blotter">
+          Blotter
+        </Link>{' '}
+        ou{' '}
+        <Link className="text-primary hover:underline" to="/risk">
+          Risk detail
+        </Link>
+        .
       </p>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <JsonPanel title="Book summary (/api/book-summary)" data={summary} />
-        <JsonPanel title="Config (/api/config)" data={cfg} />
-      </div>
+      <BookSummaryView summary={summary} />
+      <ConfigStrip cfg={cfg} />
     </div>
   );
 };
