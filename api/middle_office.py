@@ -83,3 +83,9 @@ async def get_mifir_report(cycle_id: str, _: User = Depends(requires_role([Role.
     if not export:
         raise HTTPException(status_code=404, detail=f"No transactions found for cycle {cycle_id}")
     return export
+
+@router.post("/backup")
+async def trigger_backup(_: User = Depends(requires_role([Role.ADMIN]))):
+    """Trigger a manual system backup (DB snapshot + Ledger export)."""
+    svc = BackOfficeService()
+    return svc.run_backup()

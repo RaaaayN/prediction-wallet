@@ -13,6 +13,9 @@ from db.schema import init_db
 from runtime_context import build_runtime_context, reset_profile_market_cache
 from settings import settings
 from utils.time import utc_now_iso
+from utils.resilience import retry, CircuitBreaker
+
+market_cb = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
 
 
 def _coerce_single_series(data: pd.DataFrame, column_name: str) -> pd.Series:
@@ -202,6 +205,8 @@ class MarketService:
         init_db(self.db_path if not USE_POSTGRES else None)
         return self.fetch_and_store(tickers, period=period, force=True)
 
+    @retry(max_attempts=3, base_delay=1.0)
+    @market_cb
     def _download(self, ticker: str, period: str) -> pd.DataFrame:
         yf = _require_yfinance()
         df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=True)
@@ -313,6 +318,7 @@ class MarketService:
         return abs(cached_price - live_price) / max(live_price, 1.0) <= 0.35
 
     @staticmethod
+    @retry(max_attempts=2, base_delay=0.5)
     def _fetch_live_price(ticker: str) -> float:
         yf = _require_yfinance()
         try:

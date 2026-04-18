@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from pathlib import Path
 import json
 import uuid
 
@@ -141,3 +142,43 @@ class BackOfficeService:
             }
             export.append(record)
         return export
+
+    def run_backup(self) -> dict:
+        """Create a compressed snapshot of the database and cold record exports."""
+        import shutil
+        import os
+        from config import MARKET_DB, REPORTS_DIR
+        from db.repository import get_trading_core_positions
+        
+        backup_dir = Path(REPORTS_DIR) / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = utc_now_iso().replace(":", "-")
+        db_backup_name = f"snapshot_{timestamp}.db"
+        ledger_backup_name = f"ledger_{timestamp}.json"
+        
+        # 1. Snapshot DB
+        shutil.copy(str(MARKET_DB), str(backup_dir / db_backup_name))
+        
+        # 2. Export Ledger JSON (Cold record)
+        positions = get_trading_core_positions()
+        with open(backup_dir / ledger_backup_name, "w") as f:
+            json.dump(positions, f, indent=2)
+            
+        # 3. Retention (Keep last 7 snapshots)
+        all_snapshots = sorted(list(backup_dir.glob("snapshot_*.db")))
+        if len(all_snapshots) > 7:
+            for s in all_snapshots[:-7]:
+                s.unlink()
+                # Also unlink corresponding ledger
+                l_name = s.name.replace("snapshot_", "ledger_").replace(".db", ".json")
+                l_path = backup_dir / l_name
+                if l_path.exists():
+                    l_path.unlink()
+                    
+        return {
+            "status": "success",
+            "db_snapshot": db_backup_name,
+            "ledger_export": ledger_backup_name,
+            "total_backups": min(len(all_snapshots), 7)
+        }

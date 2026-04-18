@@ -19,6 +19,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from api.runner import build_cycle_args, stream_command
 from api.auth import Role, User, get_current_user, requires_role
 from api.middle_office import router as middle_office_router
+from services.health_service import HealthService
 from api.models import (
     ConfigResponse, PortfolioResponse, PositionRow, 
     MarketStatusResponse, OnboardingStatusResponse,
@@ -32,6 +33,64 @@ from utils.telemetry import trace_request
 app = FastAPI(title="Prediction Wallet API", version="1.0.0")
 
 app.include_router(middle_office_router)
+
+@app.get("/api/health")
+async def health_check():
+    """Consolidated health check for monitoring systems."""
+    svc = HealthService()
+    health = svc.get_full_health()
+    if health["status"] == "down":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(content=health, status_code=503)
+    return health
+
+@app.get("/api/ready")
+async def readiness_check():
+    """Quick check if the API and database are reachable."""
+    svc = HealthService()
+    db_health = svc.check_database()
+    if db_health["status"] == "down":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Database unreachable")
+    return {"status": "ready"}
+
+@app.get("/api/status")
+async def get_system_status(_: User = Depends(requires_role([Role.VIEWER, Role.TRADER, Role.ADMIN]))):
+    """Consolidated system status dashboard data."""
+    from db.repository import (
+        get_connection, q, get_latest_reconciliation_run, 
+        get_nav_history
+    )
+    from services.health_service import HealthService
+    
+    health_svc = HealthService()
+    
+    # 1. Last Rebalance
+    with get_connection() as conn:
+        last_run = conn.execute(q("SELECT * FROM agent_runs ORDER BY timestamp DESC LIMIT 1")).fetchone()
+        
+    # 2. Last Reconciliation
+    last_recon = get_latest_reconciliation_run()
+    
+    # 3. Last NAV
+    nav_hist = get_nav_history(limit=1)
+    last_nav = nav_hist[0] if nav_hist else None
+    
+    # 4. Backup Status
+    from config import REPORTS_DIR
+    backup_dir = Path(REPORTS_DIR) / "backups"
+    backups = sorted(list(backup_dir.glob("snapshot_*.db"))) if backup_dir.exists() else []
+    
+    return {
+        "health": health_svc.get_full_health(),
+        "last_rebalance": dict(last_run) if last_run else None,
+        "last_reconciliation": last_recon,
+        "last_nav": last_nav,
+        "backups": {
+            "count": len(backups),
+            "latest": backups[-1].name if backups else None
+        }
+    }
 
 app.add_middleware(
     CORSMiddleware,
