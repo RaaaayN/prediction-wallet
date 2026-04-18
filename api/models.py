@@ -14,12 +14,15 @@ class ConfigResponse(BaseModel):
 class PortfolioResponse(BaseModel):
     cash: float
     total_value: float
+    peak_value: float = 0.0
     pnl_dollars: float
     pnl_pct: float
     positions: dict[str, float]
     history: list[dict[str, Any]] = Field(default_factory=list)
     current_weights: dict[str, float] = Field(default_factory=dict)
+    target_weights: dict[str, float] = Field(default_factory=dict)
     weight_deviation: dict[str, float] = Field(default_factory=dict)
+    last_rebalanced: str | None = None
 
 class PositionRow(BaseModel):
     ticker: str

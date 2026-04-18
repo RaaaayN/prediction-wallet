@@ -211,6 +211,8 @@ async def get_portfolio(_: User = Depends(get_current_user)):
         
         data.update(snapshot)
         data["total_value"] = total_value
+        data["peak_value"] = data.get("peak_value", total_value)
+        data["target_weights"] = snapshot.get("target_weights", svc.runtime_context.target_allocation)
         data.setdefault("pnl_dollars", pnl_dollars)
         data.setdefault("pnl_pct", pnl_dollars / initial_capital if initial_capital > 0 else 0.0)
         return data
@@ -379,6 +381,32 @@ async def get_market_status(_: User = Depends(get_current_user)):
         "last_refresh": {row["ticker"]: row["refreshed_at"] for row in rows},
     }
 
+
+@app.get("/api/market/snapshot")
+async def get_market_snapshot(profile: str | None = Query(None), _: User = Depends(get_current_user)):
+    from services.market_service import MarketService
+    from db.repository import get_market_data_status
+    
+    svc = MarketService(profile_name=profile)
+    tickers = list(svc.runtime_context.target_allocation.keys())
+    prices = svc.get_latest_prices(tickers)
+    refresh_rows = get_market_data_status()
+    
+    # Map to frontend expected structure
+    refresh_status = []
+    for row in refresh_rows:
+        refresh_status.append({
+            "ticker": row["ticker"],
+            "refreshed_at": row["refreshed_at"],
+            "success": bool(row["success"])
+        })
+        
+    return {
+        "prices": prices,
+        "metrics": {}, # Add aggregate metrics if available
+        "refresh_status": refresh_status
+    }
+
 # ── trading-core ──────────────────────────────────────────────────────────────
 
 @app.get("/api/trading-core/instruments", response_model=list[InstrumentRow])
@@ -432,18 +460,19 @@ async def get_tc_cash_movements(
 
 @app.get("/api/backtest")
 async def get_backtest(days: int = Query(90, ge=10, le=365), _: User = Depends(get_current_user)):
-    from engine.backtest import run_strategy_comparison
+    from engine.backtest_v2 import EventDrivenBacktester
     from services.execution_service import ExecutionService
     
     svc = ExecutionService()
     _prefetch_price_history(list(svc.runtime_context.target_allocation.keys()), min_days=days + 30)
-    results = run_strategy_comparison(days=days)
-    if results is None:
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=503,
-            detail="Insufficient market data for backtest. Check network / yfinance, then retry.",
-        )
+    
+    # Run the modern event-driven simulation for each strategy
+    results = {}
+    for strat in ["threshold", "calendar", "ensemble"]:
+        tester = EventDrivenBacktester(days=days)
+        res = tester.run(strategy_type=strat)
+        results[strat] = res.metrics
+        
     return results
 
 
@@ -1177,6 +1206,11 @@ async def get_monte_carlo(paths: int = Query(5000, ge=100, le=20000), _: User = 
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Insufficient historical data.")
     result = run_monte_carlo(portfolio, prices, historical_returns, n_paths=paths)
+
+    # Add convenience fields for frontend
+    result["expected_value"] = result["percentiles"].get("p50")
+    result["var_95"] = result["percentiles"].get("p5")
+
     # Convert numpy types for JSON serialization
     def _clean(obj):
         if isinstance(obj, (np.floating, np.integer)):
