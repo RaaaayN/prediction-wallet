@@ -17,13 +17,7 @@ export function Dashboard() {
   const pnlPct = portfolio.pnl_pct || 0;
   const isPositive = pnlPct >= 0;
 
-  const mockHistory = portfolio.history?.length ? portfolio.history : [
-    { date: "2024-01-01", total_value: 100000 },
-    { date: "2024-01-02", total_value: 101000 },
-    { date: "2024-01-03", total_value: 100500 },
-    { date: "2024-01-04", total_value: 102000 },
-    { date: "2024-01-05", total_value: 103500 },
-  ];
+  const history = portfolio.history || [];
 
   const healthStatus = status?.health?.status || "unknown";
 
@@ -106,32 +100,39 @@ export function Dashboard() {
             <CardTitle>Equity Curve</CardTitle>
           </CardHeader>
           <CardContent className="h-[350px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={mockHistory}>
-                <defs>
-                  <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="date" stroke="#52525b" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis 
-                  stroke="#52525b" 
-                  fontSize={12} 
-                  tickLine={false} 
-                  axisLine={false} 
-                  tickFormatter={(value) => `$${value.toLocaleString()}`}
-                  domain={['auto', 'auto']}
-                />
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: "#09090b", borderColor: "#27272a", borderRadius: "8px" }}
-                  itemStyle={{ color: "#fafafa" }}
-                  formatter={(value: any) => [`$${value.toLocaleString()}`, "Value"]}
-                />
-                <Area type="monotone" dataKey="total_value" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorValue)" />
-              </AreaChart>
-            </ResponsiveContainer>
+            {history.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={history}>
+                  <defs>
+                    <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="date" stroke="#52525b" fontSize={12} tickLine={false} axisLine={false} />
+                  <YAxis 
+                    stroke="#52525b" 
+                    fontSize={12} 
+                    tickLine={false} 
+                    axisLine={false} 
+                    tickFormatter={(value) => `$${value.toLocaleString()}`}
+                    domain={['auto', 'auto']}
+                  />
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: "#09090b", borderColor: "#27272a", borderRadius: "8px" }}
+                    itemStyle={{ color: "#fafafa" }}
+                    formatter={(value: any) => [`$${value.toLocaleString()}`, "Value"]}
+                  />
+                  <Area type="monotone" dataKey="total_value" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorValue)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-muted-foreground bg-secondary/10 rounded-lg border border-dashed">
+                <TrendingUp className="h-10 w-10 opacity-20 mb-2" />
+                <p className="text-sm">No performance history yet. Runs several rebalancing cycles to see the curve.</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 

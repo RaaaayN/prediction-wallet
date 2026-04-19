@@ -10,7 +10,9 @@ import {
   Bot, 
   FileText,
   Settings as SettingsIcon,
-  Activity
+  Activity,
+  Layers,
+  Briefcase
 } from "lucide-react";
 import { cn } from "@/utils/cn";
 
@@ -23,6 +25,8 @@ const navItems = [
   { path: "/data", label: "Data Explorer", icon: Database },
   { path: "/experiments", label: "Experiments", icon: TestTube },
   { path: "/agents", label: "Agents Panel", icon: Bot },
+  { path: "/trading-core", label: "Trading Core", icon: Layers },
+  { path: "/middle-office", label: "Middle Office", icon: Briefcase },
   { path: "/events", label: "Event Browser", icon: Activity },
   { path: "/reports", label: "Reports", icon: FileText },
   { path: "/settings", label: "Settings", icon: SettingsIcon },

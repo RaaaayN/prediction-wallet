@@ -11,6 +11,8 @@ import { AgentsPanel } from "@/pages/AgentsPanel";
 import { Reports } from "@/pages/Reports";
 import { Settings } from "@/pages/Settings";
 import { Events } from "@/pages/Events";
+import { TradingCore } from "@/pages/TradingCore";
+import { MiddleOffice } from "@/pages/MiddleOffice";
 
 function App() {
   return (
@@ -25,9 +27,11 @@ function App() {
           <Route path="data" element={<DataExplorer />} />
           <Route path="experiments" element={<Experiments />} />
           <Route path="agents" element={<AgentsPanel />} />
+          <Route path="events" element={<Events />} />
+          <Route path="trading-core" element={<TradingCore />} />
+          <Route path="middle-office" element={<MiddleOffice />} />
           <Route path="reports" element={<Reports />} />
           <Route path="settings" element={<Settings />} />
-          <Route path="events" element={<Events />} />
         </Route>
       </Routes>
     </BrowserRouter>

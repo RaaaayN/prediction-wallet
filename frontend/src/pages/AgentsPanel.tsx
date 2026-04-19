@@ -85,9 +85,9 @@ export function AgentsPanel() {
                         </button>
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground line-clamp-2 italic">"{idea.rationale}"</p>
+                    <p className="text-xs text-muted-foreground line-clamp-2 italic">"{idea.thesis}"</p>
                     <div className="mt-2 flex justify-between items-center text-[10px] text-muted-foreground">
-                       <span>Score: {idea.risk_score?.toFixed(1) || 'N/A'}</span>
+                       <span>Conviction: {(idea.conviction * 100).toFixed(0)}%</span>
                        <span>{format(new Date(idea.created_at), "MMM dd")}</span>
                     </div>
                   </div>

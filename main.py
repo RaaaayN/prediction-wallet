@@ -137,7 +137,11 @@ def init_portfolio(force: bool = False, initial_capital: float | None = None, pr
         from db.repository import create_user, get_connection, q
         import uuid
         with get_connection(runtime_context.market_db) as conn:
-            user_count = conn.execute(q("SELECT COUNT(*) FROM users")).fetchone()[0]
+            row = conn.execute(q("SELECT COUNT(*) FROM users")).fetchone()
+            if isinstance(row, dict):
+                user_count = list(row.values())[0]
+            else:
+                user_count = row[0]
         
         if user_count == 0:
             print("\n--- IAM Fondation: Admin Setup ---")

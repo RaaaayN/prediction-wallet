@@ -5,11 +5,13 @@ from __future__ import annotations
 from config import CALENDAR_FREQUENCY, DRIFT_THRESHOLD
 from strategies.calendar import CalendarStrategy
 from strategies.threshold import ThresholdStrategy
+from strategies.ensemble import EnsembleStrategy
 
 
 STRATEGY_REGISTRY = {
     "threshold": ThresholdStrategy,
     "calendar": CalendarStrategy,
+    "ensemble": EnsembleStrategy,
 }
 
 
@@ -38,6 +40,13 @@ def build_strategy(strategy_name: str, profile: dict | None = None):
             frequency=str(profile.get("calendar_frequency", CALENDAR_FREQUENCY)),
             target_allocation=profile.get("target_allocation"),
             min_drift=float(profile.get("drift_threshold", 0.01)),
+        )
+
+    if strategy_cls is EnsembleStrategy:
+        return strategy_cls(
+            target_allocation=profile.get("target_allocation", {}),
+            drift_threshold=float(profile.get("drift_threshold", DRIFT_THRESHOLD)),
+            sentiment_weight=float(profile.get("sentiment_weight", 0.2)),
         )
 
     raise ValueError(f"Unsupported strategy class for '{strategy_name}'")

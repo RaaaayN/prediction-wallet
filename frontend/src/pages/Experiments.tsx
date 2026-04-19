@@ -1,67 +1,109 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { TestTube, ExternalLink } from "lucide-react";
+import { useExperiments } from "@/api/queries";
+import { ExternalLink, Clock, Activity, BarChart2 } from "lucide-react";
+import { format } from "date-fns";
 
 export function Experiments() {
+  const { data: experiments, isLoading } = useExperiments();
+
+  if (isLoading) return <div className="p-8 animate-pulse text-muted-foreground">Connecting to MLflow Tracking Server...</div>;
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Experiments (MLflow)</h2>
-          <p className="text-muted-foreground mt-1">View tracked research runs and model registry.</p>
+          <h2 className="text-3xl font-bold tracking-tight">Model Registry & Experiments</h2>
+          <p className="text-muted-foreground mt-1">Track training runs, backtest metrics, and champion models via MLflow.</p>
         </div>
-        <Button variant="outline" onClick={() => window.open('http://localhost:5000', '_blank')}>
-          <ExternalLink className="mr-2 h-4 w-4" />
-          Open MLflow UI
-        </Button>
+        <a 
+          href="http://localhost:5000" 
+          target="_blank" 
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 text-sm text-primary hover:underline font-medium"
+        >
+          <ExternalLink className="h-4 w-4" /> Open MLflow UI
+        </a>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Model Registry: Champions</CardTitle>
-          <CardDescription>Strategies promoted to production</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="border border-border rounded-md overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-secondary/50 text-secondary-foreground border-b border-border">
-                <tr>
-                  <th className="py-3 px-4 text-left font-medium">Model Name</th>
-                  <th className="py-3 px-4 text-left font-medium">Version</th>
-                  <th className="py-3 px-4 text-left font-medium">Stage</th>
-                  <th className="py-3 px-4 text-left font-medium">Run ID</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                <tr>
-                  <td className="py-3 px-4 font-medium">Rebalancing_Strategy</td>
-                  <td className="py-3 px-4">v3</td>
-                  <td className="py-3 px-4"><span className="text-xs px-2 py-1 bg-emerald-500/20 text-emerald-500 rounded-full">Production</span></td>
-                  <td className="py-3 px-4 text-muted-foreground font-mono text-xs">8b2a3c9f</td>
-                </tr>
-                <tr>
-                  <td className="py-3 px-4 font-medium">Ensemble_NLP_Overlay</td>
-                  <td className="py-3 px-4">v1</td>
-                  <td className="py-3 px-4"><span className="text-xs px-2 py-1 bg-amber-500/20 text-amber-500 rounded-full">Staging</span></td>
-                  <td className="py-3 px-4 text-muted-foreground font-mono text-xs">e9f1a2b4</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Runs</CardTitle>
-        </CardHeader>
-        <CardContent className="flex items-center justify-center py-12 border-dashed border border-border m-6 rounded-md">
-          <div className="text-center text-muted-foreground">
-            <TestTube className="mx-auto h-12 w-12 opacity-20 mb-4" />
-            <p>Runs are fetched via MLflow API. View full details in the MLflow UI.</p>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="grid gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4" /> Recent Training & Backtest Runs</CardTitle>
+            <CardDescription>Experiment metadata synced from local MLflow store.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {experiments && experiments.length > 0 ? (
+              <div className="border border-border rounded-md overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-secondary/50 border-b border-border text-xs uppercase text-muted-foreground">
+                    <tr>
+                      <th className="py-2 px-4 text-left font-bold">Run Name</th>
+                      <th className="py-2 px-4 text-left font-bold">Status</th>
+                      <th className="py-2 px-4 text-left font-bold">Metrics</th>
+                      <th className="py-2 px-4 text-left font-bold">Parameters</th>
+                      <th className="py-2 px-4 text-right font-bold">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {experiments.map((run: any) => (
+                      <tr key={run.run_id} className="hover:bg-secondary/20">
+                        <td className="py-3 px-4">
+                          <div className="font-medium">{run.name}</div>
+                          <div className="text-[10px] text-muted-foreground font-mono">{run.run_id.slice(0, 8)}...</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                            run.status === 'FINISHED' ? 'bg-emerald-500/10 text-emerald-500' : 
+                            run.status === 'RUNNING' ? 'bg-blue-500/10 text-blue-500' : 'bg-destructive/10 text-destructive'
+                          }`}>
+                            {run.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="flex flex-wrap gap-2">
+                            {Object.entries(run.metrics || {}).slice(0, 3).map(([k, v]: [string, any]) => (
+                              <div key={k} className="text-[10px] bg-secondary/50 px-1.5 py-0.5 rounded border border-border">
+                                <span className="text-muted-foreground mr-1">{k}:</span>
+                                <span className="font-bold">{typeof v === 'number' ? v.toFixed(3) : v}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                           <div className="flex flex-wrap gap-2">
+                            {Object.entries(run.params || {}).slice(0, 2).map(([k, v]: [string, any]) => (
+                              <div key={k} className="text-[10px] text-muted-foreground italic">
+                                {k}={v}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-right text-xs text-muted-foreground whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1">
+                            <Clock className="h-3 w-3" />
+                            {format(new Date(run.start_time), "MMM dd, HH:mm")}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-16 text-muted-foreground border border-dashed border-border rounded-lg bg-secondary/5">
+                <BarChart2 className="mx-auto h-12 w-12 opacity-20 mb-4" />
+                <h3 className="text-lg font-medium text-foreground">No experiments found</h3>
+                <p className="max-w-xs mx-auto mt-2 text-sm">
+                  Run training scripts or backtests with MLflow tracking enabled to see results here.
+                </p>
+                <div className="mt-6 flex justify-center gap-3">
+                  <code className="text-[10px] bg-black p-2 rounded text-emerald-500">python main.py research-backtest --strategy ensemble</code>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

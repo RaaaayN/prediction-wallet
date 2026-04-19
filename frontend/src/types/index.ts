@@ -147,9 +147,9 @@ export interface IdeaBookEntry {
   ticker: string;
   status: string;
   review_status: string;
-  rationale: string;
+  thesis: string;
+  conviction: number;
   alpha_expectation?: number;
-  risk_score?: number;
   llm_generated: boolean;
   created_at: string;
 }

@@ -2,7 +2,6 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { apiClient } from './client';
 import type { 
   PortfolioSnapshot, 
-  MarketSnapshot, 
   CycleObservation, 
   GovernanceReport,
   SystemStatus,
@@ -28,11 +27,21 @@ export const useMarketSnapshot = (profile: string) => {
   return useQuery({
     queryKey: ['market-snapshot', profile],
     queryFn: async () => {
-      const { data } = await apiClient.get<MarketSnapshot>(`/market/snapshot?profile=${profile}`);
+      const { data } = await apiClient.get(`/market/snapshot?profile=${profile}`);
       return data;
     },
   });
 };
+
+export const useRefreshMarket = () => {
+  return useMutation({
+    mutationFn: async (profile: string) => {
+      const { data } = await apiClient.post(`/market/refresh?profile=${profile}`);
+      return data;
+    }
+  });
+};
+
 
 // System & Analytics Queries
 export const useSystemStatus = (profile: string) => {
@@ -157,3 +166,89 @@ export const useReviewIdea = () => {
     }
   });
 };
+
+// Trading Core Queries
+export const useTradingCoreOrders = (profile: string) => {
+  return useQuery({
+    queryKey: ['trading-core-orders', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/trading-core/orders?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+export const useTradingCoreExecutions = (profile: string) => {
+  return useQuery({
+    queryKey: ['trading-core-executions', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/trading-core/executions?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+export const useTradingCorePositions = (profile: string) => {
+  return useQuery({
+    queryKey: ['trading-core-positions', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/trading-core/positions?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+// Middle Office Queries
+export const useReconciliation = (profile: string) => {
+  return useQuery({
+    queryKey: ['reconciliation', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/middle-office/reconcile?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+export const useTCA = (profile: string) => {
+  return useQuery({
+    queryKey: ['tca', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/middle-office/tca?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+// Strategy Lab Queries
+export const useStrategies = () => {
+  return useQuery({
+    queryKey: ['strategies'],
+    queryFn: async () => {
+      const { data } = await apiClient.get('/strategies');
+      return data;
+    },
+  });
+};
+
+export const useUpdateStrategyParams = () => {
+  return useMutation({
+    mutationFn: async ({ strategy, params }: { strategy: string; params: any }) => {
+      const { data } = await apiClient.post(`/strategies/params?strategy=${strategy}`, params);
+      return data;
+    }
+  });
+};
+
+
+// Experiments Queries
+export const useExperiments = () => {
+  return useQuery({
+    queryKey: ['experiments'],
+    queryFn: async () => {
+      const { data } = await apiClient.get('/experiments');
+      return data;
+    },
+  });
+};
+
+

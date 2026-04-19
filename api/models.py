@@ -98,6 +98,22 @@ class CashMovementRow(BaseModel):
     created_at: str
     description: str | None = None
 
+class StrategyInfo(BaseModel):
+    name: str
+    description: str
+    is_active: bool
+    params: dict[str, Any]
+
+class ExperimentRow(BaseModel):
+    run_id: str
+    experiment_id: str
+    name: str
+    status: str
+    start_time: str
+    end_time: str | None = None
+    metrics: dict[str, float]
+    params: dict[str, str]
+
 
 class SettingsResponse(BaseModel):
     ai_provider: str

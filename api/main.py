@@ -25,7 +25,8 @@ from api.models import (
     MarketStatusResponse, OnboardingStatusResponse,
     InstrumentRow, TradingCoreOrderRow, TradingCoreExecutionRow,
     TradingCorePositionRow, CashMovementRow,
-    SettingsResponse, SettingsUpdateRequest
+    SettingsResponse, SettingsUpdateRequest,
+    StrategyInfo, ExperimentRow
 )
 from config import ALLOWED_ORIGINS
 from utils.telemetry import trace_request
@@ -205,7 +206,14 @@ async def get_portfolio(_: User = Depends(get_current_user)):
         snapshot = svc.portfolio_snapshot(prices)
         
         initial_capital = svc.runtime_context.initial_capital
-        history = data.get("history", [])
+        
+        from db.repository import get_snapshots
+        db_snapshots = get_snapshots(limit=100)
+        if db_snapshots:
+            history = [{"date": s["timestamp"], "total_value": s["total_value"]} for s in db_snapshots]
+        else:
+            history = data.get("history", [])
+
         total_value = snapshot.get("total_value") or (history[-1]["total_value"] if history else data.get("cash", initial_capital))
         pnl_dollars = total_value - initial_capital
         
@@ -407,6 +415,18 @@ async def get_market_snapshot(profile: str | None = Query(None), _: User = Depen
         "refresh_status": refresh_status
     }
 
+
+@app.post("/api/market/refresh")
+async def refresh_market_data(profile: str | None = Query(None), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
+    from services.market_service import MarketService
+    svc = MarketService(profile_name=profile)
+    tickers = list(svc.runtime_context.target_allocation.keys())
+    if not tickers:
+        return {"ok": True, "message": "No tickers to refresh."}
+    
+    svc.fetch_and_store(tickers, force=True)
+    return {"ok": True, "message": f"Refreshed {len(tickers)} tickers for {profile or 'active profile'}."}
+
 # ── trading-core ──────────────────────────────────────────────────────────────
 
 @app.get("/api/trading-core/instruments", response_model=list[InstrumentRow])
@@ -459,21 +479,31 @@ async def get_tc_cash_movements(
 
 
 @app.get("/api/backtest")
-async def get_backtest(days: int = Query(90, ge=10, le=365), _: User = Depends(get_current_user)):
+async def get_backtest(
+    strategy: str = Query("threshold"),
+    days: int = Query(90, ge=10, le=365),
+    profile: str | None = Query(None),
+    _: User = Depends(get_current_user)
+):
     from engine.backtest_v2 import EventDrivenBacktester
     from services.execution_service import ExecutionService
     
-    svc = ExecutionService()
-    _prefetch_price_history(list(svc.runtime_context.target_allocation.keys()), min_days=days + 30)
+    svc = ExecutionService(profile_name=profile)
+    tickers = list(svc.runtime_context.target_allocation.keys())
+    if tickers:
+        _prefetch_price_history(tickers, min_days=days + 30)
     
-    # Run the modern event-driven simulation for each strategy
-    results = {}
-    for strat in ["threshold", "calendar", "ensemble"]:
-        tester = EventDrivenBacktester(days=days)
-        res = tester.run(strategy_type=strat)
-        results[strat] = res.metrics
-        
-    return results
+    tester = EventDrivenBacktester(days=days, profile_name=profile)
+    res = tester.run(strategy_type=strategy)
+    
+    # Return full report including history for charting
+    return {
+        "strategy": strategy,
+        "days": days,
+        "metrics": res.metrics.model_dump(),
+        "history": res.history,
+        "data_hash": res.data_hash
+    }
 
 
 @app.post("/api/runner/observe")
@@ -680,7 +710,127 @@ async def resume_fund(req: RunRequest, _: User = Depends(get_current_user)):
     return {"ok": True, "message": f"Fund {req.profile} resumed."}
 
 
-# ── settings ──────────────────────────────────────────────────────────────────
+@app.get("/api/strategies", response_model=list[StrategyInfo])
+async def get_strategies(_: User = Depends(get_current_user)):
+    from portfolio_loader import get_active_profile
+    from strategies import STRATEGY_REGISTRY
+
+    profile = get_active_profile()
+    active_strategy = profile.get("strategy_name", "threshold")
+
+    result = []
+
+    # 1. Threshold
+    result.append({
+        "name": "threshold",
+        "description": "Pure quantitative rebalancing based on drift from target allocation.",
+        "is_active": active_strategy == "threshold",
+        "params": {
+            "drift_threshold": profile.get("drift_threshold", 0.05),
+            "per_asset_threshold": profile.get("per_asset_threshold", {})
+        }
+    })
+
+    # 2. Ensemble
+    result.append({
+        "name": "ensemble",
+        "description": "Quantitative Drift + NLP Sentiment overlay using FinBERT.",
+        "is_active": active_strategy == "ensemble",
+        "params": {
+            "drift_threshold": profile.get("drift_threshold", 0.05),
+            "sentiment_weight": profile.get("sentiment_weight", 0.2)
+        }
+    })
+
+    # 3. Calendar
+    result.append({
+        "name": "calendar",
+        "description": "Time-based rebalancing (Weekly/Monthly) with a secondary drift check.",
+        "is_active": active_strategy == "calendar",
+        "params": {
+            "frequency": profile.get("calendar_frequency", "weekly"),
+            "drift_threshold": profile.get("drift_threshold", 0.01)
+        }
+    })
+
+    return result
+
+
+@app.post("/api/strategies/params")
+async def update_strategy_params(
+    strategy: str = Query(...), 
+    params: dict = Body(...), 
+    _: User = Depends(requires_role([Role.ADMIN]))
+):
+    import os
+    import yaml
+    from portfolio_loader import load_profile
+    from settings import settings
+    
+    profile_name = os.getenv("PORTFOLIO_PROFILE") or settings.portfolio_profile
+    profile_path = Path("profiles") / f"{profile_name}.yaml"
+    
+    if not profile_path.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Active profile file not found.")
+        
+    with open(profile_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+        
+    # Update common params (top level in YAML)
+    if "drift_threshold" in params:
+        data["drift_threshold"] = float(params["drift_threshold"])
+    
+    # Update strategy specific
+    if strategy == "ensemble" and "sentiment_weight" in params:
+        data["sentiment_weight"] = float(params["sentiment_weight"])
+    
+    if strategy == "calendar" and "frequency" in params:
+        data["calendar_frequency"] = str(params["frequency"])
+        
+    with open(profile_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f)
+        
+    return {"ok": True, "message": f"Parameters for {strategy} updated in {profile_name}.yaml"}
+
+
+@app.get("/api/experiments", response_model=list[ExperimentRow])
+async def get_experiments(_: User = Depends(get_current_user)):
+    import mlflow
+    from datetime import datetime
+
+    try:
+        # Check if local mlruns exists
+        if not Path("mlruns").exists() and not Path("data/mlruns").exists():
+            return []
+
+        # Try to list runs from the default experiment or all experiments
+        all_runs = []
+        experiments = mlflow.search_experiments()
+        for exp in experiments:
+            runs = mlflow.search_runs(experiment_ids=[exp.experiment_id])
+            for _, run in runs.iterrows():
+                # Convert MLflow run row to ExperimentRow
+                all_runs.append({
+                    "run_id": run["run_id"],
+                    "experiment_id": exp.experiment_id,
+                    "name": run.get("tags.mlflow.runName", "Unnamed Run"),
+                    "status": run["status"],
+                    "start_time": run["start_time"].isoformat() if hasattr(run["start_time"], "isoformat") else str(run["start_time"]),
+                    "end_time": run["end_time"].isoformat() if hasattr(run["end_time"], "isoformat") and run["end_time"] else None,
+                    "metrics": {k.replace("metrics.", ""): v for k, v in run.items() if k.startswith("metrics.")},
+                    "params": {k.replace("params.", ""): str(v) for k, v in run.items() if k.startswith("params.")}
+                })
+
+        # Sort by start time descending
+        all_runs.sort(key=lambda x: x["start_time"], reverse=True)
+        return all_runs[:50]
+    except Exception:
+        return []
+
+
+# ── events ───────────────────────────────────────────────────────────────────
+
 
 @app.get("/api/settings", response_model=SettingsResponse)
 async def get_app_settings(_: User = Depends(get_current_user)):
@@ -1145,7 +1295,7 @@ class RunRequest(BaseModel):
     initial_capital: float | None = None
 
 
-VALID_STEPS = {"observe", "decide", "execute", "audit", "run-cycle", "report", "init"}
+VALID_STEPS = {"observe", "decide", "execute", "audit", "run-cycle", "report", "init", "reset"}
 
 
 @app.post("/api/run/{step}")
@@ -1161,6 +1311,12 @@ async def run_step(step: str, req: RunRequest = RunRequest(), _: User = Depends(
         args += ["init", "--force"]
         if req.initial_capital:
             args += ["--initial-capital", str(req.initial_capital)]
+    elif step == "reset":
+        # Reset is a specialized init that clears everything
+        args = ["main.py"]
+        if req.profile:
+            args += ["--profile", req.profile]
+        args += ["init", "--force", "--initial-capital", "0"] # 0 capital effectively wipes to empty
     elif step == "report":
         args = ["main.py", "report"]
     else:

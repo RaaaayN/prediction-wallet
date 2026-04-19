@@ -1,12 +1,21 @@
 import { useStore } from "@/store/useStore";
-import { useMarketSnapshot } from "@/api/queries";
+import { useMarketSnapshot, useRefreshMarket } from "@/api/queries";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Database, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Database, CheckCircle2, XCircle, Clock, RefreshCw } from "lucide-react";
 import { format } from "date-fns";
+import { useQueryClient } from "@tanstack/react-query";
 
 export function DataExplorer() {
   const profile = useStore((state) => state.profile);
   const { data: market, isLoading } = useMarketSnapshot(profile);
+  const refreshMarket = useRefreshMarket();
+  const queryClient = useQueryClient();
+
+  const handleRefresh = async () => {
+    await refreshMarket.mutateAsync(profile);
+    queryClient.invalidateQueries({ queryKey: ['market-snapshot', profile] });
+  };
 
   return (
     <div className="space-y-6">
@@ -15,6 +24,14 @@ export function DataExplorer() {
           <h2 className="text-3xl font-bold tracking-tight">Data Explorer</h2>
           <p className="text-muted-foreground mt-1">Audit market data freshness, feature engineering, and Parquet Data Lake lineage.</p>
         </div>
+        <Button 
+          variant="outline" 
+          onClick={handleRefresh} 
+          disabled={refreshMarket.isPending}
+        >
+          {refreshMarket.isPending ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+          Force Data Refresh
+        </Button>
       </div>
 
       <div className="grid gap-6 md:grid-cols-4">
@@ -38,13 +55,13 @@ export function DataExplorer() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {market?.refresh_status?.map((item) => (
+                    {market?.refresh_status?.map((item: any) => (
                       <tr key={item.ticker}>
                         <td className="py-2 px-4 font-mono font-bold">{item.ticker}</td>
                         <td className="py-2 px-4 text-xs text-muted-foreground">
                           {item.refreshed_at ? format(new Date(item.refreshed_at), "MMM dd, HH:mm:ss") : "Never"}
                         </td>
-                        <td className="py-2 px-4 font-mono">${market.prices[item.ticker]?.toFixed(2)}</td>
+                        <td className="py-2 px-4 font-mono">${market.prices?.[item.ticker]?.toFixed(2) || "0.00"}</td>
                         <td className="py-2 px-4 text-center">
                           {item.success ? (
                             <CheckCircle2 className="h-4 w-4 text-emerald-500 mx-auto" />
