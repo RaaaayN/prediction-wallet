@@ -36,27 +36,41 @@ class EventDrivenBacktester:
     def __init__(
         self,
         days: int = 90,
-        initial_capital: float = INITIAL_CAPITAL,
+        initial_capital: float | None = None,
         commission_fixed: float = 0.0,
         commission_bps: float = 0.0,
         gold_dataset_name: Optional[str] = None,
         # Risk Limits
-        gross_limit: float = 1.5,
-        max_sector_gross: float = 0.55,
-        max_single_ticker: float = 0.20,
+        gross_limit: float | None = None,
+        max_sector_gross: float | None = None,
+        max_single_ticker: float | None = None,
+        profile_name: str | None = None,
     ):
+        from runtime_context import build_runtime_context
+        ctx = build_runtime_context(profile_name)
+
         self.days = days
-        self.initial_capital = initial_capital
+        self.initial_capital = initial_capital or ctx.initial_capital
         self.commission_fixed = commission_fixed
         self.commission_bps = commission_bps
         self.market_svc = MarketDataService()
         self.gold_dataset_name = gold_dataset_name
         self.data_hash = None
         
+        # Scoped configurations from runtime context
+        self.target_allocation = ctx.target_allocation
+        self.crypto_tickers = ctx.crypto_tickers
+        self.drift_threshold = ctx.drift_threshold
+        self.sector_map = ctx.sector_map
+        self.slippage_equities = ctx.slippage_equities
+        self.slippage_crypto = ctx.slippage_crypto
+        self.benchmark_ticker = BENCHMARK_TICKER # BENCHMARK_TICKER from config remains fallback
+        
         # Risk Configuration
-        self.gross_limit = gross_limit
-        self.max_sector_gross = max_sector_gross
-        self.max_single_ticker = max_single_ticker
+        policy = ctx.policy or {}
+        self.gross_limit = gross_limit or policy.get("gross_exposure_limit", 1.5)
+        self.max_sector_gross = max_sector_gross or policy.get("max_sector_gross", 0.55)
+        self.max_single_ticker = max_single_ticker or policy.get("max_single_name_long", 0.20)
         self.risk_violations = []
         
     def _get_data(self, tickers: List[str]) -> pd.DataFrame:
@@ -102,10 +116,15 @@ class EventDrivenBacktester:
     def run(
         self, 
         strategy_type: str = "threshold", 
-        benchmark_ticker: str = BENCHMARK_TICKER,
+        benchmark_ticker: str | None = None,
         sentiment_df: Optional[pd.DataFrame] = None,
+        strategy_params: Optional[Dict[str, Any]] = None,
     ) -> BacktestResult:
-        tickers = list(TARGET_ALLOCATION.keys())
+        from strategies import build_strategy
+        from runtime_context import build_runtime_context
+
+        benchmark_ticker = benchmark_ticker or self.benchmark_ticker
+        tickers = list(self.target_allocation.keys())
         prices_df, volumes_df = self._get_data(tickers)
         
         if prices_df.empty:
@@ -122,6 +141,17 @@ class EventDrivenBacktester:
         exposures_history = []
         self.risk_violations = []
         
+        # Build override profile for the strategy
+        profile_override = {
+            "target_allocation": self.target_allocation,
+            "drift_threshold": self.drift_threshold,
+            "sector_map": self.sector_map,
+        }
+        if strategy_params:
+            profile_override.update(strategy_params)
+            
+        strat_obj = build_strategy(strategy_type, profile_override)
+
         # Returns for correlation-adjusted VaR
         returns_df = prices_df.pct_change().dropna()
         # Initial allocation at first available prices
@@ -129,7 +159,7 @@ class EventDrivenBacktester:
         first_prices = prices_df.loc[first_date].to_dict()
 
         initial_orders = []
-        for ticker, weight in TARGET_ALLOCATION.items():
+        for ticker, weight in self.target_allocation.items():
             price = first_prices.get(ticker, 0.0)
             if price > 0:
                 target_value = self.initial_capital * weight
@@ -138,8 +168,7 @@ class EventDrivenBacktester:
 
         safe_initial_orders = self._filter_risk_constrained_orders(portfolio, initial_orders, first_prices, first_date)
         self._apply_orders(portfolio, safe_initial_orders, first_prices, first_date)
-
-        last_rebalance_idx = 0
+        portfolio["last_rebalanced"] = str(first_date)
 
         for idx, (timestamp, current_prices_series) in enumerate(prices_df.iterrows()):
             current_prices = current_prices_series.to_dict()
@@ -159,40 +188,31 @@ class EventDrivenBacktester:
                 portfolio["positions"], 
                 current_prices, 
                 portfolio["cash"],
-                sector_map=SECTOR_MAP
+                sector_map=self.sector_map
             )
             exposures_history.append({"date": str(timestamp.date()), **exp})
 
-            should_rebalance = False
             orders = []
             
+            # Delegate rebalance check and trade generation to the strategy object
             if strategy_type == "ensemble":
-                from strategies.ensemble import EnsembleStrategy
-                ensemble = EnsembleStrategy(TARGET_ALLOCATION, DRIFT_THRESHOLD)
-                # Get sentiment for this timestamp
                 current_sentiment = sentiment_df.loc[timestamp].to_dict() if sentiment_df is not None and timestamp in sentiment_df.index else {}
-                orders = ensemble.get_trades(portfolio, current_prices, current_sentiment)
-                if orders:
-                    should_rebalance = True
-            elif strategy_type == "threshold":
-                for t, target_w in TARGET_ALLOCATION.items():
-                    current_w = (portfolio["positions"].get(t, 0.0) * current_prices.get(t, 0.0)) / portfolio_value if portfolio_value > 0 else 0.0
-                    if abs(current_w - target_w) > DRIFT_THRESHOLD:
-                        should_rebalance = True
-                        break
-                if should_rebalance:
-                    orders = generate_rebalance_orders(portfolio, current_prices, TARGET_ALLOCATION)
-            elif strategy_type == "calendar":
-                if idx - last_rebalance_idx >= 7:
-                    should_rebalance = True
-                    orders = generate_rebalance_orders(portfolio, current_prices, TARGET_ALLOCATION)
+                orders = strat_obj.get_trades(portfolio, current_prices, current_sentiment)
+            else:
+                # Patch current time into portfolio for CalendarStrategy schedule check
+                portfolio["current_time_patch"] = timestamp 
+                # Note: We might need to adjust strategies to use a provided 'now' instead of utc_now()
+                # For backtest, we assume they are rebalancing if they should.
+                if strat_obj.should_rebalance(portfolio, current_prices):
+                    orders = strat_obj.get_trades(portfolio, current_prices)
             
-            if should_rebalance and orders:
+            if orders:
                 # Filter orders by risk constraints
                 safe_orders = self._filter_risk_constrained_orders(portfolio, orders, current_prices, timestamp)
                 executed_in_cycle = self._apply_orders(portfolio, safe_orders, current_prices, timestamp)
-                trades.extend(executed_in_cycle)
-                last_rebalance_idx = idx
+                if executed_in_cycle:
+                    trades.extend(executed_in_cycle)
+                    portfolio["last_rebalanced"] = str(timestamp)
 
         benchmark_history = []
         if benchmark_ticker in prices_df.columns:
@@ -230,7 +250,7 @@ class EventDrivenBacktester:
         safe_orders = []
         
         # Current state
-        current_exp = compute_exposures(portfolio["positions"], prices, portfolio["cash"], sector_map=SECTOR_MAP)
+        current_exp = compute_exposures(portfolio["positions"], prices, portfolio["cash"], sector_map=self.sector_map)
         
         for order in orders:
             ticker = order["ticker"]
@@ -252,7 +272,7 @@ class EventDrivenBacktester:
                 continue
 
             # 2. Sector Cap (Incremental check)
-            sector = SECTOR_MAP.get(ticker, "other")
+            sector = self.sector_map.get(ticker, "other")
             sector_gross = current_exp["sector_gross"].get(sector, 0.0)
             future_sector_gross = sector_gross + (notional / portfolio_value) if action == "buy" else sector_gross
             
@@ -264,8 +284,6 @@ class EventDrivenBacktester:
                 continue
             
             # 3. Gross Exposure
-            # (Adding notional to gross if buy, reducing if sell but we use absolute value for gross)
-            # Simplified: only buy can increase gross exposure beyond 100% (leverage)
             future_gross = current_exp["gross_exposure"] + (notional / portfolio_value) if action == "buy" else current_exp["gross_exposure"]
             if action == "buy" and future_gross > self.gross_limit:
                 self.risk_violations.append({
@@ -290,7 +308,7 @@ class EventDrivenBacktester:
                 continue
                 
             fill_price = apply_slippage(
-                price, action, ticker, CRYPTO_TICKERS, SLIPPAGE_EQUITIES, SLIPPAGE_CRYPTO
+                price, action, ticker, self.crypto_tickers, self.slippage_equities, self.slippage_crypto
             )
             
             notional = fill_price * qty

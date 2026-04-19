@@ -12,7 +12,8 @@ from fastapi import Body, FastAPI, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -323,6 +324,8 @@ async def download_report(filename: str, profile: str | None = Query(None), _: U
 class BacktestRequest(BaseModel):
     strategy_name: str
     days: int
+    run_name: str | None = None
+    strategy_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunRequest(BaseModel):
@@ -336,18 +339,36 @@ class RunRequest(BaseModel):
 async def run_backtest_api(req: BacktestRequest, profile: str | None = Query(None), _: User = Depends(get_current_user)):
     from engine.backtest_v2 import EventDrivenBacktester
     from services.mlflow_service import MLflowService
+    import mlflow
 
-    # Use profile-specific data for the simulation
+    # Safety: End any active runs that might have leaked from previous crashes on this thread
+    try:
+        if mlflow.active_run():
+            mlflow.end_run()
+    except Exception:
+        pass
+
+    # Use profile-specific data for the simulation with custom parameter overrides
     tester = EventDrivenBacktester(days=req.days, profile_name=profile)
-    result = tester.run(strategy_type=req.strategy_name)
+    result = tester.run(
+        strategy_type=req.strategy_name, 
+        strategy_params=req.strategy_params
+    )
 
     # Log to MLflow
     mlflow_svc = MLflowService()
-    mlflow_svc.log_backtest(result, {
+    
+    # Merge for tracking
+    tracking_params = {
         "strategy_type": req.strategy_name,
         "days": req.days,
         "profile": profile or "balanced"
-    })
+    }
+    tracking_params.update(req.strategy_params)
+    
+    run_name = req.run_name or f"{req.strategy_name}_{req.days}d"
+    mlflow_svc.log_backtest(result, tracking_params, run_name=run_name)
+
     # Convert result to dict for JSON
     return {
         "strategy_name": result.strategy_name,
@@ -591,7 +612,7 @@ async def get_backtest(
     if tickers:
         _prefetch_price_history(tickers, min_days=days + 30)
     
-    tester = EventDrivenBacktester(days=days, initial_capital=svc.runtime_context.initial_capital)
+    tester = EventDrivenBacktester(days=days, profile_name=profile)
     res = tester.run(strategy_type=strategy)
     
     # Return full report including history for charting
@@ -923,6 +944,55 @@ async def get_experiments(_: User = Depends(get_current_user)):
         return all_runs[:50]
     except Exception:
         return []
+
+
+@app.post("/api/experiments/{run_id}/deploy")
+async def deploy_experiment_run(run_id: str, _: User = Depends(requires_role([Role.ADMIN]))):
+    """Import parameters from an MLflow run and apply them to the active profile."""
+    from services.mlflow_service import MLflowService
+    import yaml
+    import os
+    from settings import settings
+    
+    try:
+        svc = MLflowService()
+        params = svc.get_run_params(run_id)
+        
+        # Strategy type is stored as a param usually
+        strat_type = params.get("strategy_type") or "threshold"
+        
+        profile_name = os.getenv("PORTFOLIO_PROFILE") or settings.portfolio_profile
+        profile_path = Path("profiles") / f"{profile_name}.yaml"
+        
+        if not profile_path.exists():
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Active profile file not found.")
+            
+        with open(profile_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+            
+        # Update strategy name and pertinent params
+        data["strategy_name"] = strat_type
+        
+        # Mapping MLflow string params back to YAML types
+        if "drift_threshold" in params:
+            data["drift_threshold"] = float(params["drift_threshold"])
+        if "sentiment_weight" in params:
+            data["sentiment_weight"] = float(params["sentiment_weight"])
+        if "calendar_frequency" in params:
+            data["calendar_frequency"] = params["calendar_frequency"]
+            
+        with open(profile_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f)
+            
+        return {
+            "ok": True, 
+            "message": f"Successfully deployed model from run {run_id[:8]} to profile {profile_name}",
+            "applied_params": {k: v for k, v in params.items() if k in ["strategy_type", "drift_threshold", "sentiment_weight", "calendar_frequency"]}
+        }
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Deployment failed: {str(e)}")
 
 
 # ── events ───────────────────────────────────────────────────────────────────

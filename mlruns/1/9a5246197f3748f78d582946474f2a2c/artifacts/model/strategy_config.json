@@ -1,0 +1,10 @@
+{
+  "strategy_name": "ensemble",
+  "params": {
+    "strategy_type": "ensemble",
+    "days": 90,
+    "profile": "balanced",
+    "drift_threshold": 0.05,
+    "sentiment_weight": 0.8
+  }
+}

@@ -45,20 +45,27 @@ class MLflowService:
         """Start a new MLflow run."""
         return mlflow.start_run(run_name=run_name)
 
-    def log_backtest(self, result: Any, params: Dict[str, Any]):
-        """Log a BacktestResult to MLflow.
+    def log_backtest(self, result: Any, params: Dict[str, Any], run_name: Optional[str] = None):
+        """Log a BacktestResult to MLflow."""
+        import json
+        import pandas as pd
         
-        Args:
-            result: engine.backtest_v2.BacktestResult
-            params: dict of strategy parameters
-        """
-        with self.start_run(run_name=f"{result.strategy_name}_{result.metrics.get('annualized_return', 0):.2%}"):
+        if not run_name:
+            run_name = f"{result.strategy_name}_{result.metrics.get('annualized_return', 0):.2%}"
+            
+        with self.start_run(run_name=run_name):
             # 1. Log Parameters
             mlflow.log_params(params)
             mlflow.log_param("strategy_type", result.strategy_name)
-            if result.data_hash:
-                mlflow.log_param("data_hash", result.data_hash)
             
+            # Create a config artifact for the 'registry'
+            config_data = {"strategy_name": result.strategy_name, "params": params}
+            temp_cfg = self.data_path / "strategy_config.json"
+            with open(temp_cfg, "w") as f:
+                json.dump(config_data, f, indent=2)
+            mlflow.log_artifact(str(temp_cfg), "model")
+            os.remove(temp_cfg)
+
             # 2. Log Metrics
             m = result.metrics
             mlflow.log_metrics({
@@ -69,28 +76,20 @@ class MLflowService:
                 "volatility": m.get("volatility", 0.0),
                 "alpha": m.get("alpha", 0.0),
                 "beta": m.get("beta", 0.0),
-                "var_95_corr_adj": m.get("var_95_corr_adj", 0.0),
-                "avg_net_exposure": m.get("avg_net_exposure", 1.0),
-                "n_trades": len(result.trades),
-                "n_risk_violations": len(result.risk_violations)
             })
             
-            # 3. Log Risk Violations as artifact if any
-            if result.risk_violations:
-                import json
-                temp_v = self.data_path / "temp_violations.json"
-                with open(temp_v, "w") as f:
-                    json.dump(result.risk_violations, f, indent=2)
-                mlflow.log_artifact(str(temp_v), "audit")
-                os.remove(temp_v)
-
-            # 4. Log History as artifact (CSV)
-            import pandas as pd
+            # 3. Log History as artifact (CSV)
             hist_df = pd.DataFrame(result.history)
             temp_h = self.data_path / "backtest_history.csv"
             hist_df.to_csv(temp_h, index=False)
             mlflow.log_artifact(str(temp_h), "backtest")
             os.remove(temp_h)
+
+    def get_run_params(self, run_id: str) -> Dict[str, Any]:
+        """Fetch parameters for a specific run ID."""
+        client = mlflow.tracking.MlflowClient()
+        run = client.get_run(run_id)
+        return run.data.params
 
     def register_strategy(self, run_id: str, model_name: str):
         """Promote a successful strategy run to the Model Registry."""

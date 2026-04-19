@@ -29,7 +29,7 @@ class CalendarStrategy(BaseStrategy):
             return True
 
         last = datetime.fromisoformat(last_str)
-        now = utc_now()
+        now = portfolio.get("current_time_patch") or utc_now()
         if last.tzinfo is None:
             last = last.replace(tzinfo=now.tzinfo)
 

@@ -170,16 +170,21 @@ def build_research_copilot(model=None) -> Agent[AgentDependencies, Any]:
     )
 
     @agent.tool
-    def run_backtest_experiment(
-        ctx: RunContext[AgentDependencies], 
-        strategy_type: str, 
+    async def run_experiment(
+        self,
+        ctx: RunContext[AgentDependencies],
+        strategy_type: str,
         days: int = 90,
         gold_dataset: str | None = None
     ) -> BacktestExperimentResult:
         """Run an event-driven backtest experiment and log it to MLflow."""
-        tester = EventDrivenBacktester(days=days, gold_dataset_name=gold_dataset)
+        tester = EventDrivenBacktester(
+            days=days, 
+            gold_dataset_name=gold_dataset,
+            profile_name=ctx.deps.profile_name
+        )
         result = tester.run(strategy_type=strategy_type)
-        
+
         # Log to MLflow
         mlflow_svc = MLflowService()
         mlflow_svc.log_backtest(result, {

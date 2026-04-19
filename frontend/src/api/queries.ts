@@ -166,10 +166,12 @@ export const useGenerateReport = () => {
 // Backtesting
 export const useRunBacktest = () => {
   return useMutation({
-    mutationFn: async ({ strategy, days, profile }: { strategy: string; days: number; profile: string }) => {
+    mutationFn: async ({ strategy, days, profile, run_name, strategy_params }: { strategy: string; days: number; profile: string; run_name?: string; strategy_params?: any }) => {
       const { data } = await apiClient.post(`/runner/backtest?profile=${profile}`, {
         strategy_name: strategy,
         days,
+        run_name,
+        strategy_params
       });
       return data;
     }
@@ -341,5 +343,15 @@ export const useExperiments = () => {
     },
   });
 };
+
+export const useDeployModel = () => {
+  return useMutation({
+    mutationFn: async (run_id: string) => {
+      const { data } = await apiClient.post(`/experiments/${run_id}/deploy`);
+      return data;
+    }
+  });
+};
+
 
 
