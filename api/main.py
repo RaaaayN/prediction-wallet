@@ -325,6 +325,13 @@ class BacktestRequest(BaseModel):
     days: int
 
 
+class RunRequest(BaseModel):
+    strategy: str = "threshold"
+    mode: str = "simulate"
+    profile: str | None = None
+    initial_capital: float | None = None
+
+
 @app.post("/api/runner/backtest")
 async def run_backtest_api(req: BacktestRequest, profile: str | None = Query(None), _: User = Depends(get_current_user)):
     from engine.backtest_v2 import EventDrivenBacktester
@@ -1383,18 +1390,11 @@ async def get_book_summary(_: User = Depends(get_current_user)):
 
 # ── streaming command runner ──────────────────────────────────────────────────
 
-class RunRequest(BaseModel):
-    strategy: str = "threshold"
-    mode: str = "simulate"
-    profile: str | None = None
-    initial_capital: float | None = None
-
-
 VALID_STEPS = {"observe", "decide", "execute", "audit", "run-cycle", "report", "init", "reset"}
 
 
 @app.post("/api/run/{step}")
-async def run_step(step: str, req: RunRequest = RunRequest(), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
+async def run_step(step: str, req: RunRequest = Body(default_factory=RunRequest), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     if step not in VALID_STEPS:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Unknown step '{step}'")
