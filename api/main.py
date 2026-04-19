@@ -333,6 +333,7 @@ class RunRequest(BaseModel):
     mode: str = "simulate"
     profile: str | None = None
     initial_capital: float | None = None
+    strategy_params: dict[str, Any] = Field(default_factory=dict)
 
 
 @app.post("/api/runner/backtest")
@@ -982,17 +983,280 @@ async def deploy_experiment_run(run_id: str, _: User = Depends(requires_role([Ro
         if "calendar_frequency" in params:
             data["calendar_frequency"] = params["calendar_frequency"]
             
+        # Special handling for ML model deployment
+        if strat_type == "predictive_ml":
+            data["ml_model_run_id"] = run_id
+            
         with open(profile_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f)
             
         return {
             "ok": True, 
             "message": f"Successfully deployed model from run {run_id[:8]} to profile {profile_name}",
-            "applied_params": {k: v for k, v in params.items() if k in ["strategy_type", "drift_threshold", "sentiment_weight", "calendar_frequency"]}
+            "applied_params": {k: v for k, v in params.items() if k in ["strategy_type", "drift_threshold", "sentiment_weight", "calendar_frequency", "ml_model_run_id"]}
         }
     except Exception as e:
         from fastapi import HTTPException
         raise HTTPException(status_code=500, detail=f"Deployment failed: {str(e)}")
+
+
+@app.get("/api/data/lake/gold/{name}/head")
+async def get_gold_dataset_head(name: str, _: User = Depends(get_current_user)):
+    """Return a JSON sample of the Gold dataset for UI preview."""
+    from services.data_lake_service import DataLakeService
+    lake = DataLakeService()
+    data_dict = lake.load_gold(name)
+    if not data_dict:
+        return {}
+    
+    # Take first ticker and return top 5 rows
+    first_ticker = next(iter(data_dict))
+    df = data_dict[first_ticker]
+    return {
+        "ticker": first_ticker,
+        "columns": list(df.columns),
+        "records": df.head(5).reset_index().to_dict(orient="records")
+    }
+
+
+@app.get("/api/data/lake/gold")
+async def list_gold_datasets(_: User = Depends(get_current_user)):
+    """List available Gold datasets in the lake."""
+    from services.data_lake_service import DataLakeService
+    lake = DataLakeService()
+    return sorted(lake.list_gold_datasets())
+
+
+@app.get("/api/research/scripts")
+async def list_alpha_scripts(_: User = Depends(get_current_user)):
+    """List all saved research scripts."""
+    root = Path("ml/research")
+    root.mkdir(parents=True, exist_ok=True)
+    scripts = [f.name for f in root.glob("*.py") if f.name != "__init__.py"]
+    # Include the active one
+    return sorted(list(set(scripts + ["alpha_factory.py"])))
+
+
+@app.get("/api/research/scripts/{name}")
+async def get_alpha_script(name: str, _: User = Depends(get_current_user)):
+    """Read a specific research script."""
+    if name == "alpha_factory.py":
+        script_path = Path("ml/alpha_factory.py")
+    else:
+        script_path = Path("ml/research") / name
+        
+    if not script_path.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Script not found")
+    return {"content": script_path.read_text(encoding="utf-8")}
+
+
+@app.post("/api/research/scripts")
+async def save_alpha_script(req: dict = Body(...), _: User = Depends(requires_role([Role.ADMIN]))):
+    """Save a named research script."""
+    name = req.get("name", "alpha_factory.py")
+    if not name.endswith(".py"):
+        name += ".py"
+        
+    content = req.get("content", "")
+    
+    # Save to research folder
+    dest = Path("ml/research") / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    
+    # If it's the main factory, update it
+    if req.get("activate", False) or name == "alpha_factory.py":
+        Path("ml/alpha_factory.py").write_text(content, encoding="utf-8")
+        
+    return {"ok": True, "message": f"Script {name} saved successfully."}
+
+
+@app.post("/api/research/data/import")
+async def import_external_data(
+    dataset_name: str = Query(...),
+    req: dict = Body(...), 
+    _: User = Depends(requires_role([Role.ADMIN]))
+):
+    """Import external CSV data (passed as JSON records) into the Gold Lake."""
+    from services.data_lake_service import DataLakeService
+    import pandas as pd
+    
+    records = req.get("records", [])
+    if not records:
+        return {"ok": False, "message": "No data provided"}
+        
+    df = pd.DataFrame(records)
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"])
+        df.set_index("Date", inplace=True)
+        
+    lake = DataLakeService()
+    # Save as a single-ticker 'EXTERNAL' dataset or similar
+    path, data_hash = lake.save_gold(dataset_name, {"EXTERNAL": df})
+    
+    return {"ok": True, "dataset_name": dataset_name, "hash": data_hash}
+
+
+@app.get("/api/research/templates")
+async def get_script_templates(_: User = Depends(get_current_user)):
+    """List available institutional research templates."""
+    return [
+        {
+            "id": "random_forest",
+            "name": "Random Forest (Robust)",
+            "description": "Ensemble learning for high-dimensional feature spaces.",
+            "content": (
+                "\"\"\"\nInstitutional Random Forest Template\n\"\"\"\n"
+                "from sklearn.ensemble import RandomForestClassifier\n\n"
+                "def compute_alpha_features(df):\n"
+                "    df['factor_momentum'] = df['Close'].pct_change(10)\n"
+                "    return df\n\n"
+                "def compute_target_label(df):\n"
+                "    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n"
+                "    return df\n\n"
+                "def get_feature_list():\n"
+                "    return ['factor_momentum', 'RSI14']\n\n"
+                "def get_model():\n"
+                "    return RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)\n"
+            )
+        },
+        {
+            "id": "logistic",
+            "name": "Logistic Regression (Linear)",
+            "description": "Baseline statistical model for factor analysis.",
+            "content": (
+                "\"\"\"\nLogistic Regression Alpha Template\n\"\"\"\n"
+                "from sklearn.linear_model import LogisticRegression\n\n"
+                "def compute_alpha_features(df):\n"
+                "    df['factor_mr'] = (df['Close'] - df['SMA20']) / df['SMA20']\n"
+                "    return df\n\n"
+                "def compute_target_label(df):\n"
+                "    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n"
+                "    return df\n\n"
+                "def get_feature_list():\n"
+                "    return ['factor_mr', 'RSI14']\n\n"
+                "def get_model():\n"
+                "    return LogisticRegression(penalty='l2', C=1.0)\n"
+            )
+        },
+        {
+            "id": "svm",
+            "name": "Support Vector Machine",
+            "description": "Excellent for finding optimal hyperplanes in technical indicators.",
+            "content": (
+                "\"\"\"\nSVM Alpha Template\n\"\"\"\n"
+                "from sklearn.svm import SVC\n\n"
+                "def compute_alpha_features(df):\n"
+                "    df['vol_scaler'] = df['Close'].pct_change().rolling(20).std()\n"
+                "    return df\n\n"
+                "def compute_target_label(df):\n"
+                "    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n"
+                "    return df\n\n"
+                "def get_feature_list():\n"
+                "    return ['vol_scaler', 'MACD']\n\n"
+                "def get_model():\n"
+                "    return SVC(probability=True, kernel='rbf')\n"
+            )
+        },
+        {
+            "id": "gb",
+            "name": "Gradient Boosting",
+            "description": "Sequential boosting for complex non-linear alpha capture.",
+            "content": (
+                "\"\"\"\nGradient Boosting Alpha Template\n\"\"\"\n"
+                "from sklearn.ensemble import GradientBoostingClassifier\n\n"
+                "def compute_alpha_features(df):\n"
+                "    df['mom_fast'] = df['Close'].pct_change(3)\n"
+                "    df['mom_slow'] = df['Close'].pct_change(15)\n"
+                "    return df\n\n"
+                "def compute_target_label(df):\n"
+                "    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n"
+                "    return df\n\n"
+                "def get_feature_list():\n"
+                "    return ['mom_fast', 'mom_slow', 'RSI14']\n\n"
+                "def get_model():\n"
+                "    return GradientBoostingClassifier(n_estimators=50, learning_rate=0.1)\n"
+            )
+        },
+        {
+            "id": "full_pipeline",
+            "name": "Institutional ML Pipeline",
+            "description": "Comprehensive pipeline: Loading -> Features -> Scaling -> Training -> MLflow.",
+            "content": (
+                "# STAGE 1: DATA INGESTION\\n"
+                "import pandas as pd\\nimport numpy as np\\nimport mlflow\\n"
+                "from sklearn.ensemble import GradientBoostingClassifier\\n"
+                "from sklearn.preprocessing import StandardScaler\\n"
+                "from market.fetcher import MarketDataService, add_technical_indicators\\n\\n"
+                "print('--- [1/4] INGESTION ---')\\n"
+                "tickers = ['AAPL', 'MSFT', 'NVDA', 'BTC-USD']\\n"
+                "mkt = MarketDataService()\\n"
+                "dfs = []\\n"
+                "for t in tickers:\\n"
+                "    df = mkt.get_historical(t, days=500)\\n"
+                "    if df is not None:\\n"
+                "        df['Ticker'] = t\\n"
+                "        dfs.append(df)\\n"
+                "        print(f'✓ Ingested {t}')\\n\\n"
+                "# STAGE 2: FEATURE ENGINEERING\\n"
+                "print('\\n--- [2/4] QUANT FEATURES ---')\\n"
+                "processed = []\\n"
+                "for df in dfs:\\n"
+                "    df = add_technical_indicators(df)\\n"
+                "    df['mom_10'] = df['Close'].pct_change(10)\\n"
+                "    df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\\n"
+                "    processed.append(df.dropna())\\n"
+                "dataset = pd.concat(processed)\\n\\n"
+                "# STAGE 3: MODEL TRAINING\\n"
+                "print('\\n--- [3/4] PRODUCTION FIT ---')\\n"
+                "features = ['SMA20', 'RSI14', 'MACD', 'mom_10']\\n"
+                "X = dataset[features]\\n"
+                "y = dataset['target']\\n"
+                "scaler = StandardScaler()\\n"
+                "X_scaled = scaler.fit_transform(X)\\n\\n"
+                "mlflow.set_tracking_uri('sqlite:///data/mlflow.db')\\n"
+                "with mlflow.start_run(run_name='Institutional_GBM_Alpha'):\\n"
+                "    model = GradientBoostingClassifier(n_estimators=100)\\n"
+                "    model.fit(X_scaled, y)\\n"
+                "    mlflow.sklearn.log_model(model, 'alpha_model', registered_model_name='Production_Alpha')\\n"
+                "    print('🚀 SUCCESS: Model registered.')\\n\\n"
+                "# STAGE 4: ANALYSIS\\n"
+                "print('--- [4/4] SCORECARD ---')\\n"
+                "print(f'Samples: {len(X)}')\\n"
+                "print(f'Accuracy: {model.score(X_scaled, y):.2%}')\\n"
+            )
+        },
+        {
+            "id": "sentiment_xgb",
+            "name": "Sentiment XGBoost",
+            "description": "Fusing FinBERT sentiment with technical indicators.",
+            "content": (
+                "import pandas as pd\\nimport mlflow\\n"
+                "from sklearn.ensemble import RandomForestClassifier # Using RF as fallback for XGB\\n"
+                "from services.news_service import NewsSentimentService\\n"
+                "from market.fetcher import MarketDataService, add_technical_indicators\\n\\n"
+                "print('--- [1/3] DATA & SENTIMENT FUSION ---')\\n"
+                "ticker = 'TSLA'\\n"
+                "mkt = MarketDataService()\\n"
+                "news = NewsSentimentService()\\n"
+                "df = mkt.get_historical(ticker, days=100)\\n"
+                "df = add_technical_indicators(df)\\n"
+                "sent = news.get_ticker_sentiment(ticker)\\n"
+                "df['sentiment'] = sent['score']\\n"
+                "print(f'✓ Integrated Sentiment Score: {sent[\\'score\\']}')\\n\\n"
+                "print('--- [2/3] MODEL TRAINING ---')\\n"
+                "df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\\n"
+                "df = df.dropna()\\n"
+                "X = df[['RSI14', 'sentiment']]\\n"
+                "y = df['target']\\n"
+                "model = RandomForestClassifier().fit(X, y)\\n\\n"
+                "print('--- [3/3] REGISTRATION ---')\\n"
+                "print(f'In-Sample Confidence: {model.score(X, y):.2%}')\\n"
+                "mlflow.sklearn.log_model(model, 'alpha_model', registered_model_name='Sentiment_Alpha')\\n"
+            )
+        }
+    ]
 
 
 # ── events ───────────────────────────────────────────────────────────────────
@@ -1454,22 +1718,60 @@ async def get_book_summary(_: User = Depends(get_current_user)):
 
 # ── streaming command runner ──────────────────────────────────────────────────
 
-VALID_STEPS = {"observe", "decide", "execute", "audit", "run-cycle", "report", "init", "reset"}
+VALID_STEPS = {"observe", "decide", "execute", "audit", "run-cycle", "report", "init", "reset", "train", "notebook"}
 
 
 @app.post("/api/run/{step}")
-async def run_step(step: str, req: RunRequest = Body(default_factory=RunRequest), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
+async def run_step(step: str, req: RunRequest = RunRequest(), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     if step not in VALID_STEPS:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Unknown step '{step}'")
 
+    if step == "train":
+        # Institutional ML Pipeline
+        from services.feature_service import FeatureService
+        from services.ml_trainer_service import MLTrainerService
+        from services.execution_service import ExecutionService
+        
+        svc = ExecutionService(profile_name=req.profile)
+        tickers = list(svc.runtime_context.target_allocation.keys())
+        
+        fs = FeatureService()
+        ts = MLTrainerService()
+        
+        # Get hyperparameters from strategy_params
+        params = (req.strategy_params or {}).copy()
+        ui_dataset = params.pop("dataset_name", "live_sync")
+        
+        if ui_dataset == "live_sync":
+            # Generate new data from Yahoo Finance
+            ds_name = f"train_{req.profile or 'default'}_{perf_counter()}"
+            fs.create_gold_bundle(tickers, ds_name)
+        else:
+            # Use existing Gold dataset
+            ds_name = ui_dataset
+        
+        result = ts.train_model(ds_name, **params)
+        return {"ok": True, "message": f"Model trained on {ds_name}", "result": result}
+
     if step == "init":
+
         args = ["main.py"]
         if req.profile:
             args += ["--profile", req.profile]
         args += ["init", "--force"]
         if req.initial_capital:
             args += ["--initial-capital", str(req.initial_capital)]
+    elif step == "notebook":
+        import tempfile
+        code = (req.strategy_params or {}).get("code", "")
+        # Use a temporary file outside the project root to avoid triggering uvicorn reload
+        # We need a stable-ish path if we want to debug, but temp is safer for reload
+        tmp_dir = Path(tempfile.gettempdir()) / "prediction_wallet_research"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        script_path = tmp_dir / f"research_{perf_counter()}.py"
+        script_path.write_text(code, encoding="utf-8")
+        args = [str(script_path)]
     elif step == "reset":
         # Reset is a specialized init that clears everything
         args = ["main.py"]

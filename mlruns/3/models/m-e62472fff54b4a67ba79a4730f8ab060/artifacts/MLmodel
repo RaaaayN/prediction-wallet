@@ -1,0 +1,23 @@
+artifact_path: /home/rayan/Documents/GitHub/prediction-wallet/mlruns/3/models/m-e62472fff54b4a67ba79a4730f8ab060/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.14.0
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.8.0
+    skops_trusted_types: null
+mlflow_version: 3.11.1
+model_id: m-e62472fff54b4a67ba79a4730f8ab060
+model_size_bytes: 324648
+model_uuid: m-e62472fff54b4a67ba79a4730f8ab060
+prompts: null
+run_id: c9a71814c87a4c71809d1a48d4f9a7e1
+utc_time_created: '2026-04-19 13:17:55.008198'

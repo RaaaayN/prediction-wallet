@@ -32,3 +32,42 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
 }
+
+/* Notebook cells: VS Code–style Python token colors on dark background */
+@layer components {
+  .notebook-python-editor {
+    color: #d4d4d4;
+  }
+  .notebook-python-editor .token.comment {
+    color: #6a9955;
+  }
+  .notebook-python-editor .token.string {
+    color: #ce9178;
+  }
+  .notebook-python-editor .token.keyword {
+    color: #569cd6;
+  }
+  .notebook-python-editor .token.operator,
+  .notebook-python-editor .token.punctuation {
+    color: #d4d4d4;
+  }
+  .notebook-python-editor .token.function {
+    color: #dcdcaa;
+  }
+  .notebook-python-editor .token.class-name {
+    color: #4ec9b0;
+  }
+  .notebook-python-editor .token.number {
+    color: #b5cea8;
+  }
+  .notebook-python-editor .token.builtin,
+  .notebook-python-editor .token.constant {
+    color: #4ec9b0;
+  }
+  .notebook-python-editor .token.boolean {
+    color: #569cd6;
+  }
+  .notebook-python-editor .token.decorator {
+    color: #dcdcaa;
+  }
+}

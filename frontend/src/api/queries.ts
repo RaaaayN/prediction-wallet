@@ -353,5 +353,86 @@ export const useDeployModel = () => {
   });
 };
 
+export const useTrainModel = () => {
+  return useMutation({
+    mutationFn: async ({ profile, params }: { profile: string; params?: any }) => {
+      const { data } = await apiClient.post(`/run/train?profile=${profile}`, {
+        strategy_params: params
+      });
+      return data;
+    }
+  });
+};
+
+export const useAlphaScript = (name: string = "alpha_factory.py") => {
+  return useQuery({
+    queryKey: ['alpha-script', name],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/research/scripts/${name}`);
+      return data.content as string;
+    },
+  });
+};
+
+export const useAlphaScriptsList = () => {
+  return useQuery({
+    queryKey: ['alpha-scripts-list'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<string[]>('/research/scripts');
+      return data;
+    },
+  });
+};
+
+export const useSaveAlphaScript = () => {
+  return useMutation({
+    mutationFn: async ({ name, content, activate }: { name: string; content: string; activate?: boolean }) => {
+      const { data } = await apiClient.post('/research/scripts', { name, content, activate });
+      return data;
+    }
+  });
+};
+
+export const useGoldDatasets = () => {
+  return useQuery({
+    queryKey: ['gold-datasets'],
+    queryFn: async () => {
+      const { data } = await apiClient.get<string[]>('/data/lake/gold');
+      return data;
+    },
+  });
+};
+
+export const useImportData = () => {
+  return useMutation({
+    mutationFn: async ({ name, records }: { name: string; records: any[] }) => {
+      const { data } = await apiClient.post(`/research/data/import?dataset_name=${name}`, { records });
+      return data;
+    }
+  });
+};
+
+export const useGoldDatasetHead = (name: string) => {
+  return useQuery({
+    queryKey: ['gold-dataset-head', name],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/data/lake/gold/${name}/head`);
+      return data;
+    },
+    enabled: !!name && name !== 'live_market_cache'
+  });
+};
+
+export const useResearchTemplates = () => {
+  return useQuery({
+    queryKey: ['research-templates'],
+    queryFn: async () => {
+      const { data } = await apiClient.get('/research/templates');
+      return data;
+    },
+  });
+};
+
+
 
 
