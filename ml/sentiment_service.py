@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from typing import List, Dict, Optional
 import numpy as np
 
@@ -13,15 +11,19 @@ class SentimentAnalysisService:
     def __init__(self, model_name: str = "ProsusAI/finbert", use_mock: bool = False):
         self.model_name = model_name
         self.use_mock = use_mock
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.tokenizer = None
         self.model = None
+        self.device = None
         
         if not use_mock:
             self._load_model()
 
     def _load_model(self):
         """Lazy load the model and tokenizer."""
+        import torch
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification
+        
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Loading {self.model_name} on {self.device}...")
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name).to(self.device)
@@ -36,15 +38,22 @@ class SentimentAnalysisService:
         if self.use_mock:
             # Deterministic mock based on text content
             low_text = text.lower()
-            if any(w in low_text for w in ["bullish", "growth", "profit", "up"]):
+            if any(w in low_text for w in ["bullish", "growth", "profit", "up", "buy", "win", "positive"]):
                 return {"positive": 0.8, "negative": 0.1, "neutral": 0.1, "composite": 0.7}
-            if any(w in low_text for w in ["bearish", "loss", "crash", "down"]):
+            if any(w in low_text for w in ["bearish", "loss", "crash", "down", "sell", "risk", "negative"]):
                 return {"positive": 0.1, "negative": 0.8, "neutral": 0.1, "composite": -0.7}
-            return {"positive": 0.2, "negative": 0.2, "neutral": 0.6, "composite": 0.0}
+            
+            # Slightly randomized neutral for "alive" feel in demo
+            import hashlib
+            h = int(hashlib.md5(text.encode()).hexdigest(), 16)
+            random_offset = (h % 20 - 10) / 100.0 # -0.1 to +0.1
+            
+            return {"positive": 0.2, "negative": 0.2, "neutral": 0.6, "composite": random_offset}
 
         if not self.model:
             self._load_model()
 
+        import torch
         inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding=True).to(self.device)
         with torch.no_grad():
             outputs = self.model(**inputs)
