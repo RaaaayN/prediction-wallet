@@ -92,8 +92,8 @@ export const useObserve = () => {
   return useMutation({
     mutationFn: async ({ strategy, mode, profile }: { strategy: string; mode: string; profile: string }) => {
       const { data } = await apiClient.post<CycleObservation>(`/runner/observe`, {
-        strategy_name: strategy,
-        execution_mode: mode,
+        strategy: strategy,
+        mode: mode,
       }, {
         params: { profile }
       });
