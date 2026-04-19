@@ -1,14 +1,23 @@
 import { useState, useMemo, useEffect, type KeyboardEvent } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { 
+import {
   useExperiments, 
   useStrategies, 
   useRunBacktest, 
   useDeployModel, 
   useResearchTemplates,
   useGoldDatasets,
-  useGoldDatasetHead
+  useGoldDatasetHead,
+  useResearchNotebooks,
+  useResearchNotebook,
+  useCreateResearchNotebook,
+  useUpdateResearchNotebook,
+  useDuplicateResearchNotebook,
+  useActivateResearchNotebook,
+  useDeleteResearchNotebook,
+  type NotebookCell,
+  type ResearchNotebookSummary
 } from "@/api/queries";
 import {
   Activity, PlayCircle, Loader2,
@@ -25,35 +34,23 @@ const Editor =
     ? EditorImport
     : (EditorImport as { default: typeof EditorImport }).default;
 
-interface LogLine {
-  line?: string;
-  exit?: number;
-}
-
-interface NotebookCell {
-  id: string;
-  type: 'code' | 'markdown';
-  content: string;
-  output: LogLine[];
-}
-
 const INITIAL_CELLS: NotebookCell[] = [
   {
     id: "cell-1",
     type: "code",
-    content: "# STEP 1: DATA INGESTION\nimport pandas as pd\nfrom market.fetcher import MarketDataService\n\ntickers = ['AAPL', 'MSFT', 'BTC-USD']\nmkt = MarketDataService()\nprint(f'Loading data for {tickers}...')\n\ndata = {t: mkt.get_historical(t, days=365) for t in tickers}\nprint('✓ Dataset Ready.')",
+    content: "# STEP 1: DATA INGESTION\nimport pandas as pd\nfrom market.fetcher import MarketDataService\n\ntickers = ['AAPL', 'MSFT', 'BTC-USD']\nmkt = MarketDataService()\nprice_frames = {}\nfor ticker in tickers:\n    frame = mkt.get_historical(ticker, days=365)\n    if frame is not None and not frame.empty:\n        frame['Ticker'] = ticker\n        price_frames[ticker] = frame\n        print(f'Loaded {ticker}: {len(frame)} rows')\nif not price_frames:\n    idx = pd.date_range(end=pd.Timestamp.today(), periods=252, freq='B')\n    import numpy as np\n    base = np.linspace(0, 12, len(idx))\n    close = 100 + np.sin(base) * 5 + np.linspace(0, 3, len(idx))\n    open_ = close + np.cos(base) * 0.5\n    for ticker in tickers:\n        synthetic = pd.DataFrame({\n            'Open': open_,\n            'High': close + 1.5,\n            'Low': close - 1.5,\n            'Close': close,\n            'Volume': [1_000_000] * len(idx),\n        }, index=idx)\n        synthetic['Ticker'] = ticker\n        price_frames[ticker] = synthetic\n    print('✓ Using synthetic fallback market data')\nprint(f'✓ Ingested {len(price_frames)} assets')",
     output: []
   },
   {
     id: "cell-2",
     type: "code",
-    content: "# STEP 2: QUANT FEATURES\nfrom market.fetcher import add_technical_indicators\n\nfor t, df in data.items():\n    df = add_technical_indicators(df)\n    # Logic: 1-day prediction target\n    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n    data[t] = df.dropna()\nprint(f'✓ Feature Engineering Complete for {len(data)} assets.')",
+    content: "# STEP 2: QUANT FEATURES\nfrom market.fetcher import add_technical_indicators\n\nfeature_frames = {}\nfor ticker, frame in price_frames.items():\n    enriched = add_technical_indicators(frame)\n    enriched['factor_momentum'] = enriched['Close'].pct_change(10)\n    enriched['factor_volatility'] = enriched['Close'].pct_change().rolling(20).std()\n    enriched['target'] = (enriched['Close'].shift(-1) > enriched['Close']).astype(int)\n    feature_frames[ticker] = enriched.dropna()\nprint(f'✓ Built quant features for {len(feature_frames)} assets')",
     output: []
   },
   {
     id: "cell-3",
     type: "code",
-    content: "# STEP 3: MODEL TRAINING\nimport mlflow.sklearn\nfrom sklearn.ensemble import RandomForestClassifier\n\n# Flatten multi-ticker data\ndataset = pd.concat(data.values())\nX = dataset[['SMA20', 'RSI14', 'MACD']]\ny = dataset['Target']\n\nmlflow.set_tracking_uri('sqlite:///data/mlflow.db')\nwith mlflow.start_run(run_name='Notebook_Alpha_Test'):\n    model = RandomForestClassifier(n_estimators=50).fit(X, y)\n    print(f'Model Accuracy: {model.score(X, y):.2%}')\n    mlflow.sklearn.log_model(model, 'alpha_model', registered_model_name='Notebook_Alpha')",
+    content: "# STEP 3: MODEL TRAINING\nimport pandas as pd\nimport mlflow.sklearn\nfrom sklearn.ensemble import RandomForestClassifier\nfrom sklearn.metrics import accuracy_score\n\n# Flatten multi-ticker data\ndataset = pd.concat(feature_frames.values(), ignore_index=True)\nX = dataset[['factor_momentum', 'factor_volatility', 'RSI14', 'MACD']]\ny = dataset['target']\n\nmlflow.set_tracking_uri('sqlite:///data/mlflow.db')\nwith mlflow.start_run(run_name='Notebook_Alpha_Test'):\n    model = RandomForestClassifier(n_estimators=50, random_state=42)\n    model.fit(X, y)\n    predictions = model.predict(X)\n    print(f'Model Accuracy: {accuracy_score(y, predictions):.2%}')\n    mlflow.sklearn.log_model(model, name='alpha_model', registered_model_name='Notebook_Alpha')",
     output: []
   }
 ];
@@ -67,10 +64,16 @@ export function Experiments() {
   const { data: strategies } = useStrategies();
   const { data: templates } = useResearchTemplates();
   const { data: goldDatasets } = useGoldDatasets();
+  const { data: notebookLibrary } = useResearchNotebooks(profile);
 
   // Mutations
   const runBacktest = useRunBacktest();
   const deployModel = useDeployModel();
+  const createNotebook = useCreateResearchNotebook(profile);
+  const updateNotebook = useUpdateResearchNotebook(profile);
+  const duplicateNotebook = useDuplicateResearchNotebook(profile);
+  const activateNotebook = useActivateResearchNotebook(profile);
+  const deleteNotebook = useDeleteResearchNotebook(profile);
 
   // Component State
   const [activeTab, setActiveTab] = useState<'pipeline' | 'registry'>('pipeline');
@@ -78,6 +81,13 @@ export function Experiments() {
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [isRunningAll, setIsRunningAll] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [selectedNotebookId, setSelectedNotebookId] = useState<string | null>(null);
+  const [notebookSessionId, setNotebookSessionId] = useState(() => `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [notebookName, setNotebookName] = useState("Untitled Notebook");
+  const [notebookDescription, setNotebookDescription] = useState("");
+  const [isNotebookDirty, setIsNotebookDirty] = useState(false);
+  const [isSavingNotebook, setIsSavingNotebook] = useState(false);
   
   // Data Preview State
   const [previewDataset, setPreviewDataset] = useState<string>("");
@@ -95,6 +105,57 @@ export function Experiments() {
     }
   }, [selectedStrategy, strategies]);
 
+  const templateList = Array.isArray(templates) ? templates : [];
+  const selectedTemplate = useMemo(
+    () => templateList.find((template: any) => template.id === selectedTemplateId) ?? templateList[0] ?? null,
+    [selectedTemplateId, templateList]
+  );
+
+  useEffect(() => {
+    if (templateList.length === 0) {
+      setSelectedTemplateId(null);
+      return;
+    }
+    if (!selectedTemplateId || !templateList.some((template: any) => template.id === selectedTemplateId)) {
+      setSelectedTemplateId(templateList[0].id);
+    }
+  }, [selectedTemplateId, templateList]);
+
+  useEffect(() => {
+    const activeId = notebookLibrary?.active_notebook_id ?? null;
+    if (activeId && activeId !== selectedNotebookId) {
+      setSelectedNotebookId(activeId);
+    }
+  }, [notebookLibrary?.active_notebook_id, selectedNotebookId]);
+
+  const activeNotebook = useResearchNotebook(profile, selectedNotebookId);
+
+  useEffect(() => {
+    if (activeNotebook.data) {
+      setNotebookName(activeNotebook.data.name);
+      setNotebookDescription(activeNotebook.data.description || "");
+      setCells(activeNotebook.data.cells?.length ? activeNotebook.data.cells : INITIAL_CELLS);
+      setIsNotebookDirty(false);
+    } else if (!selectedNotebookId) {
+      setCells(INITIAL_CELLS);
+      setNotebookName("Untitled Notebook");
+      setNotebookDescription("");
+      setIsNotebookDirty(false);
+    }
+  }, [activeNotebook.data, selectedNotebookId]);
+
+  useEffect(() => {
+    if (selectedNotebookId) {
+      setNotebookSessionId(selectedNotebookId);
+    }
+  }, [selectedNotebookId]);
+
+  useEffect(() => {
+    if (!notebookLibrary?.notebooks?.length && !selectedNotebookId) {
+      setCells(INITIAL_CELLS);
+    }
+  }, [notebookLibrary?.notebooks, selectedNotebookId]);
+
   const handleRunExperiment = async () => {
     try {
       await runBacktest.mutateAsync({ 
@@ -111,41 +172,9 @@ export function Experiments() {
   };
 
   const runFullNotebook = async () => {
-    const fullCode = cells.map(c => c.content).join("\n\n");
     setIsRunningAll(true);
-    setCells(prev => prev.map(c => ({ ...c, output: [] })));
-    
     try {
-      const response = await fetch(`/api/run/notebook`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-API-KEY': localStorage.getItem('prediction_wallet_api_key') || ''
-        },
-        body: JSON.stringify({ strategy_params: { code: fullCode } })
-      });
-
-      if (!response.body) return;
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const messages = chunk.split('\n\n').filter(m => m.trim());
-        const parsed = messages.map(msg => {
-          try { return JSON.parse(msg.replace(/^data: /, '')); } catch { return { line: msg }; }
-        });
-        
-        setCells(prev => {
-          const newCells = [...prev];
-          // For now, append all logs to the active cell or first cell
-          const targetIdx = activeCellId ? newCells.findIndex(c => c.id === activeCellId) : 0;
-          newCells[targetIdx].output = [...newCells[targetIdx].output, ...parsed];
-          return newCells;
-        });
-      }
+      await runNotebookCells(cells, cells.map((_, idx) => idx));
     } catch (e) {
       alert("Kernel Execution Error.");
     } finally {
@@ -154,9 +183,183 @@ export function Experiments() {
     }
   };
 
-  const loadTemplate = (content: string) => {
-    if(confirm("Replace notebook with template?")) {
-      setCells([{ id: `cell-${Date.now()}`, type: 'code', content, output: [] }]);
+  const runSingleCell = async (cellIndex: number) => {
+    if (!cells[cellIndex]) return;
+    setIsRunningAll(true);
+    try {
+      await runNotebookCells([cells[cellIndex]], [cellIndex]);
+    } finally {
+      setIsRunningAll(false);
+    }
+  };
+
+  const persistNotebook = async () => {
+    setIsSavingNotebook(true);
+    try {
+      let notebookId = selectedNotebookId;
+      if (selectedNotebookId) {
+        await updateNotebook.mutateAsync({
+          notebookId: selectedNotebookId,
+          payload: {
+            name: notebookName,
+            description: notebookDescription,
+            cells,
+            activate: true,
+          },
+        });
+      } else {
+        const created = await createNotebook.mutateAsync({
+          name: notebookName,
+          description: notebookDescription,
+          cells,
+          activate: true,
+        });
+        notebookId = created.id;
+        setSelectedNotebookId(created.id);
+        setNotebookSessionId(created.id);
+      }
+      setIsNotebookDirty(false);
+      await queryClient.invalidateQueries({ queryKey: ['research-notebooks', profile] });
+      if (notebookId) {
+        await queryClient.invalidateQueries({ queryKey: ['research-notebook', profile, notebookId] });
+      }
+    } catch (error) {
+      alert("Notebook save failed.");
+    } finally {
+      setIsSavingNotebook(false);
+    }
+  };
+
+  const handleSelectNotebook = async (notebook: ResearchNotebookSummary) => {
+    if (isNotebookDirty && !confirm("Discard current notebook changes and switch?")) {
+      return;
+    }
+    setSelectedNotebookId(notebook.id);
+    setNotebookSessionId(notebook.id);
+    setNotebookName(notebook.name);
+    setNotebookDescription(notebook.description || "");
+    setIsNotebookDirty(false);
+    await activateNotebook.mutateAsync(notebook.id);
+    await queryClient.invalidateQueries({ queryKey: ['research-notebooks', profile] });
+  };
+
+  const handleNewNotebook = () => {
+    if (isNotebookDirty && !confirm("Discard current notebook changes and start a new notebook?")) {
+      return;
+    }
+    setSelectedNotebookId(null);
+    setNotebookSessionId(`draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    setNotebookName("Untitled Notebook");
+    setNotebookDescription("");
+    setCells(INITIAL_CELLS);
+    setActiveCellId(null);
+    setIsNotebookDirty(false);
+  };
+
+  const handleDuplicateNotebook = async () => {
+    if (!selectedNotebookId) {
+      alert("Save the notebook first so it can be duplicated.");
+      return;
+    }
+    const nextName = window.prompt("Duplicate notebook name", `${notebookName} Copy`)?.trim();
+    if (!nextName) return;
+    const duplicated = await duplicateNotebook.mutateAsync({
+      notebookId: selectedNotebookId,
+      name: nextName,
+    });
+    setSelectedNotebookId(duplicated.id);
+    setNotebookSessionId(duplicated.id);
+    await queryClient.invalidateQueries({ queryKey: ['research-notebooks', profile] });
+    await queryClient.invalidateQueries({ queryKey: ['research-notebook', profile, duplicated.id] });
+  };
+
+  const handleDeleteNotebook = async () => {
+    if (!selectedNotebookId) {
+      alert("There is no saved notebook to delete yet.");
+      return;
+    }
+    if (!confirm(`Delete notebook "${notebookName}"? This cannot be undone.`)) {
+      return;
+    }
+    await deleteNotebook.mutateAsync(selectedNotebookId);
+    setSelectedNotebookId(null);
+    setNotebookSessionId(`draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    setNotebookName("Untitled Notebook");
+    setNotebookDescription("");
+    setCells(INITIAL_CELLS);
+    setIsNotebookDirty(false);
+    await queryClient.invalidateQueries({ queryKey: ['research-notebooks', profile] });
+  };
+
+  const templateCategory = (template: any) => {
+    const text = `${template?.name ?? ""} ${template?.description ?? ""}`.toLowerCase();
+    if (text.includes("regression") || text.includes("logistic")) return "Regression";
+    if (text.includes("random forest") || text.includes("boost") || text.includes("gradient")) return "Ensemble";
+    if (text.includes("svm")) return "Kernel";
+    if (text.includes("classification")) return "Classification";
+    return "Research";
+  };
+
+  const templatePreview = (template: any) => {
+    const cells = Array.isArray(template?.cells) ? template.cells : [];
+    return cells
+      .map((cell: any, index: number) => {
+        const snippet = String(cell?.content ?? "")
+          .split("\n")
+          .slice(0, 4)
+          .join("\n");
+        return `# CELL ${index + 1}: ${String(cell?.type ?? "code").toUpperCase()}\n${snippet}`;
+      })
+      .join("\n\n");
+  };
+
+  const createNotebookFromTemplate = async (template: any) => {
+    if (!template) return;
+    const templateCells = Array.isArray(template?.cells) && template.cells.length > 0
+      ? template.cells.map((cell: any, index: number) => ({
+          id: cell.id || `cell-${Date.now()}-${index}`,
+          type: cell.type || "code",
+          content: String(cell.content ?? ""),
+          output: [],
+        }))
+      : [
+          {
+            id: `cell-${Date.now()}-1`,
+            type: "code",
+            content: String(template?.content ?? ""),
+            output: [],
+          },
+          {
+            id: `cell-${Date.now()}-2`,
+            type: "code",
+            content: "# STEP 2: QUANT FEATURES\n",
+            output: [],
+          },
+          {
+            id: `cell-${Date.now()}-3`,
+            type: "code",
+            content: "# STEP 3: MODEL TRAINING\n",
+            output: [],
+          },
+        ];
+    try {
+      const created = await createNotebook.mutateAsync({
+        name: `${template.name} Notebook`,
+        description: template.description || "Created from a research template",
+        cells: templateCells,
+        activate: true,
+      });
+      setSelectedNotebookId(created.id);
+      setNotebookSessionId(created.id);
+      setNotebookName(created.name);
+      setNotebookDescription(created.description || "");
+      setCells(created.cells?.length ? created.cells : INITIAL_CELLS);
+      setActiveCellId(null);
+      setIsNotebookDirty(false);
+      await queryClient.invalidateQueries({ queryKey: ['research-notebooks', profile] });
+      await queryClient.invalidateQueries({ queryKey: ['research-notebook', profile, created.id] });
+    } catch (error) {
+      alert("Template notebook creation failed.");
     }
   };
 
@@ -166,10 +369,14 @@ export function Experiments() {
     const newCells = [...cells];
     newCells.splice(idx + 1, 0, newCell);
     setCells(newCells);
+    setIsNotebookDirty(true);
   };
 
   const removeCell = (id: string) => {
-    if (cells.length > 1) setCells(cells.filter(c => c.id !== id));
+    if (cells.length > 1) {
+      setCells(cells.filter(c => c.id !== id));
+      setIsNotebookDirty(true);
+    }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>, id: string) => {
@@ -180,6 +387,7 @@ export function Experiments() {
       const end = target.selectionEnd;
       const val = target.value.substring(0, start) + "    " + target.value.substring(end);
       setCells((prev) => prev.map((c) => (c.id === id ? { ...c, content: val } : c)));
+      setIsNotebookDirty(true);
       setTimeout(() => {
         target.selectionStart = target.selectionEnd = start + 4;
       }, 0);
@@ -194,16 +402,79 @@ export function Experiments() {
       .slice(0, 3);
   }, [experiments]);
 
-  const totalExperiments = Array.isArray(experiments) ? experiments.length : 0;
-  const finishedExperiments = Array.isArray(experiments)
-    ? experiments.filter((run: any) => run.status === 'FINISHED').length
-    : 0;
-  const templateCount = Array.isArray(templates) ? templates.length : 0;
-  const datasetCount = Array.isArray(goldDatasets) ? goldDatasets.length : 0;
-  const topSharpe = leaderboard[0]?.metrics?.sharpe ?? null;
-  const averageSharpe = leaderboard.length
-    ? leaderboard.reduce((sum, run) => sum + (run.metrics?.sharpe || 0), 0) / leaderboard.length
-    : null;
+  const appendNotebookOutput = (cellIndex: number, message: Record<string, any>) => {
+    setCells((prev) => {
+      if (!Array.isArray(prev) || !prev[cellIndex]) return prev;
+      const next = [...prev];
+      next[cellIndex] = {
+        ...next[cellIndex],
+        output: [...(next[cellIndex].output || []), message],
+      };
+      return next;
+    });
+  };
+
+  const runNotebookCells = async (executionCells: NotebookCell[], cellIndexMap: number[]) => {
+    if (!executionCells.length) return;
+
+    setCells((prev) =>
+      prev.map((cell, idx) =>
+        cellIndexMap.includes(idx) ? { ...cell, output: [] } : cell
+      )
+    );
+
+    try {
+      const response = await fetch(`/api/run/notebook`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-KEY': localStorage.getItem('prediction_wallet_api_key') || ''
+        },
+        body: JSON.stringify({
+          notebook_id: notebookSessionId,
+          notebook_cells: executionCells.map((cell) => ({
+            id: cell.id,
+            type: cell.type,
+            content: cell.content,
+            output: [],
+          })),
+          strategy_params: {
+            kernel_id: notebookSessionId,
+          },
+        })
+      });
+
+      if (!response.body) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const messages = chunk.split('\n\n').filter(m => m.trim());
+
+        for (const msg of messages) {
+          try {
+            const parsed = JSON.parse(msg.replace(/^data: /, ''));
+            if (typeof parsed.cell_index === 'number' && typeof parsed.line === 'string') {
+              const targetIdx = cellIndexMap[parsed.cell_index] ?? parsed.cell_index;
+              appendNotebookOutput(targetIdx, {
+                line: parsed.line,
+                kind: parsed.kind,
+                execution_count: parsed.execution_count,
+              });
+            }
+          } catch {
+            const fallbackIdx = cellIndexMap[0] ?? 0;
+            appendNotebookOutput(fallbackIdx, { line: msg });
+          }
+        }
+      }
+    } catch (e) {
+      alert("Kernel Execution Error.");
+    }
+  };
 
   if (experimentsLoading) return (
     <div className="relative min-h-screen overflow-hidden bg-background flex items-center justify-center px-6">
@@ -220,7 +491,7 @@ export function Experiments() {
             </div>
           </div>
           <p className="max-w-xl text-sm md:text-base text-muted-foreground leading-relaxed">
-            Fetching runs, templates, and dataset previews so the workspace can render with the latest registry state.
+            Fetching notebooks, templates, and dataset previews so the workspace can render with the latest registry state.
           </p>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary/40">
             <div className="h-full w-1/2 animate-pulse rounded-full bg-gradient-to-r from-primary via-emerald-500 to-cyan-500" />
@@ -278,21 +549,6 @@ export function Experiments() {
                 </button>
               </div>
             </div>
-
-            <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {[
-                { label: 'Experiments', value: String(totalExperiments), hint: `${finishedExperiments} finished runs` },
-                { label: 'Top Sharpe', value: topSharpe !== null ? topSharpe.toFixed(2) : '—', hint: averageSharpe !== null ? `Avg of top runs: ${averageSharpe.toFixed(2)}` : 'Best finished run' },
-                { label: 'Templates', value: String(templateCount), hint: 'Notebook blueprints' },
-                { label: 'Gold datasets', value: String(datasetCount), hint: 'Previewable packs' },
-              ].map((item) => (
-                <div key={item.label} className="rounded-[2rem] border border-border/60 bg-background/70 px-5 py-4 shadow-lg">
-                  <div className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground">{item.label}</div>
-                  <div className="mt-3 text-3xl font-black tracking-tighter">{item.value}</div>
-                  <div className="mt-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground/80">{item.hint}</div>
-                </div>
-              ))}
-            </div>
           </div>
         </section>
 
@@ -300,6 +556,130 @@ export function Experiments() {
          <div className="grid gap-8 md:grid-cols-12 items-start px-2">
             {/* Context Sidebar */}
             <div className="md:col-span-3 space-y-6 sticky top-6">
+               <Card className="overflow-hidden rounded-[2.5rem] border-border/60 bg-card/70 shadow-2xl backdrop-blur-xl">
+                  <CardHeader className="border-b border-border/50 bg-secondary/10 px-8 py-6">
+                     <CardTitle className="flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground">
+                        <Layers className="h-4 w-4" /> Notebook
+                     </CardTitle>
+                     <CardDescription className="pt-3 text-left text-[13px] leading-relaxed text-muted-foreground">
+                        <span className="font-semibold text-foreground">{cells.length} cells</span>
+                        {" · "}
+                        {isNotebookDirty ? (
+                          <span className="text-amber-600">Unsaved changes</span>
+                        ) : (
+                          <span className="text-emerald-600">All changes saved</span>
+                        )}
+                        {" · "}
+                        {selectedNotebookId ? (
+                          <span className="text-primary">In the list below</span>
+                        ) : (
+                          <span>Draft — save to add it to the list below</span>
+                        )}
+                     </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-5 p-8">
+                     <div className="space-y-3">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Notebook Name</label>
+                        <input
+                          value={notebookName}
+                          onChange={(e) => {
+                            setNotebookName(e.target.value);
+                            setIsNotebookDirty(true);
+                          }}
+                          className="h-12 w-full rounded-2xl border-2 border-border/50 bg-background px-4 text-sm font-black outline-none transition-all focus:border-primary"
+                          placeholder="Untitled Notebook"
+                        />
+                     </div>
+                     <div className="space-y-3">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Description</label>
+                        <textarea
+                          value={notebookDescription}
+                          onChange={(e) => {
+                            setNotebookDescription(e.target.value);
+                            setIsNotebookDirty(true);
+                          }}
+                          className="min-h-24 w-full resize-none rounded-2xl border-2 border-border/50 bg-background px-4 py-3 text-sm outline-none transition-all focus:border-primary"
+                          placeholder="What does this notebook do?"
+                        />
+                     </div>
+                     <div className="grid grid-cols-1 gap-3">
+                        <Button
+                          className="h-14 rounded-[1.4rem] bg-primary font-black uppercase tracking-[0.22em] text-white transition-all hover:bg-primary/90"
+                          onClick={persistNotebook}
+                          disabled={isSavingNotebook || createNotebook.isPending || updateNotebook.isPending}
+                        >
+                          {selectedNotebookId ? "Save Notebook" : "Create Notebook"}
+                        </Button>
+                        <div className="grid grid-cols-2 gap-3">
+                          <Button
+                            variant="outline"
+                            className="h-12 rounded-[1.2rem] border-dashed border-2 border-border/60 text-[11px] font-black uppercase tracking-[0.22em]"
+                            onClick={handleNewNotebook}
+                          >
+                            New Draft
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="h-12 rounded-[1.2rem] border-2 border-border/60 text-[11px] font-black uppercase tracking-[0.22em]"
+                            onClick={handleDuplicateNotebook}
+                            disabled={!selectedNotebookId || duplicateNotebook.isPending}
+                          >
+                            Duplicate
+                          </Button>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          className="h-12 rounded-[1.2rem] border-2 border-transparent text-[11px] font-black uppercase tracking-[0.22em] text-destructive transition-all hover:border-destructive/20 hover:bg-destructive/5"
+                          onClick={handleDeleteNotebook}
+                          disabled={!selectedNotebookId || deleteNotebook.isPending}
+                        >
+                          Delete Notebook
+                        </Button>
+                     </div>
+                     <div className="space-y-2">
+                        <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground">
+                          <span>Saved notebooks</span>
+                          <span>{Array.isArray(notebookLibrary?.notebooks) ? notebookLibrary.notebooks.length : 0}</span>
+                        </div>
+                        <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                          {Array.isArray(notebookLibrary?.notebooks) && notebookLibrary.notebooks.length > 0 ? notebookLibrary.notebooks.map((notebook) => (
+                            <button
+                              key={notebook.id}
+                              onClick={() => handleSelectNotebook(notebook)}
+                              className={`w-full rounded-2xl border px-4 py-3 text-left transition-all ${
+                                selectedNotebookId === notebook.id
+                                  ? 'border-primary bg-primary/10 shadow-lg'
+                                  : 'border-border/50 bg-background/60 hover:border-primary/20 hover:bg-primary/5'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-xs font-black uppercase tracking-wide">{notebook.name}</div>
+                                  <div className="mt-1 line-clamp-2 text-[9px] font-bold uppercase opacity-60">
+                                    {notebook.description || "No description"}
+                                  </div>
+                                </div>
+                                {notebook.is_active && (
+                                  <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-emerald-600">
+                                    Active
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-3 flex items-center justify-between text-[9px] font-black uppercase tracking-[0.25em] text-muted-foreground/70">
+                                <span>{notebook.cell_count} cells</span>
+                                <span>{new Date(notebook.updated_at).toLocaleDateString()}</span>
+                              </div>
+                            </button>
+                          )) : (
+                            <div className="rounded-2xl border border-dashed border-border/60 bg-background/60 px-5 py-6 text-xs font-semibold text-muted-foreground">
+                              No saved notebooks yet. Create one from the current draft.
+                            </div>
+                          )}
+                        </div>
+                     </div>
+                  </CardContent>
+               </Card>
+
                <Card className="overflow-hidden rounded-[2.5rem] border-border/60 bg-card/70 shadow-2xl backdrop-blur-xl">
                   <CardHeader className="border-b border-border/50 bg-secondary/10 px-8 py-6">
                      <CardTitle className="flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground">
@@ -317,21 +697,79 @@ export function Experiments() {
                      
                      <div className="mx-4 h-[2px] rounded-full bg-border/30" />
                      
+                     {selectedTemplate ? (
+                       <div className="space-y-4 rounded-[2rem] border border-border/60 bg-background/60 p-5">
+                         <div className="flex items-start justify-between gap-3">
+                           <div className="min-w-0">
+                             <div className="flex flex-wrap items-center gap-2">
+                               <span className="rounded-full bg-primary/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.3em] text-primary">
+                                 {templateCategory(selectedTemplate)}
+                               </span>
+                               <span className="rounded-full bg-secondary px-3 py-1 text-[9px] font-black uppercase tracking-[0.3em] text-muted-foreground">
+                                 Selected template
+                               </span>
+                             </div>
+                             <div className="mt-3 truncate text-sm font-black uppercase tracking-wide text-foreground">
+                               {selectedTemplate.name}
+                             </div>
+                             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                               {selectedTemplate.description}
+                             </p>
+                             <div className="mt-3 flex flex-wrap gap-2">
+                               {["Ingestion", "Quant Features", "Model Training"].map((label) => (
+                                 <span key={label} className="rounded-full bg-muted px-3 py-1 text-[9px] font-black uppercase tracking-[0.25em] text-muted-foreground">
+                                   {label}
+                                 </span>
+                               ))}
+                             </div>
+                           </div>
+                           <Button
+                             className="h-11 rounded-[1.2rem] bg-primary px-4 text-[10px] font-black uppercase tracking-[0.22em] text-white hover:bg-primary/90"
+                             onClick={() => createNotebookFromTemplate(selectedTemplate)}
+                             disabled={createNotebook.isPending}
+                           >
+                             Create 3-Cell Notebook
+                           </Button>
+                         </div>
+                         <div className="rounded-[1.5rem] border border-white/5 bg-black/50 p-4">
+                           <div className="mb-3 text-[9px] font-black uppercase tracking-[0.3em] text-muted-foreground">Code Preview</div>
+                           <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-slate-300">
+                             {templatePreview(selectedTemplate)}
+                           </pre>
+                         </div>
+                       </div>
+                     ) : (
+                       <div className="rounded-2xl border border-dashed border-border/60 bg-background/60 px-5 py-6 text-xs font-semibold text-muted-foreground">
+                         No notebook template selected.
+                       </div>
+                     )}
+
                      <div className="space-y-4">
-                        <label className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-muted-foreground"><FileCode className="h-4 w-4" /> Logic Blueprints</label>
+                        <label className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-muted-foreground"><FileCode className="h-4 w-4" /> Available Templates</label>
                         <div className="grid grid-cols-1 gap-3">
                            {Array.isArray(templates) && templates.length > 0 ? templates.map((t: any) => (
                               <button
                                 key={t.id}
-                                onClick={() => loadTemplate(t.content)}
-                                className="group rounded-2xl border border-transparent bg-secondary/20 px-5 py-4 text-left transition-all hover:border-primary/20 hover:bg-primary/10"
+                                onClick={() => setSelectedTemplateId(t.id)}
+                                className={`group rounded-2xl border px-5 py-4 text-left transition-all ${
+                                  selectedTemplate?.id === t.id
+                                    ? 'border-primary bg-primary/10 shadow-lg'
+                                    : 'border-transparent bg-secondary/20 hover:border-primary/20 hover:bg-primary/10'
+                                }`}
                               >
-                                 <div className="text-xs font-black text-foreground transition-colors group-hover:text-primary">{t.name}</div>
-                                 <div className="mt-1 line-clamp-2 text-[9px] font-bold uppercase opacity-60">{t.description}</div>
+                                 <div className="flex items-start justify-between gap-3">
+                                   <div className="min-w-0">
+                                     <div className="text-xs font-black text-foreground transition-colors group-hover:text-primary">{t.name}</div>
+                                     <div className="mt-1 line-clamp-2 text-[9px] font-bold uppercase opacity-60">{t.description}</div>
+                                   </div>
+                                   <span className="rounded-full bg-background/80 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.25em] text-muted-foreground">
+                                     {templateCategory(t)}
+                                   </span>
+                                 </div>
                               </button>
                            )) : (
                               <div className="rounded-2xl border border-dashed border-border/60 bg-background/60 px-5 py-6 text-xs font-semibold text-muted-foreground">
-                                No template loaded yet. Populate the research templates endpoint to unlock quick starts.
+                                No notebook templates loaded yet. Populate the research templates endpoint to unlock quick starts.
                               </div>
                            )}
                         </div>
@@ -392,20 +830,8 @@ export function Experiments() {
                </Card>
             </div>
 
-            {/* Notebook Interface */}
+            {/* Notebook Interface — title, status, and actions live only in the Notebook card (left) */}
             <div className="md:col-span-9 space-y-8">
-               <div className="rounded-[2.5rem] border border-border/60 bg-card/65 p-6 shadow-xl backdrop-blur-xl">
-                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                   <div>
-                     <div className="text-[10px] font-black uppercase tracking-[0.35em] text-muted-foreground">Notebook</div>
-                     <div className="mt-2 text-2xl font-black tracking-tighter uppercase">Research Draft</div>
-                   </div>
-                   <div className="rounded-full border border-border/60 bg-background/70 px-4 py-2 text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground">
-                     {cells.length} cells
-                   </div>
-                 </div>
-               </div>
-
                {cells.map((cell, idx) => (
                   <div key={cell.id} className="relative group/cell">
                      <div className="absolute -left-16 top-4 bottom-4 w-12 flex flex-col items-center gap-4 opacity-0 group-hover/cell:opacity-100 transition-all">
@@ -421,16 +847,25 @@ export function Experiments() {
                               <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/70">Quant Kernel v1.0</span>
                            </div>
                            <div className="flex items-center gap-3">
-                              <button className="rounded-lg p-2 text-emerald-500 transition-all hover:bg-emerald-500/10"><PlayCircle className="h-5 w-5" /></button>
+                              <button
+                                className="rounded-lg p-2 text-emerald-500 transition-all hover:bg-emerald-500/10"
+                                onClick={() => runSingleCell(idx)}
+                                disabled={isRunningAll}
+                              >
+                                <PlayCircle className="h-5 w-5" />
+                              </button>
                            </div>
                         </div>
                         <CardContent className="bg-[#080808] p-0">
                            <Editor
                               value={cell.content}
                               onValueChange={(code) =>
-                                setCells((prev) =>
+                                {
+                                  setIsNotebookDirty(true);
+                                  setCells((prev) =>
                                   prev.map((c) => (c.id === cell.id ? { ...c, content: code } : c))
-                                )
+                                  );
+                                }
                               }
                               onKeyDown={(e) =>
                                 handleKeyDown(e as KeyboardEvent<HTMLTextAreaElement>, cell.id)
@@ -458,9 +893,9 @@ export function Experiments() {
                               <div className="space-y-1">
                                  {cell.output.map((o, i) => (
                                     <div key={i} className={
-                                      o.line?.includes('ERROR') || o.line?.includes('Traceback') ? 'text-red-400 bg-red-500/5 px-2 rounded border-l-2 border-red-500 my-1' : 
-                                      o.line?.startsWith('---') ? 'text-blue-400 font-black mt-4' :
-                                      o.line?.startsWith('✓') ? 'text-emerald-400 font-bold' :
+                                      o.kind === 'stderr' || o.line?.includes('ERROR') || o.line?.includes('Traceback') ? 'text-red-400 bg-red-500/5 px-2 rounded border-l-2 border-red-500 my-1' : 
+                                      o.kind === 'cell_start' || o.line?.startsWith('---') ? 'text-blue-400 font-black mt-4' :
+                                      o.kind === 'cell_end' || o.line?.startsWith('✓') ? 'text-emerald-400 font-bold' :
                                       'text-zinc-500'
                                     }>
                                        {o.line}

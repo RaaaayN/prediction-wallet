@@ -1,0 +1,30 @@
+{
+  "id": "institutional-ml-pipeline-notebook-5335a449",
+  "profile": "balanced",
+  "name": "Institutional ML Pipeline Notebook",
+  "description": "Comprehensive pipeline: Loading -> Features -> Scaling -> Training -> MLflow.",
+  "cell_count": 3,
+  "created_at": "2026-04-19T15:29:15.204607+00:00",
+  "updated_at": "2026-04-19T15:29:15.204607+00:00",
+  "is_active": false,
+  "cells": [
+    {
+      "id": "pipeline-cell-1",
+      "type": "code",
+      "content": "# STEP 1: DATA INGESTION\nimport pandas as pd\nfrom market.fetcher import MarketDataService\n\ntickers = ['AAPL', 'MSFT', 'NVDA', 'BTC-USD']\nmkt = MarketDataService()\ndfs = []\nfor ticker in tickers:\n    frame = mkt.get_historical(ticker, days=500)\n    if frame is not None and not frame.empty:\n        frame['Ticker'] = ticker\n        dfs.append(frame)\n        print(f'\u2713 Ingested {ticker}')\nif not dfs:\n    idx = pd.date_range(end=pd.Timestamp.today(), periods=500, freq='B')\n    import numpy as np\n    base = np.linspace(0, 20, len(idx))\n    close = 100 + np.sin(base) * 8 + np.linspace(0, 4, len(idx))\n    open_ = close + np.cos(base) * 0.75\n    for ticker in tickers:\n        synthetic = pd.DataFrame({\n            'Open': open_,\n            'High': close + 1.75,\n            'Low': close - 1.75,\n            'Close': close,\n            'Volume': [2_000_000] * len(idx),\n        }, index=idx)\n        synthetic['Ticker'] = ticker\n        dfs.append(synthetic)\n    print('\u2713 Using synthetic fallback market data')\nprint(f'\u2713 Ingested {len(dfs)} assets')\n",
+      "output": []
+    },
+    {
+      "id": "pipeline-cell-2",
+      "type": "code",
+      "content": "# STEP 2: QUANT FEATURES\nimport pandas as pd\nfrom market.fetcher import add_technical_indicators\n\nprocessed = []\nfor frame in dfs:\n    enriched = add_technical_indicators(frame)\n    enriched['mom_10'] = enriched['Close'].pct_change(10)\n    enriched['vol_20'] = enriched['Close'].pct_change().rolling(20).std()\n    enriched['target'] = (enriched['Close'].shift(-1) > enriched['Close']).astype(int)\n    processed.append(enriched.dropna())\ndataset = pd.concat(processed, ignore_index=True)\nprint(f'\u2713 Built quant features on {len(dataset)} rows')\n",
+      "output": []
+    },
+    {
+      "id": "pipeline-cell-3",
+      "type": "code",
+      "content": "# STEP 3: MODEL TRAINING\nimport pandas as pd\nimport mlflow\nimport mlflow.sklearn\nfrom sklearn.ensemble import GradientBoostingClassifier\nfrom sklearn.metrics import accuracy_score, precision_score, recall_score\nfrom sklearn.preprocessing import StandardScaler\n\nfeatures = ['SMA20', 'RSI14', 'MACD', 'mom_10', 'vol_20']\nX = dataset[features]\ny = dataset['target']\nscaler = StandardScaler()\nX_scaled = scaler.fit_transform(X)\n\nmlflow.set_tracking_uri('sqlite:///data/mlflow.db')\nwith mlflow.start_run(run_name='Institutional_GBM_Alpha'):\n    model = GradientBoostingClassifier(n_estimators=100)\n    model.fit(X_scaled, y)\n    predictions = model.predict(X_scaled)\n    print('\ud83d\ude80 SUCCESS: Model registered.')\n    print('--- SCORECARD ---')\n    print(f'Samples: {len(X)}')\n    print(f'Accuracy: {accuracy_score(y, predictions):.2%}')\n    print(f'Precision: {precision_score(y, predictions):.2%}')\n    print(f'Recall: {recall_score(y, predictions):.2%}')\n    mlflow.sklearn.log_model(model, name='alpha_model', registered_model_name='Production_Alpha')\n",
+      "output": []
+    }
+  ]
+}

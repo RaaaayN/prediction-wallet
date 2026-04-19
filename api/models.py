@@ -126,6 +126,42 @@ class ReportInfo(BaseModel):
     url: str
 
 
+class NotebookCellRow(BaseModel):
+    id: str
+    type: str
+    content: str
+    output: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class NotebookSummary(BaseModel):
+    id: str
+    profile: str
+    name: str
+    description: str = ""
+    cell_count: int
+    created_at: str
+    updated_at: str
+    is_active: bool = False
+
+
+class NotebookDetail(NotebookSummary):
+    cells: list[NotebookCellRow] = Field(default_factory=list)
+
+
+class NotebookCreateRequest(BaseModel):
+    name: str = "Untitled Notebook"
+    description: str = ""
+    cells: list[NotebookCellRow] = Field(default_factory=list)
+    activate: bool = True
+
+
+class NotebookUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    cells: list[NotebookCellRow] | None = None
+    activate: bool | None = None
+
+
 class SettingsResponse(BaseModel):
     ai_provider: str
     gemini_model: str

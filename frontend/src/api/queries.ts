@@ -433,6 +433,93 @@ export const useResearchTemplates = () => {
   });
 };
 
+export interface NotebookCell {
+  id: string;
+  type: "code" | "markdown";
+  content: string;
+  output: Record<string, any>[];
+}
+
+export interface ResearchNotebookSummary {
+  id: string;
+  profile: string;
+  name: string;
+  description: string;
+  cell_count: number;
+  created_at: string;
+  updated_at: string;
+  is_active: boolean;
+}
+
+export interface ResearchNotebookDetail extends ResearchNotebookSummary {
+  cells: NotebookCell[];
+}
+
+export const useResearchNotebooks = (profile: string) => {
+  return useQuery({
+    queryKey: ['research-notebooks', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get<{ active_notebook_id: string | null; notebooks: ResearchNotebookSummary[] }>(`/research/notebooks?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+export const useResearchNotebook = (profile: string, notebookId: string | null) => {
+  return useQuery({
+    queryKey: ['research-notebook', profile, notebookId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ResearchNotebookDetail>(`/research/notebooks/${notebookId}?profile=${profile}`);
+      return data;
+    },
+    enabled: !!profile && !!notebookId,
+  });
+};
+
+export const useCreateResearchNotebook = (profile: string) => {
+  return useMutation({
+    mutationFn: async (payload: { name: string; description?: string; cells?: NotebookCell[]; activate?: boolean }) => {
+      const { data } = await apiClient.post(`/research/notebooks?profile=${profile}`, payload);
+      return data;
+    },
+  });
+};
+
+export const useUpdateResearchNotebook = (profile: string) => {
+  return useMutation({
+    mutationFn: async ({ notebookId, payload }: { notebookId: string; payload: { name?: string; description?: string; cells?: NotebookCell[]; activate?: boolean } }) => {
+      const { data } = await apiClient.put(`/research/notebooks/${notebookId}?profile=${profile}`, payload);
+      return data;
+    },
+  });
+};
+
+export const useDuplicateResearchNotebook = (profile: string) => {
+  return useMutation({
+    mutationFn: async ({ notebookId, name }: { notebookId: string; name?: string }) => {
+      const { data } = await apiClient.post(`/research/notebooks/${notebookId}/duplicate?profile=${profile}`, { name });
+      return data;
+    },
+  });
+};
+
+export const useActivateResearchNotebook = (profile: string) => {
+  return useMutation({
+    mutationFn: async (notebookId: string) => {
+      const { data } = await apiClient.post(`/research/notebooks/${notebookId}/activate?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+export const useDeleteResearchNotebook = (profile: string) => {
+  return useMutation({
+    mutationFn: async (notebookId: string) => {
+      const { data } = await apiClient.delete(`/research/notebooks/${notebookId}?profile=${profile}`);
+      return data;
+    },
+  });
+};
 
 
 

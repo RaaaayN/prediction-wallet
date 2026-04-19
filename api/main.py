@@ -28,7 +28,8 @@ from api.models import (
     InstrumentRow, TradingCoreOrderRow, TradingCoreExecutionRow,
     TradingCorePositionRow, CashMovementRow, CashMovementRequest,
     SettingsResponse, SettingsUpdateRequest,
-    StrategyInfo, ExperimentRow, ReportInfo
+    StrategyInfo, ExperimentRow, ReportInfo,
+    NotebookCreateRequest, NotebookUpdateRequest, NotebookDetail, NotebookSummary
 )
 from config import ALLOWED_ORIGINS
 from utils.telemetry import trace_request
@@ -334,6 +335,8 @@ class RunRequest(BaseModel):
     profile: str | None = None
     initial_capital: float | None = None
     strategy_params: dict[str, Any] = Field(default_factory=dict)
+    notebook_id: str | None = None
+    notebook_cells: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @app.post("/api/runner/backtest")
@@ -1072,6 +1075,137 @@ async def save_alpha_script(req: dict = Body(...), _: User = Depends(requires_ro
     return {"ok": True, "message": f"Script {name} saved successfully."}
 
 
+@app.get("/api/research/notebooks")
+async def list_research_notebooks(
+    profile: str = Query(...),
+    _: User = Depends(get_current_user),
+):
+    """List saved research notebooks for a profile."""
+    from services.notebook_service import NotebookService
+
+    svc = NotebookService()
+    notebooks, active_id = svc.list_notebooks(profile)
+    return {"active_notebook_id": active_id, "notebooks": notebooks}
+
+
+@app.get("/api/research/notebooks/{notebook_id}")
+async def get_research_notebook(
+    notebook_id: str,
+    profile: str = Query(...),
+    _: User = Depends(get_current_user),
+):
+    """Fetch a full research notebook."""
+    from fastapi import HTTPException
+    from services.notebook_service import NotebookService
+
+    svc = NotebookService()
+    try:
+        notebook = svc.get_notebook(profile, notebook_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    return notebook.to_dict(is_active=svc.resolve_active_notebook(profile).id == notebook.id if svc.resolve_active_notebook(profile) else False)
+
+
+@app.post("/api/research/notebooks")
+async def create_research_notebook(
+    payload: NotebookCreateRequest,
+    profile: str = Query(...),
+    _: User = Depends(get_current_user),
+):
+    """Create a new research notebook."""
+    from services.notebook_service import NotebookService
+
+    svc = NotebookService()
+    notebook = svc.create_notebook(
+        profile,
+        name=payload.name,
+        description=payload.description,
+        cells=[cell.model_dump() for cell in payload.cells],
+        activate=payload.activate,
+    )
+    return notebook.to_dict(is_active=True if payload.activate else False)
+
+
+@app.put("/api/research/notebooks/{notebook_id}")
+async def update_research_notebook(
+    notebook_id: str,
+    payload: NotebookUpdateRequest,
+    profile: str = Query(...),
+    _: User = Depends(get_current_user),
+):
+    """Update an existing notebook."""
+    from fastapi import HTTPException
+    from services.notebook_service import NotebookService
+
+    svc = NotebookService()
+    try:
+        notebook = svc.update_notebook(
+            profile,
+            notebook_id,
+            name=payload.name,
+            description=payload.description,
+            cells=[cell.model_dump() for cell in payload.cells] if payload.cells is not None else None,
+            activate=payload.activate,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    active = svc.resolve_active_notebook(profile)
+    return notebook.to_dict(is_active=active.id == notebook.id if active else False)
+
+
+@app.post("/api/research/notebooks/{notebook_id}/duplicate")
+async def duplicate_research_notebook(
+    notebook_id: str,
+    payload: dict = Body(default_factory=dict),
+    profile: str = Query(...),
+    _: User = Depends(get_current_user),
+):
+    """Duplicate an existing notebook."""
+    from fastapi import HTTPException
+    from services.notebook_service import NotebookService
+
+    svc = NotebookService()
+    try:
+        notebook = svc.duplicate_notebook(profile, notebook_id, name=payload.get("name"))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    return notebook.to_dict(is_active=True)
+
+
+@app.post("/api/research/notebooks/{notebook_id}/activate")
+async def activate_research_notebook(
+    notebook_id: str,
+    profile: str = Query(...),
+    _: User = Depends(get_current_user),
+):
+    """Mark a notebook as active for the profile."""
+    from fastapi import HTTPException
+    from services.notebook_service import NotebookService
+
+    svc = NotebookService()
+    try:
+        svc.set_active_notebook(profile, notebook_id)
+        notebook = svc.get_notebook(profile, notebook_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    return notebook.to_dict(is_active=True)
+
+
+@app.delete("/api/research/notebooks/{notebook_id}")
+async def delete_research_notebook(
+    notebook_id: str,
+    profile: str = Query(...),
+    _: User = Depends(get_current_user),
+):
+    """Delete a notebook."""
+    from services.notebook_service import NotebookService
+
+    svc = NotebookService()
+    svc.delete_notebook(profile, notebook_id)
+    notebooks, active_id = svc.list_notebooks(profile)
+    return {"ok": True, "active_notebook_id": active_id, "notebooks": notebooks}
+
+
 @app.post("/api/research/data/import")
 async def import_external_data(
     dataset_name: str = Query(...),
@@ -1101,162 +1235,502 @@ async def import_external_data(
 @app.get("/api/research/templates")
 async def get_script_templates(_: User = Depends(get_current_user)):
     """List available institutional research templates."""
-    return [
-        {
-            "id": "random_forest",
-            "name": "Random Forest (Robust)",
-            "description": "Ensemble learning for high-dimensional feature spaces.",
-            "content": (
-                "\"\"\"\nInstitutional Random Forest Template\n\"\"\"\n"
-                "from sklearn.ensemble import RandomForestClassifier\n\n"
-                "def compute_alpha_features(df):\n"
-                "    df['factor_momentum'] = df['Close'].pct_change(10)\n"
-                "    return df\n\n"
-                "def compute_target_label(df):\n"
-                "    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n"
-                "    return df\n\n"
-                "def get_feature_list():\n"
-                "    return ['factor_momentum', 'RSI14']\n\n"
-                "def get_model():\n"
-                "    return RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)\n"
-            )
-        },
-        {
-            "id": "logistic",
-            "name": "Logistic Regression (Linear)",
-            "description": "Baseline statistical model for factor analysis.",
-            "content": (
-                "\"\"\"\nLogistic Regression Alpha Template\n\"\"\"\n"
-                "from sklearn.linear_model import LogisticRegression\n\n"
-                "def compute_alpha_features(df):\n"
-                "    df['factor_mr'] = (df['Close'] - df['SMA20']) / df['SMA20']\n"
-                "    return df\n\n"
-                "def compute_target_label(df):\n"
-                "    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n"
-                "    return df\n\n"
-                "def get_feature_list():\n"
-                "    return ['factor_mr', 'RSI14']\n\n"
-                "def get_model():\n"
-                "    return LogisticRegression(penalty='l2', C=1.0)\n"
-            )
-        },
-        {
-            "id": "svm",
-            "name": "Support Vector Machine",
-            "description": "Excellent for finding optimal hyperplanes in technical indicators.",
-            "content": (
-                "\"\"\"\nSVM Alpha Template\n\"\"\"\n"
-                "from sklearn.svm import SVC\n\n"
-                "def compute_alpha_features(df):\n"
-                "    df['vol_scaler'] = df['Close'].pct_change().rolling(20).std()\n"
-                "    return df\n\n"
-                "def compute_target_label(df):\n"
-                "    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n"
-                "    return df\n\n"
-                "def get_feature_list():\n"
-                "    return ['vol_scaler', 'MACD']\n\n"
-                "def get_model():\n"
-                "    return SVC(probability=True, kernel='rbf')\n"
-            )
-        },
-        {
-            "id": "gb",
-            "name": "Gradient Boosting",
-            "description": "Sequential boosting for complex non-linear alpha capture.",
-            "content": (
-                "\"\"\"\nGradient Boosting Alpha Template\n\"\"\"\n"
-                "from sklearn.ensemble import GradientBoostingClassifier\n\n"
-                "def compute_alpha_features(df):\n"
-                "    df['mom_fast'] = df['Close'].pct_change(3)\n"
-                "    df['mom_slow'] = df['Close'].pct_change(15)\n"
-                "    return df\n\n"
-                "def compute_target_label(df):\n"
-                "    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n"
-                "    return df\n\n"
-                "def get_feature_list():\n"
-                "    return ['mom_fast', 'mom_slow', 'RSI14']\n\n"
-                "def get_model():\n"
-                "    return GradientBoostingClassifier(n_estimators=50, learning_rate=0.1)\n"
-            )
-        },
-        {
-            "id": "full_pipeline",
-            "name": "Institutional ML Pipeline",
-            "description": "Comprehensive pipeline: Loading -> Features -> Scaling -> Training -> MLflow.",
-            "content": (
-                "# STAGE 1: DATA INGESTION\\n"
-                "import pandas as pd\\nimport numpy as np\\nimport mlflow\\n"
-                "from sklearn.ensemble import GradientBoostingClassifier\\n"
-                "from sklearn.preprocessing import StandardScaler\\n"
-                "from market.fetcher import MarketDataService, add_technical_indicators\\n\\n"
-                "print('--- [1/4] INGESTION ---')\\n"
-                "tickers = ['AAPL', 'MSFT', 'NVDA', 'BTC-USD']\\n"
-                "mkt = MarketDataService()\\n"
-                "dfs = []\\n"
-                "for t in tickers:\\n"
-                "    df = mkt.get_historical(t, days=500)\\n"
-                "    if df is not None:\\n"
-                "        df['Ticker'] = t\\n"
-                "        dfs.append(df)\\n"
-                "        print(f'✓ Ingested {t}')\\n\\n"
-                "# STAGE 2: FEATURE ENGINEERING\\n"
-                "print('\\n--- [2/4] QUANT FEATURES ---')\\n"
-                "processed = []\\n"
-                "for df in dfs:\\n"
-                "    df = add_technical_indicators(df)\\n"
-                "    df['mom_10'] = df['Close'].pct_change(10)\\n"
-                "    df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\\n"
-                "    processed.append(df.dropna())\\n"
-                "dataset = pd.concat(processed)\\n\\n"
-                "# STAGE 3: MODEL TRAINING\\n"
-                "print('\\n--- [3/4] PRODUCTION FIT ---')\\n"
-                "features = ['SMA20', 'RSI14', 'MACD', 'mom_10']\\n"
-                "X = dataset[features]\\n"
-                "y = dataset['target']\\n"
-                "scaler = StandardScaler()\\n"
-                "X_scaled = scaler.fit_transform(X)\\n\\n"
-                "mlflow.set_tracking_uri('sqlite:///data/mlflow.db')\\n"
-                "with mlflow.start_run(run_name='Institutional_GBM_Alpha'):\\n"
-                "    model = GradientBoostingClassifier(n_estimators=100)\\n"
-                "    model.fit(X_scaled, y)\\n"
-                "    mlflow.sklearn.log_model(model, 'alpha_model', registered_model_name='Production_Alpha')\\n"
-                "    print('🚀 SUCCESS: Model registered.')\\n\\n"
-                "# STAGE 4: ANALYSIS\\n"
-                "print('--- [4/4] SCORECARD ---')\\n"
-                "print(f'Samples: {len(X)}')\\n"
-                "print(f'Accuracy: {model.score(X_scaled, y):.2%}')\\n"
-            )
-        },
-        {
-            "id": "sentiment_xgb",
-            "name": "Sentiment XGBoost",
-            "description": "Fusing FinBERT sentiment with technical indicators.",
-            "content": (
-                "import pandas as pd\\nimport mlflow\\n"
-                "from sklearn.ensemble import RandomForestClassifier # Using RF as fallback for XGB\\n"
-                "from services.news_service import NewsSentimentService\\n"
-                "from market.fetcher import MarketDataService, add_technical_indicators\\n\\n"
-                "print('--- [1/3] DATA & SENTIMENT FUSION ---')\\n"
-                "ticker = 'TSLA'\\n"
-                "mkt = MarketDataService()\\n"
-                "news = NewsSentimentService()\\n"
-                "df = mkt.get_historical(ticker, days=100)\\n"
-                "df = add_technical_indicators(df)\\n"
-                "sent = news.get_ticker_sentiment(ticker)\\n"
-                "df['sentiment'] = sent['score']\\n"
-                "print(f'✓ Integrated Sentiment Score: {sent[\\'score\\']}')\\n\\n"
-                "print('--- [2/3] MODEL TRAINING ---')\\n"
-                "df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\\n"
-                "df = df.dropna()\\n"
-                "X = df[['RSI14', 'sentiment']]\\n"
-                "y = df['target']\\n"
-                "model = RandomForestClassifier().fit(X, y)\\n\\n"
-                "print('--- [3/3] REGISTRATION ---')\\n"
-                "print(f'In-Sample Confidence: {model.score(X, y):.2%}')\\n"
-                "mlflow.sklearn.log_model(model, 'alpha_model', registered_model_name='Sentiment_Alpha')\\n"
-            )
+    def make_template(template_id: str, name: str, description: str, cells: list[dict[str, str]]) -> dict[str, Any]:
+        content = "\n\n".join(cell["content"] for cell in cells)
+        return {
+            "id": template_id,
+            "name": name,
+            "description": description,
+            "content": content,
+            "cells": cells,
         }
+
+    templates = [
+        make_template(
+            "random_forest",
+            "Random Forest (Robust)",
+            "Ensemble learning for high-dimensional feature spaces.",
+            [
+                {
+                    "id": "rf-cell-1",
+                    "type": "code",
+                    "content": (
+                        "# STEP 1: DATA INGESTION\n"
+                        "import pandas as pd\n"
+                        "from market.fetcher import MarketDataService\n\n"
+                        "tickers = ['AAPL', 'MSFT', 'BTC-USD']\n"
+                        "mkt = MarketDataService()\n"
+                        "price_frames = {}\n"
+                        "for ticker in tickers:\n"
+                        "    frame = mkt.get_historical(ticker, days=365)\n"
+                        "    if frame is not None and not frame.empty:\n"
+                        "        frame['Ticker'] = ticker\n"
+                        "        price_frames[ticker] = frame\n"
+                        "        print(f'Loaded {ticker}: {len(frame)} rows')\n"
+                        "if not price_frames:\n"
+                        "    idx = pd.date_range(end=pd.Timestamp.today(), periods=252, freq='B')\n"
+                        "    import numpy as np\n"
+                        "    base = np.linspace(0, 12, len(idx))\n"
+                        "    close = 100 + np.sin(base) * 5 + np.linspace(0, 3, len(idx))\n"
+                        "    open_ = close + np.cos(base) * 0.5\n"
+                        "    for ticker in tickers:\n"
+                        "        synthetic = pd.DataFrame({\n"
+                        "            'Open': open_,\n"
+                        "            'High': close + 1.5,\n"
+                        "            'Low': close - 1.5,\n"
+                        "            'Close': close,\n"
+                        "            'Volume': [1_000_000] * len(idx),\n"
+                        "        }, index=idx)\n"
+                        "        synthetic['Ticker'] = ticker\n"
+                        "        price_frames[ticker] = synthetic\n"
+                        "    print('✓ Using synthetic fallback market data')\n"
+                        "print(f'✓ Ingested {len(price_frames)} assets')\n"
+                    ),
+                },
+                {
+                    "id": "rf-cell-2",
+                    "type": "code",
+                    "content": (
+                        "# STEP 2: QUANT FEATURES\n"
+                        "from market.fetcher import add_technical_indicators\n\n"
+                        "feature_frames = {}\n"
+                        "for ticker, frame in price_frames.items():\n"
+                        "    enriched = add_technical_indicators(frame)\n"
+                        "    enriched['factor_momentum'] = enriched['Close'].pct_change(10)\n"
+                        "    enriched['factor_volatility'] = enriched['Close'].pct_change().rolling(20).std()\n"
+                        "    enriched['target'] = (enriched['Close'].shift(-1) > enriched['Close']).astype(int)\n"
+                        "    feature_frames[ticker] = enriched.dropna()\n"
+                        "print(f'✓ Built quant features for {len(feature_frames)} assets')\n"
+                    ),
+                },
+                {
+                    "id": "rf-cell-3",
+                    "type": "code",
+                    "content": (
+                        "# STEP 3: MODEL TRAINING\n"
+                        "import pandas as pd\n"
+                        "import mlflow.sklearn\n"
+                        "from sklearn.ensemble import RandomForestClassifier\n"
+                        "from sklearn.metrics import accuracy_score, classification_report\n\n"
+                        "dataset = pd.concat(feature_frames.values(), ignore_index=True)\n"
+                        "X = dataset[['factor_momentum', 'factor_volatility', 'RSI14', 'MACD']]\n"
+                        "y = dataset['target']\n\n"
+                        "mlflow.set_tracking_uri('sqlite:///data/mlflow.db')\n"
+                        "with mlflow.start_run(run_name='Notebook_Alpha_RF'):\n"
+                        "    model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)\n"
+                        "    model.fit(X, y)\n"
+                        "    predictions = model.predict(X)\n"
+                        "    print(f'Training accuracy: {accuracy_score(y, predictions):.2%}')\n"
+                        "    print(classification_report(y, predictions))\n"
+                        "    mlflow.sklearn.log_model(model, name='alpha_model', registered_model_name='Notebook_Alpha_RF')\n"
+                    ),
+                },
+            ],
+        ),
+        make_template(
+            "logistic",
+            "Logistic Regression (Linear)",
+            "Baseline statistical model for factor analysis.",
+            [
+                {
+                    "id": "lr-cell-1",
+                    "type": "code",
+                    "content": (
+                        "# STEP 1: DATA INGESTION\n"
+                        "import pandas as pd\n"
+                        "from market.fetcher import MarketDataService\n\n"
+                        "tickers = ['AAPL', 'MSFT', 'BTC-USD']\n"
+                        "mkt = MarketDataService()\n"
+                        "price_frames = {\n"
+                            "    ticker: mkt.get_historical(ticker, days=365)\n"
+                        "    for ticker in tickers\n"
+                        "}\n"
+                        "price_frames = {k: v for k, v in price_frames.items() if v is not None and not v.empty}\n"
+                        "if not price_frames:\n"
+                        "    idx = pd.date_range(end=pd.Timestamp.today(), periods=252, freq='B')\n"
+                        "    import numpy as np\n"
+                        "    base = np.linspace(0, 12, len(idx))\n"
+                        "    close = 100 + np.sin(base) * 5 + np.linspace(0, 3, len(idx))\n"
+                        "    open_ = close + np.cos(base) * 0.5\n"
+                        "    for ticker in tickers:\n"
+                        "        synthetic = pd.DataFrame({\n"
+                        "            'Open': open_,\n"
+                        "            'High': close + 1.5,\n"
+                        "            'Low': close - 1.5,\n"
+                        "            'Close': close,\n"
+                        "            'Volume': [1_000_000] * len(idx),\n"
+                        "        }, index=idx)\n"
+                        "        price_frames[ticker] = synthetic\n"
+                        "    print('✓ Using synthetic fallback market data')\n"
+                        "print(f'✓ Ingested {len(price_frames)} assets')\n"
+                    ),
+                },
+                {
+                    "id": "lr-cell-2",
+                    "type": "code",
+                    "content": (
+                        "# STEP 2: QUANT FEATURES\n"
+                        "from market.fetcher import add_technical_indicators\n\n"
+                        "feature_frames = {}\n"
+                        "for ticker, frame in price_frames.items():\n"
+                        "    enriched = add_technical_indicators(frame)\n"
+                        "    enriched['factor_mr'] = (enriched['Close'] - enriched['SMA20']) / enriched['SMA20']\n"
+                        "    enriched['factor_rsi_trend'] = enriched['RSI14'].diff()\n"
+                        "    enriched['target'] = (enriched['Close'].shift(-1) > enriched['Close']).astype(int)\n"
+                        "    feature_frames[ticker] = enriched.dropna()\n"
+                        "print(f'✓ Built quant features for {len(feature_frames)} assets')\n"
+                    ),
+                },
+                {
+                    "id": "lr-cell-3",
+                    "type": "code",
+                    "content": (
+                        "# STEP 3: MODEL TRAINING\n"
+                        "import pandas as pd\n"
+                        "import mlflow.sklearn\n"
+                        "from sklearn.linear_model import LogisticRegression\n"
+                        "from sklearn.metrics import accuracy_score, roc_auc_score\n\n"
+                        "dataset = pd.concat(feature_frames.values(), ignore_index=True)\n"
+                        "X = dataset[['factor_mr', 'factor_rsi_trend', 'MACD']]\n"
+                        "y = dataset['target']\n\n"
+                        "mlflow.set_tracking_uri('sqlite:///data/mlflow.db')\n"
+                        "with mlflow.start_run(run_name='Notebook_Alpha_LR'):\n"
+                        "    model = LogisticRegression(C=1.0, max_iter=1000)\n"
+                        "    model.fit(X, y)\n"
+                        "    predictions = model.predict(X)\n"
+                        "    probabilities = model.predict_proba(X)[:, 1]\n"
+                        "    print(f'Training accuracy: {accuracy_score(y, predictions):.2%}')\n"
+                        "    print(f'In-sample ROC AUC: {roc_auc_score(y, probabilities):.3f}')\n"
+                        "    mlflow.sklearn.log_model(model, name='alpha_model', registered_model_name='Notebook_Alpha_LR')\n"
+                    ),
+                },
+            ],
+        ),
+        make_template(
+            "svm",
+            "Support Vector Machine",
+            "Excellent for finding optimal hyperplanes in technical indicators.",
+            [
+                {
+                    "id": "svm-cell-1",
+                    "type": "code",
+                    "content": (
+                        "# STEP 1: DATA INGESTION\n"
+                        "import pandas as pd\n"
+                        "from market.fetcher import MarketDataService\n\n"
+                        "tickers = ['AAPL', 'MSFT', 'BTC-USD']\n"
+                        "mkt = MarketDataService()\n"
+                        "price_frames = {}\n"
+                        "for ticker in tickers:\n"
+                        "    frame = mkt.get_historical(ticker, days=365)\n"
+                        "    if frame is not None and not frame.empty:\n"
+                        "        price_frames[ticker] = frame\n"
+                        "if not price_frames:\n"
+                        "    idx = pd.date_range(end=pd.Timestamp.today(), periods=252, freq='B')\n"
+                        "    import numpy as np\n"
+                        "    base = np.linspace(0, 12, len(idx))\n"
+                        "    close = 100 + np.sin(base) * 5 + np.linspace(0, 3, len(idx))\n"
+                        "    open_ = close + np.cos(base) * 0.5\n"
+                        "    for ticker in tickers:\n"
+                        "        synthetic = pd.DataFrame({\n"
+                        "            'Open': open_,\n"
+                        "            'High': close + 1.5,\n"
+                        "            'Low': close - 1.5,\n"
+                        "            'Close': close,\n"
+                        "            'Volume': [1_000_000] * len(idx),\n"
+                        "        }, index=idx)\n"
+                        "        price_frames[ticker] = synthetic\n"
+                        "    print('✓ Using synthetic fallback market data')\n"
+                        "print(f'✓ Ingested {len(price_frames)} assets')\n"
+                    ),
+                },
+                {
+                    "id": "svm-cell-2",
+                    "type": "code",
+                    "content": (
+                        "# STEP 2: QUANT FEATURES\n"
+                        "from market.fetcher import add_technical_indicators\n\n"
+                        "feature_frames = {}\n"
+                        "for ticker, frame in price_frames.items():\n"
+                        "    enriched = add_technical_indicators(frame)\n"
+                        "    enriched['vol_scaler'] = enriched['Close'].pct_change().rolling(20).std()\n"
+                        "    enriched['trend_strength'] = enriched['MACD'] - enriched['MACD_Signal']\n"
+                        "    enriched['target'] = (enriched['Close'].shift(-1) > enriched['Close']).astype(int)\n"
+                        "    feature_frames[ticker] = enriched.dropna()\n"
+                        "print(f'✓ Built quant features for {len(feature_frames)} assets')\n"
+                    ),
+                },
+                {
+                    "id": "svm-cell-3",
+                    "type": "code",
+                    "content": (
+                        "# STEP 3: MODEL TRAINING\n"
+                        "import pandas as pd\n"
+                        "import mlflow.sklearn\n"
+                        "from sklearn.metrics import accuracy_score\n"
+                        "from sklearn.svm import SVC\n\n"
+                        "dataset = pd.concat(feature_frames.values(), ignore_index=True)\n"
+                        "X = dataset[['vol_scaler', 'trend_strength', 'RSI14']]\n"
+                        "y = dataset['target']\n\n"
+                        "mlflow.set_tracking_uri('sqlite:///data/mlflow.db')\n"
+                        "with mlflow.start_run(run_name='Notebook_Alpha_SVM'):\n"
+                        "    model = SVC(probability=True, kernel='rbf')\n"
+                        "    model.fit(X, y)\n"
+                        "    predictions = model.predict(X)\n"
+                        "    print(f'Training accuracy: {accuracy_score(y, predictions):.2%}')\n"
+                        "    mlflow.sklearn.log_model(model, name='alpha_model', registered_model_name='Notebook_Alpha_SVM')\n"
+                    ),
+                },
+            ],
+        ),
+        make_template(
+            "gb",
+            "Gradient Boosting",
+            "Sequential boosting for complex non-linear alpha capture.",
+            [
+                {
+                    "id": "gb-cell-1",
+                    "type": "code",
+                    "content": (
+                        "# STEP 1: DATA INGESTION\n"
+                        "import pandas as pd\n"
+                        "from market.fetcher import MarketDataService\n\n"
+                        "tickers = ['AAPL', 'MSFT', 'BTC-USD']\n"
+                        "mkt = MarketDataService()\n"
+                        "price_frames = {}\n"
+                        "for ticker in tickers:\n"
+                        "    frame = mkt.get_historical(ticker, days=365)\n"
+                        "    if frame is not None and not frame.empty:\n"
+                        "        price_frames[ticker] = frame\n"
+                        "        print(f'Loaded {ticker}')\n"
+                        "if not price_frames:\n"
+                        "    idx = pd.date_range(end=pd.Timestamp.today(), periods=252, freq='B')\n"
+                        "    import numpy as np\n"
+                        "    base = np.linspace(0, 12, len(idx))\n"
+                        "    close = 100 + np.sin(base) * 5 + np.linspace(0, 3, len(idx))\n"
+                        "    open_ = close + np.cos(base) * 0.5\n"
+                        "    for ticker in tickers:\n"
+                        "        synthetic = pd.DataFrame({\n"
+                        "            'Open': open_,\n"
+                        "            'High': close + 1.5,\n"
+                        "            'Low': close - 1.5,\n"
+                        "            'Close': close,\n"
+                        "            'Volume': [1_000_000] * len(idx),\n"
+                        "        }, index=idx)\n"
+                        "        price_frames[ticker] = synthetic\n"
+                        "    print('✓ Using synthetic fallback market data')\n"
+                        "print(f'✓ Ingested {len(price_frames)} assets')\n"
+                    ),
+                },
+                {
+                    "id": "gb-cell-2",
+                    "type": "code",
+                    "content": (
+                        "# STEP 2: QUANT FEATURES\n"
+                        "from market.fetcher import add_technical_indicators\n\n"
+                        "feature_frames = {}\n"
+                        "for ticker, frame in price_frames.items():\n"
+                        "    enriched = add_technical_indicators(frame)\n"
+                        "    enriched['mom_fast'] = enriched['Close'].pct_change(3)\n"
+                        "    enriched['mom_slow'] = enriched['Close'].pct_change(15)\n"
+                        "    enriched['mean_reversion'] = (enriched['Close'] - enriched['SMA20']) / enriched['SMA20']\n"
+                        "    enriched['target'] = (enriched['Close'].shift(-1) > enriched['Close']).astype(int)\n"
+                        "    feature_frames[ticker] = enriched.dropna()\n"
+                        "print(f'✓ Built quant features for {len(feature_frames)} assets')\n"
+                    ),
+                },
+                {
+                    "id": "gb-cell-3",
+                    "type": "code",
+                    "content": (
+                        "# STEP 3: MODEL TRAINING\n"
+                        "import pandas as pd\n"
+                        "import mlflow.sklearn\n"
+                        "from sklearn.ensemble import GradientBoostingClassifier\n"
+                        "from sklearn.metrics import accuracy_score, mean_squared_error\n\n"
+                        "dataset = pd.concat(feature_frames.values(), ignore_index=True)\n"
+                        "X = dataset[['mom_fast', 'mom_slow', 'mean_reversion', 'RSI14']]\n"
+                        "y = dataset['target']\n\n"
+                        "mlflow.set_tracking_uri('sqlite:///data/mlflow.db')\n"
+                        "with mlflow.start_run(run_name='Notebook_Alpha_GB'):\n"
+                        "    model = GradientBoostingClassifier(n_estimators=50, learning_rate=0.1)\n"
+                        "    model.fit(X, y)\n"
+                        "    predictions = model.predict(X)\n"
+                        "    print(f'Training accuracy: {accuracy_score(y, predictions):.2%}')\n"
+                        "    print(f'MSE: {mean_squared_error(y, predictions):.4f}')\n"
+                        "    mlflow.sklearn.log_model(model, name='alpha_model', registered_model_name='Notebook_Alpha_GB')\n"
+                    ),
+                },
+            ],
+        ),
+        make_template(
+            "full_pipeline",
+            "Institutional ML Pipeline",
+            "Comprehensive pipeline: Loading -> Features -> Scaling -> Training -> MLflow.",
+            [
+                {
+                    "id": "pipeline-cell-1",
+                    "type": "code",
+                    "content": (
+                        "# STEP 1: DATA INGESTION\n"
+                        "import pandas as pd\n"
+                        "from market.fetcher import MarketDataService\n\n"
+                        "tickers = ['AAPL', 'MSFT', 'NVDA', 'BTC-USD']\n"
+                        "mkt = MarketDataService()\n"
+                        "dfs = []\n"
+                        "for ticker in tickers:\n"
+                        "    frame = mkt.get_historical(ticker, days=500)\n"
+                        "    if frame is not None and not frame.empty:\n"
+                        "        frame['Ticker'] = ticker\n"
+                        "        dfs.append(frame)\n"
+                        "        print(f'✓ Ingested {ticker}')\n"
+                        "if not dfs:\n"
+                        "    idx = pd.date_range(end=pd.Timestamp.today(), periods=500, freq='B')\n"
+                        "    import numpy as np\n"
+                        "    base = np.linspace(0, 20, len(idx))\n"
+                        "    close = 100 + np.sin(base) * 8 + np.linspace(0, 4, len(idx))\n"
+                        "    open_ = close + np.cos(base) * 0.75\n"
+                        "    for ticker in tickers:\n"
+                        "        synthetic = pd.DataFrame({\n"
+                        "            'Open': open_,\n"
+                        "            'High': close + 1.75,\n"
+                        "            'Low': close - 1.75,\n"
+                        "            'Close': close,\n"
+                        "            'Volume': [2_000_000] * len(idx),\n"
+                        "        }, index=idx)\n"
+                        "        synthetic['Ticker'] = ticker\n"
+                        "        dfs.append(synthetic)\n"
+                        "    print('✓ Using synthetic fallback market data')\n"
+                        "print(f'✓ Ingested {len(dfs)} assets')\n"
+                    ),
+                },
+                {
+                    "id": "pipeline-cell-2",
+                    "type": "code",
+                    "content": (
+                        "# STEP 2: QUANT FEATURES\n"
+                        "import pandas as pd\n"
+                        "from market.fetcher import add_technical_indicators\n\n"
+                        "processed = []\n"
+                        "for frame in dfs:\n"
+                        "    enriched = add_technical_indicators(frame)\n"
+                        "    enriched['mom_10'] = enriched['Close'].pct_change(10)\n"
+                        "    enriched['vol_20'] = enriched['Close'].pct_change().rolling(20).std()\n"
+                        "    enriched['target'] = (enriched['Close'].shift(-1) > enriched['Close']).astype(int)\n"
+                        "    processed.append(enriched.dropna())\n"
+                        "dataset = pd.concat(processed, ignore_index=True)\n"
+                        "print(f'✓ Built quant features on {len(dataset)} rows')\n"
+                    ),
+                },
+                {
+                    "id": "pipeline-cell-3",
+                    "type": "code",
+                    "content": (
+                        "# STEP 3: MODEL TRAINING\n"
+                        "import pandas as pd\n"
+                        "import mlflow\n"
+                        "import mlflow.sklearn\n"
+                        "from sklearn.ensemble import GradientBoostingClassifier\n"
+                        "from sklearn.metrics import accuracy_score, precision_score, recall_score\n"
+                        "from sklearn.preprocessing import StandardScaler\n\n"
+                        "features = ['SMA20', 'RSI14', 'MACD', 'mom_10', 'vol_20']\n"
+                        "X = dataset[features]\n"
+                        "y = dataset['target']\n"
+                        "scaler = StandardScaler()\n"
+                        "X_scaled = scaler.fit_transform(X)\n\n"
+                        "mlflow.set_tracking_uri('sqlite:///data/mlflow.db')\n"
+                        "with mlflow.start_run(run_name='Institutional_GBM_Alpha'):\n"
+                        "    model = GradientBoostingClassifier(n_estimators=100)\n"
+                        "    model.fit(X_scaled, y)\n"
+                        "    predictions = model.predict(X_scaled)\n"
+                        "    print('🚀 SUCCESS: Model registered.')\n"
+                        "    print('--- SCORECARD ---')\n"
+                        "    print(f'Samples: {len(X)}')\n"
+                        "    print(f'Accuracy: {accuracy_score(y, predictions):.2%}')\n"
+                        "    print(f'Precision: {precision_score(y, predictions):.2%}')\n"
+                        "    print(f'Recall: {recall_score(y, predictions):.2%}')\n"
+                        "    mlflow.sklearn.log_model(model, name='alpha_model', registered_model_name='Production_Alpha')\n"
+                    ),
+                },
+            ],
+        ),
+        make_template(
+            "sentiment_xgb",
+            "Sentiment XGBoost",
+            "Fusing FinBERT sentiment with technical indicators.",
+            [
+                {
+                    "id": "sentiment-cell-1",
+                    "type": "code",
+                    "content": (
+                        "# STEP 1: DATA INGESTION\n"
+                        "import pandas as pd\n"
+                        "from market.fetcher import MarketDataService\n"
+                        "from services.news_service import NewsSentimentService\n\n"
+                        "ticker = 'TSLA'\n"
+                        "mkt = MarketDataService()\n"
+                        "news = NewsSentimentService()\n"
+                        "df = mkt.get_historical(ticker, days=100)\n"
+                        "if df is None or df.empty:\n"
+                        "    idx = pd.date_range(end=pd.Timestamp.today(), periods=100, freq='B')\n"
+                        "    import numpy as np\n"
+                        "    base = np.linspace(0, 8, len(idx))\n"
+                        "    close = 200 + np.sin(base) * 7 + np.linspace(0, 2, len(idx))\n"
+                        "    open_ = close + np.cos(base) * 0.5\n"
+                        "    df = pd.DataFrame({\n"
+                        "        'Open': open_,\n"
+                        "        'High': close + 1.5,\n"
+                        "        'Low': close - 1.5,\n"
+                        "        'Close': close,\n"
+                        "        'Volume': [1_500_000] * len(idx),\n"
+                        "    }, index=idx)\n"
+                        "    print('✓ Using synthetic fallback market data')\n"
+                        "sentiment_snapshot = news.get_ticker_sentiment(ticker)\n"
+                        "print(f'✓ Ingested price data: {len(df)} rows')\n"
+                        "print(f\"✓ Ingested sentiment sample: score={sentiment_snapshot.get('score', 0.0)}\")\n"
+                    ),
+                },
+                {
+                    "id": "sentiment-cell-2",
+                    "type": "code",
+                    "content": (
+                        "# STEP 2: QUANT FEATURES\n"
+                        "import pandas as pd\n"
+                        "from market.fetcher import add_technical_indicators\n\n"
+                        "df = add_technical_indicators(df)\n"
+                        "sent = news.get_ticker_sentiment(ticker)\n"
+                        "df['sentiment'] = sent['score']\n"
+                        "df['sentiment_strength'] = sent['score'] * df['Volume'].pct_change().fillna(0)\n"
+                        "df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)\n"
+                        "df = df.dropna()\n"
+                        "print(f\"✓ Built sentiment and quant features: score={sent['score']}\")\n"
+                    ),
+                },
+                {
+                    "id": "sentiment-cell-3",
+                    "type": "code",
+                    "content": (
+                        "# STEP 3: MODEL TRAINING\n"
+                        "import mlflow\n"
+                        "import mlflow.sklearn\n"
+                        "from sklearn.ensemble import RandomForestClassifier\n"
+                        "from sklearn.metrics import accuracy_score\n\n"
+                        "X = df[['RSI14', 'MACD', 'sentiment', 'sentiment_strength']]\n"
+                        "y = df['target']\n"
+                        "model = RandomForestClassifier(n_estimators=200, random_state=42)\n"
+                        "model.fit(X, y)\n\n"
+                        "mlflow.set_tracking_uri('sqlite:///data/mlflow.db')\n"
+                        "with mlflow.start_run(run_name='Sentiment_Alpha'):\n"
+                        "    predictions = model.predict(X)\n"
+                        "    print(f'In-Sample Confidence: {accuracy_score(y, predictions):.2%}')\n"
+                        "    mlflow.sklearn.log_model(model, name='alpha_model', registered_model_name='Sentiment_Alpha')\n"
+                    ),
+                },
+            ],
+        ),
     ]
+
+    return templates
 
 
 # ── events ───────────────────────────────────────────────────────────────────
@@ -1763,15 +2237,31 @@ async def run_step(step: str, req: RunRequest = RunRequest(), _: User = Depends(
         if req.initial_capital:
             args += ["--initial-capital", str(req.initial_capital)]
     elif step == "notebook":
-        import tempfile
-        code = (req.strategy_params or {}).get("code", "")
-        # Use a temporary file outside the project root to avoid triggering uvicorn reload
-        # We need a stable-ish path if we want to debug, but temp is safer for reload
-        tmp_dir = Path(tempfile.gettempdir()) / "prediction_wallet_research"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        script_path = tmp_dir / f"research_{perf_counter()}.py"
-        script_path.write_text(code, encoding="utf-8")
-        args = [str(script_path)]
+        from fastapi import HTTPException
+        from services.notebook_kernel_service import stream_notebook_execution
+
+        cells = req.notebook_cells or (req.strategy_params or {}).get("cells") or []
+        if not cells:
+            code = (req.strategy_params or {}).get("code", "")
+            if code:
+                cells = [{"id": "cell-1", "type": "code", "content": code, "output": []}]
+        if not cells:
+            raise HTTPException(status_code=422, detail="No notebook cells were provided.")
+
+        kernel_id = req.notebook_id or (req.strategy_params or {}).get("kernel_id") or req.profile or "draft"
+
+        async def notebook_stream():
+            async for event in stream_notebook_execution(kernel_id, cells):
+                yield f"data: {json.dumps(event)}\n\n"
+
+        return StreamingResponse(
+            notebook_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     elif step == "reset":
         # Reset is a specialized init that clears everything
         args = ["main.py"]
