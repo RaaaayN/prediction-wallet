@@ -1,11 +1,13 @@
 import { useState, useMemo, useEffect, type KeyboardEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
-  useExperiments, 
-  useStrategies, 
-  useRunBacktest, 
-  useDeployModel, 
+  useExperiments,
+  useStrategies,
+  useRunBacktest,
+  useDeployModel,
+  useTrainModel,
   useResearchTemplates,
   useGoldDatasets,
   useGoldDatasetHead,
@@ -21,7 +23,7 @@ import {
 } from "@/api/queries";
 import {
   Activity, PlayCircle, Loader2,
-  Trophy, Rocket, Database, HelpCircle, Play, Cpu, LineChart, Terminal, Plus, Trash2, Eye, Layers, FileCode
+  Trophy, Rocket, Database, HelpCircle, Play, Cpu, LineChart, Terminal, Plus, Trash2, Eye, Layers, FileCode, FlaskConical, CheckCircle2, Settings2
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useStore } from "@/store/useStore";
@@ -58,7 +60,8 @@ const INITIAL_CELLS: NotebookCell[] = [
 export function Experiments() {
   const profile = useStore((state) => state.profile);
   const queryClient = useQueryClient();
-  
+  const navigate = useNavigate();
+
   // Data Queries
   const { data: experiments, isLoading: experimentsLoading } = useExperiments();
   const { data: strategies } = useStrategies();
@@ -69,6 +72,7 @@ export function Experiments() {
   // Mutations
   const runBacktest = useRunBacktest();
   const deployModel = useDeployModel();
+  const trainModel = useTrainModel();
   const createNotebook = useCreateResearchNotebook(profile);
   const updateNotebook = useUpdateResearchNotebook(profile);
   const duplicateNotebook = useDuplicateResearchNotebook(profile);
@@ -76,7 +80,43 @@ export function Experiments() {
   const deleteNotebook = useDeleteResearchNotebook(profile);
 
   // Component State
-  const [activeTab, setActiveTab] = useState<'pipeline' | 'registry'>('pipeline');
+  const [activeTab, setActiveTab] = useState<'train' | 'registry' | 'notebook'>('train');
+
+  // ── Train tab state ──────────────────────────────────────────────────────────
+  const [trainDataset, setTrainDataset] = useState<string>("live_sync");
+  const [modelType, setModelType] = useState<"gradient_boosting" | "random_forest" | "logistic_regression">("gradient_boosting");
+  const [nEstimators, setNEstimators] = useState(50);
+  const [learningRate, setLearningRate] = useState(0.1);
+  const [maxDepth, setMaxDepth] = useState(3);
+  const [cReg, setCReg] = useState(1.0);
+  const [maxIter, setMaxIter] = useState(100);
+  const [trainResult, setTrainResult] = useState<{ run_id: string; accuracy: number; precision: number; model_class: string } | null>(null);
+
+  const handleTrain = async () => {
+    const hyperparams: Record<string, number | string> = {};
+    if (modelType === "gradient_boosting") {
+      hyperparams.n_estimators = nEstimators;
+      hyperparams.learning_rate = learningRate;
+      hyperparams.max_depth = maxDepth;
+    } else if (modelType === "random_forest") {
+      hyperparams.n_estimators = nEstimators;
+      hyperparams.max_depth = maxDepth;
+    } else {
+      hyperparams.C = cReg;
+      hyperparams.max_iter = maxIter;
+    }
+    try {
+      const res = await trainModel.mutateAsync({
+        profile,
+        params: { dataset_name: trainDataset, model_type: modelType, ...hyperparams },
+      });
+      const result = res?.result ?? res;
+      setTrainResult(result);
+      queryClient.invalidateQueries({ queryKey: ['experiments'] });
+    } catch {
+      alert("Entraînement échoué. Vérifiez les logs.");
+    }
+  };
   const [cells, setCells] = useState<NotebookCell[]>(INITIAL_CELLS);
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [isRunningAll, setIsRunningAll] = useState(false);
@@ -538,6 +578,7 @@ print(f"✓ Ingested sentiment sample: score={sentiment_snapshot.get('score', 0.
     }
   };
 
+
   const addCell = (afterId: string) => {
     const idx = cells.findIndex(c => c.id === afterId);
     const newCell: NotebookCell = { id: `cell-${Date.now()}`, type: 'code', content: "", output: [] };
@@ -703,14 +744,14 @@ print(f"✓ Ingested sentiment sample: score={sentiment_snapshot.get('score', 0.
 
               <div className="flex flex-wrap items-center gap-3 rounded-[1.75rem] border border-border/60 bg-background/60 p-2 shadow-inner">
                 <button
-                  onClick={() => setActiveTab('pipeline')}
+                  onClick={() => setActiveTab('train')}
                   className={`flex items-center gap-3 rounded-2xl px-6 py-4 text-[11px] font-black uppercase tracking-[0.3em] transition-all ${
-                    activeTab === 'pipeline'
+                    activeTab === 'train'
                       ? 'bg-primary text-white shadow-2xl shadow-primary/20'
                       : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'
                   }`}
                 >
-                  <Terminal className="h-4 w-4" /> Notebook
+                  <Settings2 className="h-4 w-4" /> Entraîner
                 </button>
                 <button
                   onClick={() => setActiveTab('registry')}
@@ -720,14 +761,208 @@ print(f"✓ Ingested sentiment sample: score={sentiment_snapshot.get('score', 0.
                       : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'
                   }`}
                 >
-                  <Layers className="h-4 w-4" /> Registry
+                  <Layers className="h-4 w-4" /> Registre
+                </button>
+                <button
+                  onClick={() => setActiveTab('notebook')}
+                  className={`flex items-center gap-3 rounded-2xl px-6 py-4 text-[11px] font-black uppercase tracking-[0.3em] transition-all ${
+                    activeTab === 'notebook'
+                      ? 'bg-background text-primary shadow-xl'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'
+                  }`}
+                >
+                  <Terminal className="h-4 w-4" /> Notebook
                 </button>
               </div>
             </div>
           </div>
         </section>
 
-        {activeTab === 'pipeline' ? (
+        {activeTab === 'train' && (
+          <div className="grid gap-8 md:grid-cols-2 items-start px-2">
+            {/* Config panel */}
+            <Card className="overflow-hidden rounded-[2.5rem] border-border/60 bg-card/70 backdrop-blur-xl shadow-2xl">
+              <CardHeader className="border-b border-border/50 bg-secondary/10 px-8 py-6">
+                <CardTitle className="flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground">
+                  <Settings2 className="h-4 w-4" /> Configuration du modèle
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6 p-8">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Dataset d'entraînement</label>
+                  <select
+                    value={trainDataset}
+                    onChange={e => setTrainDataset(e.target.value)}
+                    className="h-12 w-full rounded-2xl border-2 border-border/50 bg-background px-4 text-sm font-bold outline-none transition-all focus:border-primary"
+                  >
+                    <option value="live_sync">Live sync (Yahoo Finance)</option>
+                    {goldDatasetList.filter(d => d !== "live_market_cache").map(ds => (
+                      <option key={ds} value={ds}>{ds}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Type de modèle</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {([
+                      { key: "gradient_boosting", label: "Gradient Boost" },
+                      { key: "random_forest", label: "Random Forest" },
+                      { key: "logistic_regression", label: "Logistic Reg." },
+                    ] as const).map(({ key, label }) => (
+                      <button
+                        key={key}
+                        onClick={() => setModelType(key)}
+                        className={`rounded-2xl border-2 px-3 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all ${
+                          modelType === key
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-border/50 bg-background text-muted-foreground hover:border-primary/30'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {(modelType === "gradient_boosting" || modelType === "random_forest") && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                        n_estimators <span className="text-primary">{nEstimators}</span>
+                      </label>
+                      <input
+                        type="range" min={10} max={300} step={10}
+                        value={nEstimators}
+                        onChange={e => setNEstimators(Number(e.target.value))}
+                        className="w-full accent-primary"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                        max_depth <span className="text-primary">{maxDepth}</span>
+                      </label>
+                      <input
+                        type="range" min={1} max={10} step={1}
+                        value={maxDepth}
+                        onChange={e => setMaxDepth(Number(e.target.value))}
+                        className="w-full accent-primary"
+                      />
+                    </div>
+                    {modelType === "gradient_boosting" && (
+                      <div className="col-span-2 space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                          learning_rate <span className="text-primary">{learningRate}</span>
+                        </label>
+                        <input
+                          type="range" min={0.01} max={1.0} step={0.01}
+                          value={learningRate}
+                          onChange={e => setLearningRate(Number(e.target.value))}
+                          className="w-full accent-primary"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {modelType === "logistic_regression" && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                        C (régularisation) <span className="text-primary">{cReg}</span>
+                      </label>
+                      <input
+                        type="range" min={0.01} max={10} step={0.01}
+                        value={cReg}
+                        onChange={e => setCReg(Number(e.target.value))}
+                        className="w-full accent-primary"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                        max_iter <span className="text-primary">{maxIter}</span>
+                      </label>
+                      <input
+                        type="range" min={50} max={500} step={50}
+                        value={maxIter}
+                        onChange={e => setMaxIter(Number(e.target.value))}
+                        className="w-full accent-primary"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <Button
+                  className="h-14 w-full rounded-[1.4rem] bg-primary font-black uppercase tracking-[0.22em] text-white shadow-2xl shadow-primary/30 transition-all hover:bg-primary/90 active:scale-95"
+                  onClick={handleTrain}
+                  disabled={trainModel.isPending}
+                >
+                  {trainModel.isPending ? (
+                    <><Loader2 className="mr-3 h-5 w-5 animate-spin" /> Entraînement en cours…</>
+                  ) : (
+                    <><PlayCircle className="mr-3 h-5 w-5 fill-current" /> Lancer l'entraînement</>
+                  )}
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Results panel */}
+            {trainResult ? (
+              <Card className="overflow-hidden rounded-[2.5rem] border-emerald-500/20 bg-card/70 backdrop-blur-xl shadow-2xl">
+                <CardHeader className="border-b border-emerald-500/20 bg-emerald-500/5 px-8 py-6">
+                  <CardTitle className="flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.3em] text-emerald-600">
+                    <CheckCircle2 className="h-4 w-4" /> Entraînement réussi
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6 p-8">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="rounded-[1.5rem] border border-border/50 bg-background/70 p-5">
+                      <div className="text-[9px] font-black uppercase tracking-[0.28em] text-muted-foreground">Accuracy</div>
+                      <div className="mt-2 text-4xl font-black text-primary">{(trainResult.accuracy * 100).toFixed(1)}%</div>
+                    </div>
+                    <div className="rounded-[1.5rem] border border-border/50 bg-background/70 p-5">
+                      <div className="text-[9px] font-black uppercase tracking-[0.28em] text-muted-foreground">Precision</div>
+                      <div className="mt-2 text-4xl font-black text-foreground">{(trainResult.precision * 100).toFixed(1)}%</div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-[1.5rem] border border-border/50 bg-background/70 p-5 space-y-2">
+                    <div className="text-[9px] font-black uppercase tracking-[0.28em] text-muted-foreground">Modèle</div>
+                    <div className="text-sm font-bold text-foreground">{trainResult.model_class}</div>
+                    <div className="text-[9px] font-mono text-muted-foreground/60 break-all">{trainResult.run_id}</div>
+                  </div>
+
+                  <Button
+                    className="h-14 w-full rounded-[1.4rem] bg-emerald-600 font-black uppercase tracking-[0.22em] text-white shadow-2xl shadow-emerald-600/30 transition-all hover:bg-emerald-500 active:scale-95"
+                    onClick={() => navigate(`/model-tests?run_id=${trainResult.run_id}`)}
+                  >
+                    <FlaskConical className="mr-3 h-5 w-5" /> Tester ce modèle →
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full rounded-[1.2rem] border-2 border-border/60 text-[10px] font-black uppercase tracking-[0.22em]"
+                    onClick={() => setActiveTab('registry')}
+                  >
+                    Voir le registre
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card className="flex min-h-[400px] items-center justify-center rounded-[2.5rem] border-dashed border-border/60 bg-card/40">
+                <div className="max-w-xs px-8 py-10 text-center text-muted-foreground">
+                  <Cpu className="mx-auto mb-4 h-12 w-12 opacity-20" />
+                  <div className="text-base font-bold text-foreground">Aucun entraînement</div>
+                  <p className="mt-2 text-sm leading-relaxed">
+                    Configurez votre modèle à gauche et lancez l'entraînement pour voir les résultats ici.
+                  </p>
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'notebook' && (
          <div className="grid gap-8 md:grid-cols-12 items-start px-2">
             {/* Context Sidebar */}
             <div className="md:col-span-3 space-y-6 sticky top-6">
@@ -933,6 +1168,31 @@ print(f"✓ Ingested sentiment sample: score={sentiment_snapshot.get('score', 0.
                      </Button>
                      
                      <div className="mx-4 h-[2px] rounded-full bg-border/30" />
+                     <div className="rounded-[2rem] border border-primary/20 bg-primary/5 p-5">
+                       <div className="flex items-center justify-between gap-3">
+                         <div>
+                           <div className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground">Model Test Lab</div>
+                           <div className="mt-2 text-sm font-semibold text-foreground">Dedicated page for train/test backtracking</div>
+                         </div>
+                         <Button
+                           className="h-11 rounded-[1.2rem] bg-primary px-4 text-[10px] font-black uppercase tracking-[0.22em] text-white hover:bg-primary/90"
+                           onClick={() => setActiveTab('registry')}
+                           type="button"
+                         >
+                           Open Registry
+                         </Button>
+                       </div>
+                       <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                         The test workspace now lives on its own page, with a virtual $100k portfolio, ticker selection, and direct model backtests.
+                       </p>
+                       <Button
+                         variant="outline"
+                         className="mt-4 h-11 rounded-[1.2rem] border-2 border-border/60 px-4 text-[10px] font-black uppercase tracking-[0.22em]"
+                         onClick={() => window.location.assign('/model-tests')}
+                       >
+                         Go to Model Test Lab
+                       </Button>
+                     </div>
                      
                      {selectedTemplate ? (
                        <div className="space-y-4 rounded-[2rem] border border-border/60 bg-background/60 p-5">
@@ -1134,7 +1394,9 @@ print(f"✓ Ingested sentiment sample: score={sentiment_snapshot.get('score', 0.
                </div>
             </div>
          </div>
-      ) : (
+        )}
+
+        {activeTab === 'registry' && (
          <div className="grid gap-10 px-4 md:grid-cols-4 items-start">
            <div className="md:col-span-1 space-y-6">
              <Card className="overflow-hidden rounded-[3rem] border-2 border-primary/20 bg-card/75 shadow-2xl backdrop-blur-xl">
@@ -1159,7 +1421,7 @@ print(f"✓ Ingested sentiment sample: score={sentiment_snapshot.get('score', 0.
              </Card>
            </div>
            
-           <div className="md:col-span-3 space-y-10">
+          <div className="md:col-span-3 space-y-10">
              <div className="grid gap-4 md:grid-cols-3">
                {leaderboard.length > 0 ? leaderboard.map((run, i) => (
                  <Card key={run.run_id} className={`group relative overflow-hidden rounded-[3rem] border-2 bg-card transition-all ${i === 0 ? 'z-10 border-yellow-500 shadow-[0_0_50px_rgba(234,179,8,0.15)]' : 'border-border/50 shadow-xl hover:-translate-y-1'}`}>
@@ -1218,44 +1480,65 @@ print(f"✓ Ingested sentiment sample: score={sentiment_snapshot.get('score', 0.
                             <tr><th className="py-8 px-14 text-left">Identifier / Architecture</th><th className="py-8 px-4 text-center">Status</th><th className="py-8 px-4 text-center">Score Card</th><th className="py-8 px-14 text-right">Workflow</th></tr>
                          </thead>
                          <tbody className="divide-y divide-border/30">
-                            {Array.isArray(experiments) && experiments.length > 0 ? experiments.map((run: any) => {
+                            {Array.isArray(experiments) && experiments.length > 0 ? experiments
+                              .filter((run: any) => run.params?.strategy_type === "predictive_ml" || run.metrics?.accuracy !== undefined)
+                              .map((run: any) => {
                                const isTrainingRun = run.metrics?.accuracy !== undefined;
                                return (
                                  <tr key={run.run_id} className="hover:bg-primary/5 transition-colors group">
-                                    <td className="py-10 px-14">
-                                       <div className="font-black group-hover:text-primary transition-colors uppercase text-lg tracking-tight">{run.name}</div>
-                                       <div className="text-[11px] text-muted-foreground font-mono mt-2 font-bold flex items-center gap-3">
-                                          <span className="bg-primary/10 text-primary px-3 py-1 rounded-xl border border-primary/20 text-[9px] tracking-widest">{run.params?.model_class || "SCIKIT-LEARN"}</span>
-                                          <span className="opacity-30 font-normal">{run.run_id.slice(0, 16)}</span>
+                                    <td className="py-8 px-10">
+                                       <div className="font-black group-hover:text-primary transition-colors uppercase text-base tracking-tight">{run.name}</div>
+                                       <div className="text-[11px] text-muted-foreground font-mono mt-2 font-bold flex items-center gap-3 flex-wrap">
+                                          <span className="bg-primary/10 text-primary px-3 py-1 rounded-xl border border-primary/20 text-[9px] tracking-widest">{run.params?.model_type || run.params?.model_class || "ML"}</span>
+                                          <span className="opacity-30 font-normal">{run.run_id.slice(0, 12)}</span>
+                                          {run.params?.features && <span className="opacity-40 text-[9px]">{run.params.features}</span>}
                                        </div>
                                     </td>
-                                    <td className="py-10 px-4 text-center">
-                                       <span className={`text-[10px] px-5 py-2.5 rounded-2xl font-black uppercase tracking-widest border-2 shadow-2xl ${run.status === 'FINISHED' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20'}`}>{run.status}</span>
+                                    <td className="py-8 px-4 text-center">
+                                       <span className={`text-[10px] px-4 py-2 rounded-2xl font-black uppercase tracking-widest border ${run.status === 'FINISHED' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20'}`}>{run.status}</span>
                                     </td>
-                                    <td className="py-10 px-4">
-                                       <div className="flex justify-center gap-12">
-                                          {isTrainingRun ? (
+                                    <td className="py-8 px-4">
+                                       <div className="flex justify-center gap-8">
+                                          {isTrainingRun && (
+                                             <>
                                              <div className="text-center">
-                                                <div className="text-2xl font-black text-blue-500 tracking-tighter">{(run.metrics?.accuracy * 100)?.toFixed(1)}%</div>
+                                                <div className="text-xl font-black text-blue-500 tracking-tighter">{(run.metrics?.accuracy * 100)?.toFixed(1)}%</div>
                                                 <div className="text-[9px] uppercase font-black tracking-widest opacity-40 mt-1">Accuracy</div>
                                              </div>
-                                          ) : (
                                              <div className="text-center">
-                                                <div className="text-2xl font-black text-foreground tracking-tighter">{run.metrics?.sharpe?.toFixed(2) || "0.00"}</div>
+                                                <div className="text-xl font-black text-foreground tracking-tighter">{run.metrics?.precision !== undefined ? (run.metrics.precision * 100).toFixed(1) + '%' : '—'}</div>
+                                                <div className="text-[9px] uppercase font-black tracking-widest opacity-40 mt-1">Precision</div>
+                                             </div>
+                                             </>
+                                          )}
+                                          {!isTrainingRun && (
+                                             <div className="text-center">
+                                                <div className="text-xl font-black text-foreground tracking-tighter">{run.metrics?.sharpe?.toFixed(2) || "—"}</div>
                                                 <div className="text-[9px] uppercase font-black tracking-widest opacity-40 mt-1">Sharpe</div>
                                              </div>
                                           )}
                                        </div>
                                     </td>
-                                    <td className="py-10 px-14 text-right">
-                                       <Button 
-                                         className="h-12 text-[10px] px-10 font-black uppercase tracking-[0.2em] shadow-2xl bg-emerald-600 hover:bg-emerald-500 text-white rounded-[1.2rem] flex items-center gap-3 transition-all hover:scale-105 active:scale-95" 
-                                         onClick={() => {if(confirm(`Promote this model configuration to production?`)) {deployModel.mutate(run.run_id, {onSuccess: (data) => alert(data.message)});}}} 
-                                         disabled={deployModel.isPending}
-                                       >
-                                          {deployModel.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
-                                          {isTrainingRun ? "ACTIVATE MODEL" : "USE PARAMETERS"}
-                                     </Button>
+                                    <td className="py-8 px-8 text-right">
+                                       <div className="flex items-center justify-end gap-3">
+                                         {isTrainingRun && (
+                                           <Button
+                                             variant="outline"
+                                             className="h-10 text-[10px] px-5 font-black uppercase tracking-[0.2em] rounded-[1.1rem] border-2 border-border/60 hover:border-primary/30"
+                                             onClick={() => navigate(`/model-tests?run_id=${run.run_id}`)}
+                                           >
+                                             <FlaskConical className="mr-2 h-3.5 w-3.5" /> Tester
+                                           </Button>
+                                         )}
+                                         <Button
+                                           className="h-10 text-[10px] px-5 font-black uppercase tracking-[0.2em] shadow-xl bg-emerald-600 hover:bg-emerald-500 text-white rounded-[1.1rem] flex items-center gap-2 transition-all hover:scale-105 active:scale-95"
+                                           onClick={() => {if(confirm(`Promouvoir ce modèle en production ?`)) {deployModel.mutate(run.run_id, {onSuccess: (data) => alert(data.message)});}}}
+                                           disabled={deployModel.isPending}
+                                         >
+                                           {deployModel.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Rocket className="h-3.5 w-3.5" />}
+                                           {isTrainingRun ? "Déployer" : "Params"}
+                                         </Button>
+                                       </div>
                                     </td>
                                  </tr>
                                );

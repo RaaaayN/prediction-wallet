@@ -31,14 +31,38 @@ class MLTrainerService:
             from sklearn.ensemble import RandomForestClassifier
             self.model_builder = lambda: RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
 
-    def train_model(self, dataset_name: str, **kwargs):
+    def train_model(self, dataset_name: str, model_type: str = "gradient_boosting", **kwargs):
         """Train a model on a specific Gold dataset with user-defined architecture."""
+        import ml.alpha_factory as _factory
+        _model_type = model_type
+        _model_params = {k: v for k, v in kwargs.items()}
+        self.model_builder = lambda: _factory.get_model(model_type=_model_type, **_model_params)
         data_dict = self.lake.load_gold(dataset_name)
         if not data_dict:
             raise ValueError(f"Dataset {dataset_name} not found in Gold layer.")
 
-        # Combine all tickers into one training set
-        all_data = pd.concat(data_dict.values())
+        from ml.alpha_factory import compute_model_features, compute_target_label
+
+        # Combine all tickers into one training set and normalize feature columns
+        enriched_frames = []
+        for frame in data_dict.values():
+            if frame is None or frame.empty:
+                continue
+            normalized = compute_model_features(frame)
+            if "Target" not in normalized.columns:
+                normalized = compute_target_label(normalized)
+            enriched_frames.append(normalized.dropna())
+
+        if not enriched_frames:
+            raise ValueError(f"Dataset {dataset_name} does not contain any usable training frames.")
+
+        all_data = pd.concat(enriched_frames, ignore_index=True)
+        missing_features = [feature for feature in self.features if feature not in all_data.columns]
+        if missing_features:
+            raise ValueError(
+                f"Dataset {dataset_name} is missing required features for training: {missing_features}"
+            )
+
         X = all_data[self.features]
         y = all_data["Target"]
 
@@ -66,6 +90,7 @@ class MLTrainerService:
                 
             mlflow.log_params({
                 "model_class": model_class_name,
+                "model_type": model_type,
                 "strategy_type": "predictive_ml",
                 "features": self.features,
                 **{k: str(v) for k, v in model_params.items() if len(str(v)) < 250}

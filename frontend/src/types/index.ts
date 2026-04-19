@@ -120,6 +120,32 @@ export interface CycleAudit {
   executions: ExecutionResult[];
 }
 
+export interface TradeRecord {
+  timestamp: string;
+  ticker: string;
+  action: "buy" | "sell";
+  quantity: number;
+  market_price: number;
+  fill_price: number;
+  commission: number;
+  success: boolean;
+}
+
+export interface DailyExposure {
+  date: string;
+  gross_exposure: number;
+  net_exposure: number;
+  long_exposure: number;
+  short_exposure: number;
+  leverage_used?: number;
+  long_count?: number;
+  short_count?: number;
+  position_sides?: Record<string, string>;
+  sector_gross?: Record<string, number>;
+  sector_net?: Record<string, number>;
+  single_name_concentration?: Record<string, number>;
+}
+
 export interface BacktestResult {
   strategy_name: string;
   days: number;
@@ -131,7 +157,26 @@ export interface BacktestResult {
   n_trades: number;
   n_risk_violations: number;
   data_hash?: string;
-  history?: Array<{ date: string; total_value: number }>;
+  history?: Array<{
+    date: string;
+    total_value: number;
+    cash?: number;
+    positions?: Record<string, number>;
+    gross_exposure?: number;
+    net_exposure?: number;
+    long_exposure?: number;
+    short_exposure?: number;
+    long_count?: number;
+    short_count?: number;
+  }>;
+  exposures?: DailyExposure[];
+  trades?: TradeRecord[];
+  risk_violations?: Array<{
+    timestamp: string;
+    ticker: string;
+    violation: string;
+    details: string;
+  }>;
 }
 
 export interface GovernanceReport {

@@ -9,7 +9,8 @@ import type {
   CorrelationData,
   StressScenario,
   IdeaBookEntry,
-  ReportInfo
+  ReportInfo,
+  BacktestResult
 } from '@/types';
 
 // Portfolio Queries
@@ -364,6 +365,53 @@ export const useTrainModel = () => {
   });
 };
 
+export interface ModelTestResult extends BacktestResult {
+  ok: boolean;
+  model_run_id: string;
+  initial_capital: number;
+  tickers: string[];
+  gold_dataset_name?: string | null;
+  metrics?: Record<string, number>;
+}
+
+export const useTestTrainedModel = () => {
+  return useMutation({
+    mutationFn: async ({
+      run_id,
+      profile,
+      days,
+      initial_capital,
+      tickers,
+      gold_dataset_name,
+      run_name,
+    }: {
+      run_id: string;
+      profile: string;
+      days: number;
+      initial_capital: number;
+      tickers: string[];
+      gold_dataset_name?: string | null;
+      run_name?: string;
+    }) => {
+      const { data } = await apiClient.post(`/experiments/${run_id}/test?profile=${profile}`, {
+        days,
+        initial_capital,
+        tickers,
+        gold_dataset_name,
+        run_name,
+      });
+      // Flatten nested metrics dict into top-level for BacktestResult compatibility
+      const metrics = (data as any).metrics || {};
+      return {
+        ...data,
+        ...metrics,
+        n_trades: (data as any).trades?.length ?? metrics.n_trades ?? 0,
+        n_risk_violations: (data as any).risk_violations?.length ?? metrics.n_risk_violations ?? 0,
+      } as ModelTestResult;
+    }
+  });
+};
+
 export const useAlphaScript = (name: string = "alpha_factory.py") => {
   return useQuery({
     queryKey: ['alpha-script', name],
@@ -520,6 +568,5 @@ export const useDeleteResearchNotebook = (profile: string) => {
     },
   });
 };
-
 
 
