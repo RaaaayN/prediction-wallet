@@ -90,8 +90,9 @@ export function Experiments() {
   const [isSavingNotebook, setIsSavingNotebook] = useState(false);
   
   // Data Preview State
-  const [previewDataset, setPreviewDataset] = useState<string>("");
-  const { data: dataPreview } = useGoldDatasetHead(previewDataset);
+  const goldDatasetList = useMemo(() => Array.isArray(goldDatasets) ? goldDatasets : [], [goldDatasets]);
+  const [selectedDataset, setSelectedDataset] = useState<string | null>(null);
+  const { data: dataPreview } = useGoldDatasetHead(selectedDataset ?? "");
 
   // Simulation Config
   const [selectedStrategy, setSelectedStrategy] = useState("predictive_ml");
@@ -155,6 +156,22 @@ export function Experiments() {
       setCells(INITIAL_CELLS);
     }
   }, [notebookLibrary?.notebooks, selectedNotebookId]);
+
+  useEffect(() => {
+    if (goldDatasetList.length === 0) {
+      setSelectedDataset(null);
+      return;
+    }
+
+    if (selectedDataset === null) {
+      setSelectedDataset(goldDatasetList[0]);
+      return;
+    }
+
+    if (selectedDataset !== "" && !goldDatasetList.includes(selectedDataset)) {
+      setSelectedDataset(goldDatasetList[0]);
+    }
+  }, [goldDatasetList, selectedDataset]);
 
   const handleRunExperiment = async () => {
     try {
@@ -300,8 +317,192 @@ export function Experiments() {
     return "Research";
   };
 
+  const buildDatasetAwareIngestionCell = (template: any, datasetName: string | null) => {
+    const datasetLiteral = JSON.stringify(datasetName);
+
+    switch (template?.id) {
+      case "random_forest":
+      case "logistic":
+      case "svm":
+      case "gb":
+        return `# STEP 1: DATA INGESTION
+import pandas as pd
+from market.fetcher import MarketDataService
+from services.data_lake_service import DataLakeService
+
+selected_gold_dataset = ${datasetLiteral}
+
+tickers = ['AAPL', 'MSFT', 'BTC-USD']
+mkt = MarketDataService()
+lake = DataLakeService()
+price_frames = {}
+
+if selected_gold_dataset:
+    gold_bundle = lake.load_gold(selected_gold_dataset)
+    if gold_bundle:
+        price_frames = gold_bundle
+        for ticker, frame in price_frames.items():
+            if frame is not None and not frame.empty:
+                frame['Ticker'] = ticker
+        print(f"✓ Loaded Gold dataset '{selected_gold_dataset}': {len(price_frames)} assets")
+
+if not price_frames:
+    for ticker in tickers:
+        frame = mkt.get_historical(ticker, days=365)
+        if frame is not None and not frame.empty:
+            frame['Ticker'] = ticker
+            price_frames[ticker] = frame
+            print(f'Loaded {ticker}: {len(frame)} rows')
+    if not price_frames:
+        idx = pd.date_range(end=pd.Timestamp.today(), periods=252, freq='B')
+        import numpy as np
+        base = np.linspace(0, 12, len(idx))
+        close = 100 + np.sin(base) * 5 + np.linspace(0, 3, len(idx))
+        open_ = close + np.cos(base) * 0.5
+        for ticker in tickers:
+            synthetic = pd.DataFrame({
+                'Open': open_,
+                'High': close + 1.5,
+                'Low': close - 1.5,
+                'Close': close,
+                'Volume': [1_000_000] * len(idx),
+            }, index=idx)
+            synthetic['Ticker'] = ticker
+            price_frames[ticker] = synthetic
+        print('✓ Using synthetic fallback market data')
+
+print(f'✓ Ingested {len(price_frames)} assets')`;
+      case "full_pipeline":
+        return `# STEP 1: DATA INGESTION
+import pandas as pd
+from market.fetcher import MarketDataService
+from services.data_lake_service import DataLakeService
+
+selected_gold_dataset = ${datasetLiteral}
+
+tickers = ['AAPL', 'MSFT', 'NVDA', 'BTC-USD']
+mkt = MarketDataService()
+lake = DataLakeService()
+dfs = []
+
+if selected_gold_dataset:
+    gold_bundle = lake.load_gold(selected_gold_dataset)
+    if gold_bundle:
+        for ticker, frame in gold_bundle.items():
+            if frame is None or frame.empty:
+                continue
+            frame = frame.copy()
+            frame['Ticker'] = frame.get('Ticker', ticker)
+            dfs.append(frame)
+        print(f"✓ Loaded Gold dataset '{selected_gold_dataset}' into {len(dfs)} frames")
+
+if not dfs:
+    for ticker in tickers:
+        frame = mkt.get_historical(ticker, days=500)
+        if frame is not None and not frame.empty:
+            frame['Ticker'] = ticker
+            dfs.append(frame)
+            print(f'✓ Ingested {ticker}')
+    if not dfs:
+        idx = pd.date_range(end=pd.Timestamp.today(), periods=500, freq='B')
+        import numpy as np
+        base = np.linspace(0, 20, len(idx))
+        close = 100 + np.sin(base) * 8 + np.linspace(0, 4, len(idx))
+        open_ = close + np.cos(base) * 0.75
+        for ticker in tickers:
+            synthetic = pd.DataFrame({
+                'Open': open_,
+                'High': close + 1.75,
+                'Low': close - 1.75,
+                'Close': close,
+                'Volume': [2_000_000] * len(idx),
+            }, index=idx)
+            synthetic['Ticker'] = ticker
+            dfs.append(synthetic)
+        print('✓ Using synthetic fallback market data')
+
+print(f'✓ Ingested {len(dfs)} assets')`;
+      case "sentiment_xgb":
+        return `# STEP 1: DATA INGESTION
+import pandas as pd
+from market.fetcher import MarketDataService
+from services.data_lake_service import DataLakeService
+from services.news_service import NewsSentimentService
+
+selected_gold_dataset = ${datasetLiteral}
+
+ticker = 'TSLA'
+mkt = MarketDataService()
+lake = DataLakeService()
+news = NewsSentimentService()
+df = None
+
+if selected_gold_dataset:
+    gold_bundle = lake.load_gold(selected_gold_dataset)
+    if gold_bundle:
+        ticker, df = next(iter(gold_bundle.items()))
+        if df is not None and not df.empty:
+            df = df.copy()
+            df['Ticker'] = ticker
+            print(f"✓ Loaded Gold dataset '{selected_gold_dataset}' using {ticker}: {len(df)} rows")
+        else:
+            df = None
+
+if df is None or df.empty:
+    df = mkt.get_historical(ticker, days=100)
+    if df is None or df.empty:
+        idx = pd.date_range(end=pd.Timestamp.today(), periods=100, freq='B')
+        import numpy as np
+        base = np.linspace(0, 8, len(idx))
+        close = 200 + np.sin(base) * 7 + np.linspace(0, 2, len(idx))
+        open_ = close + np.cos(base) * 0.5
+        df = pd.DataFrame({
+            'Open': open_,
+            'High': close + 1.5,
+            'Low': close - 1.5,
+            'Close': close,
+            'Volume': [1_500_000] * len(idx),
+        }, index=idx)
+        print('✓ Using synthetic fallback market data')
+    print(f'✓ Ingested price data: {len(df)} rows')
+
+sentiment_snapshot = news.get_ticker_sentiment(ticker)
+print(f"✓ Ingested sentiment sample: score={sentiment_snapshot.get('score', 0.0)}")`;
+      default:
+        return String(template?.cells?.[0]?.content ?? template?.content ?? "");
+    }
+  };
+
+  const buildNotebookCellsFromTemplate = (template: any, datasetName: string | null) => {
+    const templateCells = Array.isArray(template?.cells) && template.cells.length > 0
+      ? template.cells.map((cell: any, index: number) => ({
+          id: cell.id || `cell-${Date.now()}-${index}`,
+          type: cell.type || "code",
+          content: String(cell.content ?? ""),
+          output: [],
+        }))
+      : [];
+
+    if (templateCells.length === 0) {
+      return [
+        {
+          id: `cell-${Date.now()}-1`,
+          type: "code",
+          content: buildDatasetAwareIngestionCell(template, datasetName),
+          output: [],
+        },
+      ];
+    }
+
+    return templateCells.map((cell: any, index: number) =>
+      index === 0 && datasetName
+        ? { ...cell, content: buildDatasetAwareIngestionCell(template, datasetName) }
+        : cell
+    );
+  };
+
   const templatePreview = (template: any) => {
-    const cells = Array.isArray(template?.cells) ? template.cells : [];
+    const cells = buildNotebookCellsFromTemplate(template, selectedDataset);
     return cells
       .map((cell: any, index: number) => {
         const snippet = String(cell?.content ?? "")
@@ -315,33 +516,7 @@ export function Experiments() {
 
   const createNotebookFromTemplate = async (template: any) => {
     if (!template) return;
-    const templateCells = Array.isArray(template?.cells) && template.cells.length > 0
-      ? template.cells.map((cell: any, index: number) => ({
-          id: cell.id || `cell-${Date.now()}-${index}`,
-          type: cell.type || "code",
-          content: String(cell.content ?? ""),
-          output: [],
-        }))
-      : [
-          {
-            id: `cell-${Date.now()}-1`,
-            type: "code",
-            content: String(template?.content ?? ""),
-            output: [],
-          },
-          {
-            id: `cell-${Date.now()}-2`,
-            type: "code",
-            content: "# STEP 2: QUANT FEATURES\n",
-            output: [],
-          },
-          {
-            id: `cell-${Date.now()}-3`,
-            type: "code",
-            content: "# STEP 3: MODEL TRAINING\n",
-            output: [],
-          },
-        ];
+    const templateCells = buildNotebookCellsFromTemplate(template, selectedDataset);
     try {
       const created = await createNotebook.mutateAsync({
         name: `${template.name} Notebook`,
@@ -556,6 +731,68 @@ export function Experiments() {
          <div className="grid gap-8 md:grid-cols-12 items-start px-2">
             {/* Context Sidebar */}
             <div className="md:col-span-3 space-y-6 sticky top-6">
+               <Card className="overflow-hidden rounded-[2.5rem] border-border/60 bg-card/70 backdrop-blur-xl shadow-2xl">
+                  <CardHeader className="border-b border-border/50 bg-secondary/10 px-8 py-6">
+                     <CardTitle className="flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground"><Database className="h-4 w-4" /> Data Lake</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-6 p-8">
+                     <div className="space-y-3">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Select Dataset to Inspect</label>
+                        <select 
+                          className="h-11 w-full rounded-2xl border-2 border-border/50 bg-background px-4 text-xs font-black outline-none transition-all focus:border-primary"
+                          value={selectedDataset ?? ""}
+                          onChange={e => setSelectedDataset(e.target.value)}
+                        >
+                           <option value="">-- Choose Gold Pack --</option>
+                           {goldDatasetList.map(ds => <option key={ds} value={ds}>{ds}</option>)}
+                        </select>
+                     </div>
+
+                     <div className="flex items-center gap-2">
+                       <Button
+                         variant="outline"
+                         className="h-11 rounded-[1.2rem] border-2 border-border/60 text-[10px] font-black uppercase tracking-[0.22em]"
+                         onClick={() => setSelectedDataset("")}
+                         disabled={!selectedDataset}
+                       >
+                         Clear
+                       </Button>
+                       <div className="flex-1 rounded-[1.2rem] border border-primary/20 bg-primary/5 px-4 py-3 text-[9px] font-black uppercase tracking-[0.28em] text-primary">
+                         {selectedDataset ? `Ready to inject ${selectedDataset}` : "No dataset selected"}
+                       </div>
+                     </div>
+
+                     {dataPreview ? (
+                        <div className="space-y-3 rounded-2xl border border-white/5 bg-black/40 p-4 shadow-inner">
+                           <div className="flex items-center justify-between">
+                              <span className="text-[9px] font-black uppercase tracking-widest text-emerald-500">Preview: {dataPreview.ticker}</span>
+                              <Eye className="h-3 w-3 text-white/20" />
+                           </div>
+                           <div className="overflow-x-auto">
+                              <table className="w-full text-[9px] font-mono text-zinc-400">
+                                 <thead>
+                                    <tr className="border-b border-white/10">
+                                       {Array.isArray(dataPreview.columns) ? dataPreview.columns.slice(0, 3).map((c: string) => <th key={c} className="pb-1 pr-3 text-left font-black uppercase tracking-widest text-zinc-500">{c}</th>) : null}
+                                    </tr>
+                                 </thead>
+                                 <tbody>
+                                    {Array.isArray(dataPreview.records) ? dataPreview.records.slice(0, 6).map((r: any, i: number) => (
+                                       <tr key={i} className="border-b border-white/5">
+                                          {Array.isArray(dataPreview.columns) ? dataPreview.columns.slice(0, 3).map((c: string) => <td key={c} className="py-1 pr-3">{typeof r[c] === 'number' ? r[c].toFixed(2) : String(r[c])}</td>) : null}
+                                       </tr>
+                                    )) : null}
+                                 </tbody>
+                              </table>
+                           </div>
+                        </div>
+                     ) : (
+                        <div className="rounded-2xl border border-dashed border-border/60 bg-background/60 px-5 py-6 text-xs leading-relaxed text-muted-foreground">
+                          Select a gold dataset to preview the first rows directly inside the workspace.
+                        </div>
+                     )}
+                  </CardContent>
+               </Card>
+
                <Card className="overflow-hidden rounded-[2.5rem] border-border/60 bg-card/70 shadow-2xl backdrop-blur-xl">
                   <CardHeader className="border-b border-border/50 bg-secondary/10 px-8 py-6">
                      <CardTitle className="flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground">
@@ -715,6 +952,9 @@ export function Experiments() {
                              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                                {selectedTemplate.description}
                              </p>
+                             <p className="mt-2 text-[10px] font-black uppercase tracking-[0.25em] text-primary/80">
+                               {selectedDataset ? `Step 1 will use ${selectedDataset}` : "Step 1 will use live market data"}
+                             </p>
                              <div className="mt-3 flex flex-wrap gap-2">
                                {["Ingestion", "Quant Features", "Model Training"].map((label) => (
                                  <span key={label} className="rounded-full bg-muted px-3 py-1 text-[9px] font-black uppercase tracking-[0.25em] text-muted-foreground">
@@ -728,7 +968,7 @@ export function Experiments() {
                              onClick={() => createNotebookFromTemplate(selectedTemplate)}
                              disabled={createNotebook.isPending}
                            >
-                             Create 3-Cell Notebook
+                             Create with Dataset
                            </Button>
                          </div>
                          <div className="rounded-[1.5rem] border border-white/5 bg-black/50 p-4">
@@ -779,52 +1019,11 @@ export function Experiments() {
 
                <Card className="overflow-hidden rounded-[2.5rem] border-border/60 bg-card/70 backdrop-blur-xl shadow-2xl">
                   <CardHeader className="border-b border-border/50 bg-secondary/10 px-8 py-6">
-                     <CardTitle className="flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground"><Database className="h-4 w-4" /> Data Lake</CardTitle>
+                     <CardTitle className="flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground"><HelpCircle className="h-4 w-4" /> Pipeline SOP</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-6 p-8">
-                     <div className="space-y-3">
-                        <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Select Dataset to Inspect</label>
-                        <select 
-                          className="h-11 w-full rounded-2xl border-2 border-border/50 bg-background px-4 text-xs font-black outline-none transition-all focus:border-primary"
-                          value={previewDataset}
-                          onChange={e => setPreviewDataset(e.target.value)}
-                        >
-                           <option value="">-- Choose Gold Pack --</option>
-                           {Array.isArray(goldDatasets) ? goldDatasets.map(ds => <option key={ds} value={ds}>{ds}</option>) : null}
-                        </select>
-                     </div>
-
-                     {dataPreview ? (
-                        <div className="space-y-3 rounded-2xl border border-white/5 bg-black/40 p-4 shadow-inner">
-                           <div className="flex items-center justify-between">
-                              <span className="text-[9px] font-black uppercase tracking-widest text-emerald-500">Preview: {dataPreview.ticker}</span>
-                              <Eye className="h-3 w-3 text-white/20" />
-                           </div>
-                           <div className="overflow-x-auto">
-                              <table className="w-full text-[9px] font-mono text-zinc-400">
-                                 <thead>
-                                    <tr className="border-b border-white/10">
-                                       {Array.isArray(dataPreview.columns) ? dataPreview.columns.slice(0, 3).map((c: string) => <th key={c} className="pb-1 pr-3 text-left font-black uppercase tracking-widest text-zinc-500">{c}</th>) : null}
-                                    </tr>
-                                 </thead>
-                                 <tbody>
-                                    {Array.isArray(dataPreview.records) ? dataPreview.records.slice(0, 6).map((r: any, i: number) => (
-                                       <tr key={i} className="border-b border-white/5">
-                                          {Array.isArray(dataPreview.columns) ? dataPreview.columns.slice(0, 3).map((c: string) => <td key={c} className="py-1 pr-3">{typeof r[c] === 'number' ? r[c].toFixed(2) : String(r[c])}</td>) : null}
-                                       </tr>
-                                    )) : null}
-                                 </tbody>
-                              </table>
-                           </div>
-                        </div>
-                     ) : (
-                        <div className="rounded-2xl border border-dashed border-border/60 bg-background/60 px-5 py-6 text-xs leading-relaxed text-muted-foreground">
-                          Select a gold dataset to preview the first rows directly inside the workspace.
-                        </div>
-                     )}
-
                      <Button variant="ghost" className="h-14 w-full rounded-2xl border-2 border-transparent bg-card/20 text-[11px] font-black text-muted-foreground transition-all hover:border-primary/20 hover:text-primary" onClick={() => setShowTutorial(true)}>
-                       <HelpCircle className="mr-3 h-5 w-5" /> Pipeline SOP
+                       <HelpCircle className="mr-3 h-5 w-5" /> Open SOP
                      </Button>
                   </CardContent>
                </Card>
@@ -832,6 +1031,22 @@ export function Experiments() {
 
             {/* Notebook Interface — title, status, and actions live only in the Notebook card (left) */}
             <div className="md:col-span-9 space-y-8">
+               <Card className="overflow-hidden rounded-[2.5rem] border-primary/20 bg-primary/5 shadow-2xl backdrop-blur-xl">
+                  <CardContent className="flex flex-col gap-3 px-8 py-6 md:flex-row md:items-center md:justify-between">
+                     <div>
+                        <div className="text-[10px] font-black uppercase tracking-[0.35em] text-primary">Dataset-first notebook bootstrap</div>
+                        <div className="mt-2 text-sm font-semibold text-foreground">
+                          {selectedDataset
+                            ? `The selected Gold dataset ${selectedDataset} will be injected into STEP 1 when you create a notebook from a template.`
+                            : "Select a Gold dataset first, then create a template notebook to inject it into STEP 1."}
+                        </div>
+                     </div>
+                     <div className="rounded-full border border-primary/20 bg-background/80 px-4 py-2 text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground">
+                        Template-ready
+                     </div>
+                  </CardContent>
+               </Card>
+
                {cells.map((cell, idx) => (
                   <div key={cell.id} className="relative group/cell">
                      <div className="absolute -left-16 top-4 bottom-4 w-12 flex flex-col items-center gap-4 opacity-0 group-hover/cell:opacity-100 transition-all">
