@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from time import perf_counter
@@ -24,9 +25,9 @@ from api.models import (
     ConfigResponse, PortfolioResponse, PositionRow, 
     MarketStatusResponse, OnboardingStatusResponse,
     InstrumentRow, TradingCoreOrderRow, TradingCoreExecutionRow,
-    TradingCorePositionRow, CashMovementRow,
+    TradingCorePositionRow, CashMovementRow, CashMovementRequest,
     SettingsResponse, SettingsUpdateRequest,
-    StrategyInfo, ExperimentRow
+    StrategyInfo, ExperimentRow, ReportInfo
 )
 from config import ALLOWED_ORIGINS
 from utils.telemetry import trace_request
@@ -264,8 +265,59 @@ async def get_traces_api(
 @app.get("/api/audit/governance")
 async def get_governance_api(profile: str | None = Query(None), _: User = Depends(get_current_user)):
     from services.governance_service import GovernanceService
-    gov = GovernanceService(profile_name=profile or "balanced")
+    gov = GovernanceService(profile_name=profile)
     return gov.generate_governance_report()
+
+
+@app.get("/api/reports", response_model=list[ReportInfo])
+async def list_reports(profile: str | None = Query(None), _: User = Depends(get_current_user)):
+    from settings import settings
+    import os
+    from datetime import datetime
+
+    # Resolve reports directory
+    if profile:
+        reports_dir = Path("data/profiles") / profile / "reports"
+    else:
+        profile_name = os.getenv("PORTFOLIO_PROFILE") or settings.portfolio_profile
+        reports_dir = Path("data/profiles") / profile_name / "reports"
+
+    if not reports_dir.exists():
+        return []
+
+    reports = []
+    for f in reports_dir.glob("*.pdf"):
+        stat = f.stat()
+        reports.append({
+            "filename": f.name,
+            "size_bytes": stat.st_size,
+            "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "url": f"/api/reports/download/{f.name}?profile={profile or ''}"
+        })
+
+    # Sort by date descending
+    reports.sort(key=lambda x: x["created_at"], reverse=True)
+    return reports
+
+
+@app.get("/api/reports/download/{filename}")
+async def download_report(filename: str, profile: str | None = Query(None), _: User = Depends(get_current_user)):
+    from settings import settings
+    import os
+
+    if profile:
+        reports_dir = Path("data/profiles") / profile / "reports"
+    else:
+        profile_name = os.getenv("PORTFOLIO_PROFILE") or settings.portfolio_profile
+        reports_dir = Path("data/profiles") / profile_name / "reports"
+
+    file_path = reports_dir / filename
+    if not file_path.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    return FileResponse(str(file_path), media_type="application/pdf", filename=filename)
+
 
 
 class BacktestRequest(BaseModel):
@@ -416,6 +468,24 @@ async def get_market_snapshot(profile: str | None = Query(None), _: User = Depen
     }
 
 
+@app.get("/api/market/sentiment")
+async def get_market_sentiment(profile: str | None = Query(None), _: User = Depends(get_current_user)):
+    from services.news_service import NewsSentimentService
+    from services.market_service import MarketService
+    
+    svc = MarketService(profile_name=profile)
+    tickers = list(svc.runtime_context.target_allocation.keys())
+    
+    # Use mock for speed if no real keys
+    news_svc = NewsSentimentService()
+    results = []
+    # Limit to top 8 tickers to avoid timeout
+    for t in tickers[:8]:
+        results.append(news_svc.get_ticker_sentiment(t))
+    
+    return results
+
+
 @app.post("/api/market/refresh")
 async def refresh_market_data(profile: str | None = Query(None), _: User = Depends(requires_role([Role.ADMIN, Role.TRADER]))):
     from services.market_service import MarketService
@@ -477,6 +547,28 @@ async def get_tc_cash_movements(
     return get_trading_core_cash_movements(cycle_id=cycle_id, limit=limit)
 
 
+@app.post("/api/trading-core/cash-movements")
+async def create_tc_cash_movement(
+    req: CashMovementRequest,
+    profile: str | None = Query(None),
+    _: User = Depends(requires_role([Role.ADMIN]))
+):
+    from db.repository import save_cash_movement
+    from utils.time import utc_now_iso
+    import uuid
+    
+    movement = {
+        "cash_movement_id": f"manual_{uuid.uuid4().hex[:8]}",
+        "movement_type": req.movement_type,
+        "amount": req.amount,
+        "currency": "USD",
+        "created_at": utc_now_iso(),
+        "description": req.description or "Manual cash movement via UI"
+    }
+    save_cash_movement(movement, profile_name=profile)
+    return {"ok": True, "message": f"Cash movement of {req.amount} recorded."}
+
+
 
 @app.get("/api/backtest")
 async def get_backtest(
@@ -493,14 +585,14 @@ async def get_backtest(
     if tickers:
         _prefetch_price_history(tickers, min_days=days + 30)
     
-    tester = EventDrivenBacktester(days=days, profile_name=profile)
+    tester = EventDrivenBacktester(days=days, initial_capital=svc.runtime_context.initial_capital)
     res = tester.run(strategy_type=strategy)
     
     # Return full report including history for charting
     return {
         "strategy": strategy,
         "days": days,
-        "metrics": res.metrics.model_dump(),
+        "metrics": res.metrics,
         "history": res.history,
         "data_hash": res.data_hash
     }
@@ -798,6 +890,9 @@ async def update_strategy_params(
 async def get_experiments(_: User = Depends(get_current_user)):
     import mlflow
     from datetime import datetime
+    from config import DATA_DIR
+
+    mlflow.set_tracking_uri(f"sqlite:///{Path(DATA_DIR) / 'mlflow.db'}")
 
     try:
         # Check if local mlruns exists
@@ -1316,7 +1411,11 @@ async def run_step(step: str, req: RunRequest = RunRequest(), _: User = Depends(
         args = ["main.py"]
         if req.profile:
             args += ["--profile", req.profile]
-        args += ["init", "--force", "--initial-capital", "0"] # 0 capital effectively wipes to empty
+        from portfolio_loader import load_profile
+
+        reset_profile = req.profile or os.getenv("PORTFOLIO_PROFILE") or "balanced"
+        profile_capital = load_profile(reset_profile).get("initial_capital")
+        args += ["init", "--force", "--initial-capital", str(profile_capital)]
     elif step == "report":
         args = ["main.py", "report"]
     else:

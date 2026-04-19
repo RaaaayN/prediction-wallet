@@ -1,14 +1,17 @@
 import { useStore } from "@/store/useStore";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
-import { usePortfolio } from "@/api/queries";
-import { AlertCircle } from "lucide-react";
+import { usePortfolio, useMarketSnapshot } from "@/api/queries";
+import { AlertCircle, TrendingUp, TrendingDown } from "lucide-react";
 
 const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#6366f1', '#ec4899', '#f43f5e', '#f59e0b', '#eab308'];
 
 export function Portfolio() {
   const profile = useStore((state) => state.profile);
-  const { data: portfolio, isLoading } = usePortfolio(profile);
+  const { data: portfolio, isLoading: portfolioLoading } = usePortfolio(profile);
+  const { data: market, isLoading: marketLoading } = useMarketSnapshot(profile);
+
+  const isLoading = portfolioLoading || marketLoading;
 
   if (isLoading) return <div className="p-8 text-muted-foreground animate-pulse">Loading portfolio...</div>;
 
@@ -74,7 +77,7 @@ export function Portfolio() {
           <CardHeader>
             <CardTitle>Drift Analysis</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="h-[350px] overflow-auto pr-2">
             <div className="space-y-4">
               {Object.entries(portfolio.target_weights || {}).map(([ticker, targetW]) => {
                 const currentW = portfolio.current_weights[ticker] || 0;
@@ -91,7 +94,7 @@ export function Portfolio() {
                         {current.toFixed(1)}% / {target.toFixed(1)}% (Drift: {drift > 0 ? "+" : ""}{drift.toFixed(2)}%)
                       </span>
                     </div>
-                    <div className="h-2 w-full bg-secondary rounded-full overflow-hidden flex">
+                    <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden flex">
                       <div className="h-full bg-emerald-500" style={{ width: `${Math.min(current, target)}%` }} />
                       {isOverweight && (
                         <div className="h-full bg-amber-500" style={{ width: `${drift}%` }} />
@@ -104,6 +107,62 @@ export function Portfolio() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Detailed Holdings</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="border border-border rounded-md overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-secondary/50 border-b border-border text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="py-2 px-4 text-left">Ticker</th>
+                  <th className="py-2 px-4 text-right">Quantity</th>
+                  <th className="py-2 px-4 text-right">Avg Cost</th>
+                  <th className="py-2 px-4 text-right">Last Price</th>
+                  <th className="py-2 px-4 text-right">Market Value</th>
+                  <th className="py-2 px-4 text-right">Weight</th>
+                  <th className="py-2 px-4 text-right">P&L (%)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {Object.entries(portfolio.positions).map(([ticker, qty]) => {
+                  const avgCost = portfolio.average_costs?.[ticker] || 0;
+                  const price = market?.prices?.[ticker] || 0;
+                  const mktValue = qty * price;
+                  const weight = (mktValue / portfolio.total_value) * 100;
+                  const pnlPct = avgCost > 0 ? ((price / avgCost) - 1) * 100 : 0;
+                  
+                  return (
+                    <tr key={ticker} className="hover:bg-secondary/20 transition-colors">
+                      <td className="py-2 px-4 font-mono font-bold text-xs">{ticker}</td>
+                      <td className="py-2 px-4 text-right font-mono">{qty.toFixed(4)}</td>
+                      <td className="py-2 px-4 text-right font-mono">${avgCost.toFixed(2)}</td>
+                      <td className="py-2 px-4 text-right font-mono">${price.toFixed(2)}</td>
+                      <td className="py-2 px-4 text-right font-mono">${mktValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                      <td className="py-2 px-4 text-right font-mono">{weight.toFixed(2)}%</td>
+                      <td className={`py-2 px-4 text-right font-mono font-bold ${pnlPct >= 0 ? 'text-emerald-500' : 'text-destructive'}`}>
+                        <div className="flex items-center justify-end gap-1">
+                          {pnlPct >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                          {pnlPct.toFixed(2)}%
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                <tr className="bg-secondary/30 font-bold">
+                   <td className="py-2 px-4">CASH</td>
+                   <td className="py-2 px-4 text-right font-mono" colSpan={3}>-</td>
+                   <td className="py-2 px-4 text-right font-mono">${portfolio.cash.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                   <td className="py-2 px-4 text-right font-mono">{(portfolio.cash / portfolio.total_value * 100).toFixed(2)}%</td>
+                   <td className="py-2 px-4 text-right">-</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

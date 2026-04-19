@@ -98,6 +98,11 @@ class CashMovementRow(BaseModel):
     created_at: str
     description: str | None = None
 
+class CashMovementRequest(BaseModel):
+    amount: float
+    movement_type: str = "deposit"
+    description: str | None = None
+
 class StrategyInfo(BaseModel):
     name: str
     description: str
@@ -113,6 +118,12 @@ class ExperimentRow(BaseModel):
     end_time: str | None = None
     metrics: dict[str, float]
     params: dict[str, str]
+
+class ReportInfo(BaseModel):
+    filename: str
+    size_bytes: int
+    created_at: str
+    url: str
 
 
 class SettingsResponse(BaseModel):

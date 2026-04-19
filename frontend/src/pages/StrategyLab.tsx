@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { useStrategies, useUpdateStrategyParams } from "@/api/queries";
-import { Cpu, CheckCircle2, Circle, Settings2, RefreshCw } from "lucide-react";
+import { useStrategies, useUpdateStrategyParams, useSentiment } from "@/api/queries";
+import { Cpu, CheckCircle2, Circle, Settings2, RefreshCw, MessageSquare, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useStore } from "@/store/useStore";
 
 export function StrategyLab() {
+  const profile = useStore((state) => state.profile);
   const { data: strategies, isLoading } = useStrategies();
+  const { data: sentiment, isLoading: sentimentLoading } = useSentiment(profile);
   const updateParams = useUpdateStrategyParams();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<string | null>(null);
@@ -115,19 +118,56 @@ export function StrategyLab() {
         ))}
       </div>
 
-      <Card className="bg-secondary/10 border-dashed border-2">
-        <CardContent className="py-12 flex flex-col items-center justify-center text-center">
-          <div className="h-12 w-12 rounded-full bg-secondary flex items-center justify-center mb-4">
-             <Cpu className="h-6 w-6 text-muted-foreground" />
-          </div>
-          <h3 className="text-lg font-medium">New Signal Integration</h3>
-          <p className="text-sm text-muted-foreground max-w-md mt-2">
-            The Prediction Wallet framework allows for easy integration of new signals like 
-            Macro Regimes, Order Flow Imbalance, or Alternative Data.
-          </p>
-          <Button variant="outline" className="mt-4 text-primary border-primary/20">View Documentation</Button>
-        </CardContent>
-      </Card>
+      <div className="grid gap-6 md:grid-cols-2">
+         <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><MessageSquare className="h-4 w-4" /> Live NLP Sentiment</CardTitle>
+            <CardDescription>Aggregate scores from FinBERT analysis of latest news</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {sentimentLoading ? (
+               <div className="space-y-4 animate-pulse py-4">
+                  {[1,2,3].map(i => <div key={i} className="h-10 bg-secondary/50 rounded" />)}
+               </div>
+            ) : sentiment && sentiment.length > 0 ? (
+               <div className="space-y-3">
+                  {sentiment.map((s: any) => (
+                    <div key={s.ticker} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/10 transition-colors">
+                       <div className="flex items-center gap-3">
+                          <div className="font-mono font-bold text-xs bg-secondary px-2 py-1 rounded">{s.ticker}</div>
+                          <div className="text-[10px] text-muted-foreground uppercase">{s.count} articles scanned</div>
+                       </div>
+                       <div className="flex items-center gap-2">
+                          <span className={`text-sm font-mono font-bold ${s.score > 0.1 ? 'text-emerald-500' : s.score < -0.1 ? 'text-destructive' : 'text-muted-foreground'}`}>
+                             {s.score > 0 ? '+' : ''}{s.score.toFixed(2)}
+                          </span>
+                          {s.score > 0.1 ? <TrendingUp className="h-3 w-3 text-emerald-500" /> : s.score < -0.1 ? <TrendingDown className="h-3 w-3 text-destructive" /> : <Minus className="h-3 w-3 text-muted-foreground" />}
+                       </div>
+                    </div>
+                  ))}
+               </div>
+            ) : (
+              <div className="py-12 text-center text-muted-foreground border border-dashed rounded-lg bg-secondary/5">
+                <p className="text-sm italic">Sentiment data unavailable. Trigger a market refresh to sync news.</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-secondary/10 border-dashed border-2">
+          <CardContent className="py-12 flex flex-col items-center justify-center text-center">
+            <div className="h-12 w-12 rounded-full bg-secondary flex items-center justify-center mb-4">
+              <Cpu className="h-6 w-6 text-muted-foreground" />
+            </div>
+            <h3 className="text-lg font-medium">New Signal Integration</h3>
+            <p className="text-sm text-muted-foreground max-w-md mt-2">
+              The Prediction Wallet framework allows for easy integration of new signals like 
+              Macro Regimes, Order Flow Imbalance, or Alternative Data.
+            </p>
+            <Button variant="outline" className="mt-4 text-primary border-primary/20">View Documentation</Button>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

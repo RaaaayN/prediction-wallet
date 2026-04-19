@@ -154,6 +154,13 @@ export interface IdeaBookEntry {
   created_at: string;
 }
 
+export interface ReportInfo {
+  filename: string;
+  size_bytes: number;
+  created_at: string;
+  url: string;
+}
+
 export interface StressScenario {
   scenario: string;
   equity_shock: number;

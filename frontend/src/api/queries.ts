@@ -8,7 +8,8 @@ import type {
   MonteCarloResult,
   CorrelationData,
   StressScenario,
-  IdeaBookEntry
+  IdeaBookEntry,
+  ReportInfo
 } from '@/types';
 
 // Portfolio Queries
@@ -39,6 +40,16 @@ export const useRefreshMarket = () => {
       const { data } = await apiClient.post(`/market/refresh?profile=${profile}`);
       return data;
     }
+  });
+};
+
+export const useSentiment = (profile: string) => {
+  return useQuery({
+    queryKey: ['sentiment', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/market/sentiment?profile=${profile}`);
+      return data;
+    },
   });
 };
 
@@ -133,6 +144,25 @@ export const useGovernanceReport = (profile: string) => {
   });
 };
 
+export const useReports = (profile: string) => {
+  return useQuery({
+    queryKey: ['reports', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ReportInfo[]>(`/reports?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+export const useGenerateReport = () => {
+  return useMutation({
+    mutationFn: async ({ profile }: { profile: string }) => {
+      const { data } = await apiClient.post(`/run/report`, { profile });
+      return data;
+    }
+  });
+};
+
 // Backtesting
 export const useRunBacktest = () => {
   return useMutation({
@@ -198,6 +228,29 @@ export const useTradingCorePositions = (profile: string) => {
   });
 };
 
+export const useTCCashMovements = (profile: string) => {
+  return useQuery({
+    queryKey: ['trading-core-cash-movements', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/trading-core/cash-movements?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+export const useCreateCashMovement = () => {
+  return useMutation({
+    mutationFn: async ({ profile, amount, type, description }: { profile: string; amount: number; type: string; description?: string }) => {
+      const { data } = await apiClient.post(`/trading-core/cash-movements?profile=${profile}`, {
+        amount,
+        movement_type: type,
+        description
+      });
+      return data;
+    }
+  });
+};
+
 // Middle Office Queries
 export const useReconciliation = (profile: string) => {
   return useQuery({
@@ -218,6 +271,44 @@ export const useTCA = (profile: string) => {
     },
   });
 };
+
+export const useSyncLegacy = () => {
+  return useMutation({
+    mutationFn: async (profile: string) => {
+      const { data } = await apiClient.post(`/middle-office/sync?profile=${profile}`);
+      return data;
+    }
+  });
+};
+
+export const useCalculateNAV = () => {
+  return useMutation({
+    mutationFn: async (profile: string) => {
+      const { data } = await apiClient.post(`/middle-office/nav/calculate?profile=${profile}`);
+      return data;
+    }
+  });
+};
+
+export const useNAVHistory = (profile: string) => {
+  return useQuery({
+    queryKey: ['nav-history', profile],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/middle-office/nav/history?profile=${profile}`);
+      return data;
+    },
+  });
+};
+
+export const useTriggerBackup = () => {
+  return useMutation({
+    mutationFn: async (profile: string) => {
+      const { data } = await apiClient.post(`/middle-office/backup?profile=${profile}`);
+      return data;
+    }
+  });
+};
+
 
 // Strategy Lab Queries
 export const useStrategies = () => {

@@ -15,6 +15,9 @@ import {
   Briefcase
 } from "lucide-react";
 import { cn } from "@/utils/cn";
+import { useStore } from "@/store/useStore";
+import { useQuery } from "@tanstack/react-query";
+import { apiClient } from "@/api/client";
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -33,6 +36,22 @@ const navItems = [
 ];
 
 export function AppLayout() {
+  const { profile, setProfile } = useStore();
+
+  const { data: profiles } = useQuery({
+    queryKey: ['onboarding-profiles'],
+    queryFn: async () => {
+      const { data } = await apiClient.get('/onboarding/profiles');
+      return data;
+    }
+  });
+
+  const handleProfileChange = async (newProfile: string) => {
+    await apiClient.post("/onboarding/resume", { profile: newProfile });
+    setProfile(newProfile);
+    window.location.reload(); // Refresh to ensure all queries reset
+  };
+
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden">
       {/* Sidebar */}
@@ -64,13 +83,28 @@ export function AppLayout() {
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0">
         <header className="h-16 border-b border-border flex items-center justify-between px-8 bg-card/50 backdrop-blur-sm z-10 sticky top-0">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">
               <span className="relative flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
               </span>
               <span className="text-sm font-medium text-muted-foreground">System Online</span>
+            </div>
+
+            <div className="h-4 w-[1px] bg-border" />
+
+            <div className="flex items-center gap-2">
+               <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Profile:</span>
+               <select 
+                 className="bg-transparent text-sm font-bold focus:outline-none cursor-pointer hover:text-primary transition-colors"
+                 value={profile}
+                 onChange={(e) => handleProfileChange(e.target.value)}
+               >
+                 {profiles?.map((p: any) => (
+                   <option key={p.name} value={p.name} className="bg-background text-foreground">{p.label}</option>
+                 ))}
+               </select>
             </div>
           </div>
         </header>
