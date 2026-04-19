@@ -336,11 +336,11 @@ class RunRequest(BaseModel):
 async def run_backtest_api(req: BacktestRequest, profile: str | None = Query(None), _: User = Depends(get_current_user)):
     from engine.backtest_v2 import EventDrivenBacktester
     from services.mlflow_service import MLflowService
-    
-    # Optional: use profile-specific data lake if implemented
-    tester = EventDrivenBacktester(days=req.days)
+
+    # Use profile-specific data for the simulation
+    tester = EventDrivenBacktester(days=req.days, profile_name=profile)
     result = tester.run(strategy_type=req.strategy_name)
-    
+
     # Log to MLflow
     mlflow_svc = MLflowService()
     mlflow_svc.log_backtest(result, {
@@ -348,7 +348,6 @@ async def run_backtest_api(req: BacktestRequest, profile: str | None = Query(Non
         "days": req.days,
         "profile": profile or "balanced"
     })
-    
     # Convert result to dict for JSON
     return {
         "strategy_name": result.strategy_name,
@@ -895,18 +894,13 @@ async def update_strategy_params(
 
 @app.get("/api/experiments", response_model=list[ExperimentRow])
 async def get_experiments(_: User = Depends(get_current_user)):
+    from services.mlflow_service import MLflowService
     import mlflow
-    from datetime import datetime
-    from config import DATA_DIR
-
-    mlflow.set_tracking_uri(f"sqlite:///{Path(DATA_DIR) / 'mlflow.db'}")
-
+    
     try:
-        # Check if local mlruns exists
-        if not Path("mlruns").exists() and not Path("data/mlruns").exists():
-            return []
-
-        # Try to list runs from the default experiment or all experiments
+        # Initialize service to set correct tracking URI and ensure env consistency
+        MLflowService()
+        
         all_runs = []
         experiments = mlflow.search_experiments()
         for exp in experiments:
@@ -923,7 +917,7 @@ async def get_experiments(_: User = Depends(get_current_user)):
                     "metrics": {k.replace("metrics.", ""): v for k, v in run.items() if k.startswith("metrics.")},
                     "params": {k.replace("params.", ""): str(v) for k, v in run.items() if k.startswith("params.")}
                 })
-
+        
         # Sort by start time descending
         all_runs.sort(key=lambda x: x["start_time"], reverse=True)
         return all_runs[:50]

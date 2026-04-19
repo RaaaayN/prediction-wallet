@@ -1,10 +1,30 @@
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { useExperiments } from "@/api/queries";
-import { ExternalLink, Clock, Activity, BarChart2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useExperiments, useStrategies, useRunBacktest } from "@/api/queries";
+import { ExternalLink, Clock, Activity, BarChart2, PlayCircle, Loader2 } from "lucide-react";
 import { format } from "date-fns";
+import { useQueryClient } from "@tanstack/react-query";
+import { useStore } from "@/store/useStore";
 
 export function Experiments() {
+  const profile = useStore((state) => state.profile);
   const { data: experiments, isLoading } = useExperiments();
+  const { data: strategies, isLoading: stratsLoading } = useStrategies();
+  const runBacktest = useRunBacktest();
+  const queryClient = useQueryClient();
+
+  const [selectedStrategy, setSelectedStrategy] = useState("ensemble");
+  const [days, setDays] = useState(90);
+
+  const handleRunExperiment = async () => {
+    try {
+      await runBacktest.mutateAsync({ strategy: selectedStrategy, days, profile });
+      queryClient.invalidateQueries({ queryKey: ['experiments'] });
+    } catch (e) {
+      alert("Failed to run experiment. Ensure MLflow tracking URI is accessible.");
+    }
+  };
 
   if (isLoading) return <div className="p-8 animate-pulse text-muted-foreground">Connecting to MLflow Tracking Server...</div>;
 
@@ -25,28 +45,70 @@ export function Experiments() {
         </a>
       </div>
 
-      <div className="grid gap-6">
-        <Card>
+      <div className="grid gap-6 md:grid-cols-3">
+        {/* Launch Panel */}
+        <Card className="md:col-span-1">
+          <CardHeader>
+             <CardTitle className="flex items-center gap-2"><PlayCircle className="h-4 w-4" /> New Experiment</CardTitle>
+             <CardDescription>Run a backtest and log metrics to MLflow.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+             <div className="space-y-2">
+                <label className="text-xs font-bold uppercase text-muted-foreground">Strategy Configuration</label>
+                <select 
+                  className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm focus:ring-1 focus:ring-primary capitalize"
+                  value={selectedStrategy}
+                  onChange={(e) => setSelectedStrategy(e.target.value)}
+                  disabled={stratsLoading}
+                >
+                  {strategies?.map((s: any) => (
+                    <option key={s.name} value={s.name}>{s.name} ({s.is_active ? 'Active' : 'Inactive'})</option>
+                  ))}
+                </select>
+             </div>
+             <div className="space-y-2">
+                <label className="text-xs font-bold uppercase text-muted-foreground">Time Horizon (Days)</label>
+                <input 
+                  type="number" 
+                  className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm font-mono"
+                  value={days}
+                  onChange={(e) => setDays(Number(e.target.value))}
+                  min={10}
+                  max={365}
+                />
+             </div>
+             <Button 
+                className="w-full" 
+                onClick={handleRunExperiment} 
+                disabled={runBacktest.isPending}
+             >
+                {runBacktest.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PlayCircle className="h-4 w-4 mr-2" />}
+                {runBacktest.isPending ? "Running simulation..." : "Launch Experiment"}
+             </Button>
+          </CardContent>
+        </Card>
+
+        {/* Runs Table */}
+        <Card className="md:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4" /> Recent Training & Backtest Runs</CardTitle>
             <CardDescription>Experiment metadata synced from local MLflow store.</CardDescription>
           </CardHeader>
           <CardContent>
             {experiments && experiments.length > 0 ? (
-              <div className="border border-border rounded-md overflow-hidden">
+              <div className="border border-border rounded-md overflow-hidden h-[350px] overflow-y-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-secondary/50 border-b border-border text-xs uppercase text-muted-foreground">
+                  <thead className="bg-secondary/50 border-b border-border text-xs uppercase text-muted-foreground sticky top-0 z-10">
                     <tr>
                       <th className="py-2 px-4 text-left font-bold">Run Name</th>
                       <th className="py-2 px-4 text-left font-bold">Status</th>
-                      <th className="py-2 px-4 text-left font-bold">Metrics</th>
-                      <th className="py-2 px-4 text-left font-bold">Parameters</th>
+                      <th className="py-2 px-4 text-left font-bold">Metrics (Sharpe / Return)</th>
                       <th className="py-2 px-4 text-right font-bold">Date</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {experiments.map((run: any) => (
-                      <tr key={run.run_id} className="hover:bg-secondary/20">
+                      <tr key={run.run_id} className="hover:bg-secondary/20 transition-colors">
                         <td className="py-3 px-4">
                           <div className="font-medium">{run.name}</div>
                           <div className="text-[10px] text-muted-foreground font-mono">{run.run_id.slice(0, 8)}...</div>
@@ -61,21 +123,16 @@ export function Experiments() {
                         </td>
                         <td className="py-3 px-4">
                           <div className="flex flex-wrap gap-2">
-                            {Object.entries(run.metrics || {}).slice(0, 3).map(([k, v]: [string, any]) => (
-                              <div key={k} className="text-[10px] bg-secondary/50 px-1.5 py-0.5 rounded border border-border">
-                                <span className="text-muted-foreground mr-1">{k}:</span>
-                                <span className="font-bold">{typeof v === 'number' ? v.toFixed(3) : v}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="py-3 px-4">
-                           <div className="flex flex-wrap gap-2">
-                            {Object.entries(run.params || {}).slice(0, 2).map(([k, v]: [string, any]) => (
-                              <div key={k} className="text-[10px] text-muted-foreground italic">
-                                {k}={v}
-                              </div>
-                            ))}
+                             <div className="text-[10px] bg-secondary/50 px-1.5 py-0.5 rounded border border-border">
+                                <span className="text-muted-foreground mr-1">Sharpe:</span>
+                                <span className="font-bold">{run.metrics?.sharpe?.toFixed(2) || "N/A"}</span>
+                             </div>
+                             <div className="text-[10px] bg-secondary/50 px-1.5 py-0.5 rounded border border-border">
+                                <span className="text-muted-foreground mr-1">Ret:</span>
+                                <span className={`font-bold ${run.metrics?.ann_ret > 0 ? 'text-emerald-500' : 'text-destructive'}`}>
+                                  {(run.metrics?.ann_ret * 100)?.toFixed(1) || 0}%
+                                </span>
+                             </div>
                           </div>
                         </td>
                         <td className="py-3 px-4 text-right text-xs text-muted-foreground whitespace-nowrap">
@@ -94,11 +151,8 @@ export function Experiments() {
                 <BarChart2 className="mx-auto h-12 w-12 opacity-20 mb-4" />
                 <h3 className="text-lg font-medium text-foreground">No experiments found</h3>
                 <p className="max-w-xs mx-auto mt-2 text-sm">
-                  Run training scripts or backtests with MLflow tracking enabled to see results here.
+                  Launch a new experiment using the panel to log your first run.
                 </p>
-                <div className="mt-6 flex justify-center gap-3">
-                  <code className="text-[10px] bg-black p-2 rounded text-emerald-500">python main.py research-backtest --strategy ensemble</code>
-                </div>
               </div>
             )}
           </CardContent>

@@ -1,0 +1,83 @@
+[
+  {
+    "instrument_id": "EQUITY:AAPL",
+    "symbol": "AAPL",
+    "quantity": 44.406614780499424,
+    "avg_cost": 270.50024099731445,
+    "last_price": 270.50024099731445,
+    "market_value": 12012.0,
+    "updated_at": "2026-04-19T11:48:51.495405+00:00"
+  },
+  {
+    "instrument_id": "EQUITY:AMZN",
+    "symbol": "AMZN",
+    "quantity": 35.91954057987784,
+    "avg_cost": 250.8105575561523,
+    "last_price": 250.8105575561523,
+    "market_value": 9009.0,
+    "updated_at": "2026-04-19T11:48:51.495505+00:00"
+  },
+  {
+    "instrument_id": "EQUITY:BND",
+    "symbol": "BND",
+    "quantity": 202.5384889883707,
+    "avg_cost": 74.13405755615234,
+    "last_price": 74.13405755615234,
+    "market_value": 15015.0,
+    "updated_at": "2026-04-19T11:48:51.495534+00:00"
+  },
+  {
+    "instrument_id": "CRYPTO:BTC-USD",
+    "symbol": "BTC-USD",
+    "quantity": 0.1587718665348805,
+    "avg_cost": 75958.041328125,
+    "last_price": 75958.041328125,
+    "market_value": 12060.0,
+    "updated_at": "2026-04-19T11:48:51.495542+00:00"
+  },
+  {
+    "instrument_id": "CRYPTO:ETH-USD",
+    "symbol": "ETH-USD",
+    "quantity": 3.3573135507474947,
+    "avg_cost": 2341.1575598144527,
+    "last_price": 2341.1575598144527,
+    "market_value": 7860.000000000001,
+    "updated_at": "2026-04-19T11:48:51.495552+00:00"
+  },
+  {
+    "instrument_id": "EQUITY:GOOGL",
+    "symbol": "GOOGL",
+    "quantity": 26.340436059831173,
+    "avg_cost": 342.021672668457,
+    "last_price": 342.021672668457,
+    "market_value": 9008.999999999998,
+    "updated_at": "2026-04-19T11:48:51.495494+00:00"
+  },
+  {
+    "instrument_id": "EQUITY:MSFT",
+    "symbol": "MSFT",
+    "quantity": 28.382884546631825,
+    "avg_cost": 423.21279855346677,
+    "last_price": 423.21279855346677,
+    "market_value": 12012.0,
+    "updated_at": "2026-04-19T11:48:51.495477+00:00"
+  },
+  {
+    "instrument_id": "EQUITY:NVDA",
+    "symbol": "NVDA",
+    "quantity": 39.666800329870696,
+    "avg_cost": 201.881672668457,
+    "last_price": 201.881672668457,
+    "market_value": 8007.999999999999,
+    "updated_at": "2026-04-19T11:48:51.495515+00:00"
+  },
+  {
+    "instrument_id": "EQUITY:TLT",
+    "symbol": "TLT",
+    "quantity": 172.2751814927554,
+    "avg_cost": 87.15706969451904,
+    "last_price": 87.15706969451904,
+    "market_value": 15014.999999999998,
+    "updated_at": "2026-04-19T11:48:51.495525+00:00"
+  }
+]

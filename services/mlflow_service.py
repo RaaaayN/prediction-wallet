@@ -26,6 +26,19 @@ class MLflowService:
         mlflow.set_tracking_uri(tracking_uri)
         
         self.experiment_name = experiment_name
+        
+        # Ensure experiment exists with correct artifact location
+        client = mlflow.tracking.MlflowClient()
+        try:
+            exp = client.get_experiment_by_name(experiment_name)
+            if exp is None:
+                client.create_experiment(
+                    experiment_name, 
+                    artifact_location=self.artifact_path.as_uri()
+                )
+        except Exception:
+            pass
+            
         mlflow.set_experiment(experiment_name)
 
     def start_run(self, run_name: Optional[str] = None) -> mlflow.ActiveRun:
