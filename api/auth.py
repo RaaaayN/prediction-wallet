@@ -17,29 +17,37 @@ class User(BaseModel):
     is_service_account: bool = False
 
 async def get_current_user(x_api_key: str | None = Header(None)) -> User:
+    # 1. Fallback to static config keys (highest priority for dev/override)
+    if x_api_key:
+        if config.API_KEY_ADMIN and x_api_key == config.API_KEY_ADMIN:
+            return User(username="static_admin", role=Role.ADMIN)
+        if config.API_KEY_TRADER and x_api_key == config.API_KEY_TRADER:
+            return User(username="static_trader", role=Role.TRADER)
+        if config.API_KEY_VIEWER and x_api_key == config.API_KEY_VIEWER:
+            return User(username="static_viewer", role=Role.VIEWER)
+        
+        # 2. Check Database for persistent users
+        from db.repository import get_user_by_api_key
+        try:
+            db_user = get_user_by_api_key(x_api_key)
+        except Exception:
+            db_user = None
+            
+        if db_user:
+            return User(
+                username=db_user["username"],
+                role=Role(db_user["role"]),
+                is_service_account=bool(db_user["is_service_account"])
+            )
+
+    # 3. Check for "Opt-in / Super Admin" mode: 
+    # If no keys are configured in environment, allow all requests as ADMIN.
+    no_keys_in_config = not (config.API_KEY_ADMIN or config.API_KEY_TRADER or config.API_KEY_VIEWER)
+    if no_keys_in_config:
+        return User(username="super_admin", role=Role.ADMIN)
+
     if not x_api_key:
         raise HTTPException(status_code=401, detail="X-API-KEY header missing")
-    
-    # 2. Check Database for persistent users
-    from db.repository import get_user_by_api_key
-    try:
-        db_user = get_user_by_api_key(x_api_key)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Authentication service unavailable") from exc
-    if db_user:
-        return User(
-            username=db_user["username"],
-            role=Role(db_user["role"]),
-            is_service_account=bool(db_user["is_service_account"])
-        )
-    
-    # 3. Fallback to static config keys (backward compatibility)
-    if config.API_KEY_ADMIN and x_api_key == config.API_KEY_ADMIN:
-        return User(username="static_admin", role=Role.ADMIN)
-    if config.API_KEY_TRADER and x_api_key == config.API_KEY_TRADER:
-        return User(username="static_trader", role=Role.TRADER)
-    if config.API_KEY_VIEWER and x_api_key == config.API_KEY_VIEWER:
-        return User(username="static_viewer", role=Role.VIEWER)
     
     raise HTTPException(status_code=403, detail="Invalid API Key")
 

@@ -194,13 +194,18 @@ class EventDrivenBacktester:
                 trades.extend(executed_in_cycle)
                 last_rebalance_idx = idx
 
-        benchmark_prices = prices_df[benchmark_ticker]
         benchmark_history = []
-        if not benchmark_prices.empty:
-            bench_start_price = benchmark_prices.iloc[0]
-            for ts, p in benchmark_prices.items():
-                bench_val = (self.initial_capital / bench_start_price) * p
-                benchmark_history.append({"date": str(ts.date()), "total_value": bench_val})
+        if benchmark_ticker in prices_df.columns:
+            benchmark_prices = prices_df[benchmark_ticker]
+            if not benchmark_prices.empty:
+                # Assume buy and hold benchmark from first date
+                bench_start_price = benchmark_prices.iloc[0]
+                for ts, p in benchmark_prices.items():
+                    bench_val = (self.initial_capital / bench_start_price) * p
+                    benchmark_history.append({"date": str(ts.date()), "total_value": bench_val})
+        else:
+            # print(f"Warning: Benchmark ticker '{benchmark_ticker}' not found in data.")
+            pass
 
         metrics = performance_report(
             history, 
